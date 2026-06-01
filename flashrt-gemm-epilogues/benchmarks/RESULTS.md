@@ -41,6 +41,28 @@ Timing method:
   checks are cuBLASLt heuristic selection, workspace size, and a broader shape
   sweep.
 
+## GEMM Shape Sweep
+
+Same environment and local source-extension path. This sweep uses
+`N=K=4096` and varies `M`.
+
+| API | Shape | Fused us | PyTorch eager us | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| `bf16_gemm_bias` | `(1,4096,4096)` | 48.512 | 50.551 | 1.04x |
+| `bf16_gemm_bias_gelu` | `(1,4096,4096)` | 50.720 | 52.558 | 1.04x |
+| `bf16_gemm_bias` | `(8,4096,4096)` | 22.593 | 24.633 | 1.09x |
+| `bf16_gemm_bias_gelu` | `(8,4096,4096)` | 22.569 | 27.225 | 1.21x |
+| `bf16_gemm_bias` | `(16,4096,4096)` | 26.399 | 24.667 | 0.93x |
+| `bf16_gemm_bias_gelu` | `(16,4096,4096)` | 22.732 | 26.711 | 1.18x |
+| `bf16_gemm_bias` | `(64,4096,4096)` | 36.600 | 40.658 | 1.11x |
+| `bf16_gemm_bias_gelu` | `(64,4096,4096)` | 59.702 | 43.504 | 0.73x |
+| `bf16_gemm_bias` | `(128,4096,4096)` | 32.909 | 34.942 | 1.06x |
+| `bf16_gemm_bias_gelu` | `(128,4096,4096)` | 30.843 | 37.007 | 1.20x |
+
+The GELU epilogue regression appears shape-specific rather than universal.
+`M=64` is the outlier in this sweep and should be investigated through
+cuBLASLt algorithm logging or explicit algorithm selection.
+
 ## Next Benchmark Work
 
 - Run a matrix of decode and prefill shapes: small M, medium M, and large M.
