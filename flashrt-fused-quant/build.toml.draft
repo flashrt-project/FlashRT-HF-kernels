@@ -1,0 +1,23 @@
+[general]
+name = "flashrt-fused-quant"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.hub]
+repo-id = "flashrt/flashrt-fused-quant"
+
+[torch]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.flashrt_fused_quant]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+# cuda-capabilities = ["8.0", "8.9", "9.0", "10.0", "12.0"]
+src = [
+  # Add synced source files here before renaming this file to build.toml.
+]

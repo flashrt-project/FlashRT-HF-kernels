@@ -1,0 +1,22 @@
+[general]
+name = "flashrt-vla-video"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.hub]
+repo-id = "flashrt/flashrt-vla-video"
+
+[torch]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.flashrt_vla_video]
+backend = "cuda"
+depends = ["torch", "cutlass_4_0"]
+include = ["csrc"]
+src = [
+  # Add synced source files here before renaming this file to build.toml.
+]
