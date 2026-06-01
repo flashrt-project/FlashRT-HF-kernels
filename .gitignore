@@ -1,0 +1,16 @@
+build/
+result/
+dist/
+*.egg-info/
+*.so
+*.pyd
+*.dylib
+*.o
+*.a
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+.direnv/
+flake.lock

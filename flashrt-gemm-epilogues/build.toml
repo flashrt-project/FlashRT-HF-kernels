@@ -1,0 +1,28 @@
+[general]
+name = "flashrt-gemm-epilogues"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.hub]
+repo-id = "flashrt/flashrt-gemm-epilogues"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.flashrt_gemm_epilogues]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+src = [
+  "csrc/bf16_gemm_bias_gelu.cu",
+  "csrc/bf16_gemm_bias_gelu.cuh",
+  "csrc/bias_gelu_quantize_fp8.cu",
+  "csrc/bias_gelu_quantize_fp8.cuh",
+  "csrc/channel_scale_quantize_fp8.cu",
+  "csrc/channel_scale_quantize_fp8.cuh",
+]
