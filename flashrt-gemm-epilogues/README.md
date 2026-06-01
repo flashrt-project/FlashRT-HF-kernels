@@ -52,6 +52,11 @@ Benchmarks should compare against:
 
 This is the recommended first buildable package.
 
+## Validation
+
+The first HF builder target and host-side CUDA correctness smoke have passed.
+See `VALIDATION.md` for exact variants, commands, environment, and known gaps.
+
 ## Usage
 
 ```python
