@@ -13,4 +13,4 @@ __pycache__/
 .mypy_cache/
 .venv/
 .direnv/
-flake.lock
+/flake.lock
