@@ -1,9 +1,12 @@
 # Torch Extension
 
-Planned Tensor wrappers:
+Current Tensor wrappers:
 
 - `silu_mul_quant_nvfp4_swizzled_bf16`
 - `silu_mul_merged_quant_nvfp4_swizzled_bf16`
+
+Queued Tensor wrappers for later G2/G3 promotion:
+
 - `residual_rmsnorm_quant_nvfp4_swizzled_bf16`
 - `rmsnorm_quant_nvfp4_sfa_fp16`
 - `residual_rmsnorm_quant_nvfp4_sfa_fp16`

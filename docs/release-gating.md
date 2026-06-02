@@ -25,7 +25,7 @@ builds.
 | `flashrt-vla-video` | G5 partial | v1 VLA/video block with 19-40x local evidence and an HF-style block example | Full builder build, public benchmark runner, run example against built/Hub package, multi-hardware validation |
 | `flashrt-nvfp4` | G2 | v1 Blackwell layout helper with benchmark and example paths | Full builder build, benchmark runner, fused GEMM epilogue surfaces, multi-hardware validation |
 | `flashrt-smallm-gemm` | G1 | v1 Blackwell small-M slice; first SM120 NVFP4 W4A4 decode matvec compiles locally and passes deterministic correctness | Promote build file, benchmark grid, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
-| `flashrt-fused-quant` | G0 | v1 fused activation/norm/residual quantization block | Tensor binding, correctness tests, tile sweep, memory-bandwidth benchmark |
+| `flashrt-fused-quant` | G1 | First fused SiLU+NVFP4 quantization source slice compiles locally and passes split/merged byte parity | Promote build file, benchmark grid, memory-bandwidth benchmark, residual/RMSNorm slices |
 
 ## V1 Batch Blocks
 

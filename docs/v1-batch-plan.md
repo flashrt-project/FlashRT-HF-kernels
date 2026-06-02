@@ -86,17 +86,16 @@ Before v1 build window:
 
 ### `flashrt-fused-quant`
 
-Current status: draft G0.
+Current status: draft G1. The split and merged `SiLU(gate) * up` NVFP4
+swizzled quantization source slice compiles locally and passes byte parity
+against a fake-quant reference.
 
 Before v1 build window:
 
-- Sync the first source slice:
-  `silu_mul_to_nvfp4_swizzled.cu/.cuh`.
-- Add Tensor bindings for split and merged `SiLU(gate) * up` quantization.
-- Add fake-quant correctness tests.
 - Add memory-bandwidth benchmarks for decode, small batch, prefill, and
   VLA/video FFN hidden sizes.
 - Add an HF-style FFN epilogue example if the public API is stable enough.
+- Decide whether v1 also includes residual/RMSNorm variants.
 
 ## Release Build Window
 

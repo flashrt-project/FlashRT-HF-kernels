@@ -8,6 +8,7 @@ backends = ["cuda"]
 repo-id = "flashrt/flashrt-fused-quant"
 
 [torch]
+include = ["csrc"]
 src = [
   "torch-ext/torch_binding.cpp",
   "torch-ext/torch_binding.h",
@@ -19,5 +20,6 @@ depends = ["torch"]
 include = ["csrc"]
 # cuda-capabilities = ["8.0", "8.9", "9.0", "10.0", "12.0"]
 src = [
-  # Add synced source files here before renaming this file to build.toml.
+  "csrc/silu_mul_to_nvfp4_swizzled.cu",
+  "csrc/silu_mul_to_nvfp4_swizzled.cuh",
 ]
