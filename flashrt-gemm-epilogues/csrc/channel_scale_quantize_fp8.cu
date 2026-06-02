@@ -47,11 +47,14 @@ int quant_block_size(long long M, int K) {
     }
   }
 
-  if (K >= 8192) {
-    return M >= 128 ? 256 : 512;
+  if (K >= 12288) {
+    return 256;
   }
-  if (M <= 16) {
-    return 128;
+  if (M <= 32) {
+    return 1024;
+  }
+  if (K <= 4096 && M <= 128) {
+    return 512;
   }
   return 256;
 }

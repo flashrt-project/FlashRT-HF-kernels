@@ -47,7 +47,7 @@ __global__ void bias_gelu_quantize_fp8_static_bf16_kernel(
   out[idx] = __nv_fp8_e4m3(q);
 }
 
-int quant_block_size(long long M, int N) {
+int quant_block_size(long long M, int N, bool has_bias) {
   const char* value = std::getenv("FLASHRT_QUANT_BLOCK_SIZE");
   if (value != nullptr) {
     const int block_size = std::atoi(value);
@@ -57,14 +57,17 @@ int quant_block_size(long long M, int N) {
     }
   }
 
-  if (N >= 8192) {
-    return M <= 16 ? 128 : 256;
+  if (N >= 12288) {
+    return (has_bias && M <= 32) ? 512 : 256;
   }
-  if (M <= 8) {
-    return 128;
+  if (M == 1) {
+    return has_bias ? 512 : 256;
   }
-  if (M <= 64) {
-    return 512;
+  if (M <= 2) {
+    return has_bias ? 512 : 1024;
+  }
+  if (M <= 32) {
+    return 1024;
   }
   return 256;
 }
@@ -84,11 +87,11 @@ void bias_gelu_quantize_fp8_static_bf16(
     return;
   }
 
-  const int block_sz = quant_block_size(M, N);
+  const int has_bias = bias_bf16 != nullptr ? 1 : 0;
+  const int block_sz = quant_block_size(M, N, has_bias != 0);
   const long long tiles_per_row =
       (static_cast<long long>(N) + block_sz - 1) / block_sz;
   const unsigned grid = static_cast<unsigned>(M * tiles_per_row);
-  const int has_bias = bias_bf16 != nullptr ? 1 : 0;
 
   bias_gelu_quantize_fp8_static_bf16_kernel<<<grid, block_sz, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(in_bf16),

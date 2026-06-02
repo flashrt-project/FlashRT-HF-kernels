@@ -232,13 +232,16 @@ __global__ void qkv_split_norm_rope_kernel(
   }
 }
 
-int qkv_rope_block_size() {
+int qkv_rope_block_size(int tokens) {
   const char* value = std::getenv("FLASHRT_QKV_ROPE_BLOCK_SIZE");
   if (value != nullptr) {
     const int block_size = std::atoi(value);
     if (block_size == 128 || block_size == 256 || block_size == 512) {
       return block_size;
     }
+  }
+  if (tokens <= 64) {
+    return 512;
   }
   return 256;
 }
@@ -303,7 +306,7 @@ void qkv_split_norm_rope_bf16(
     float eps,
     cudaStream_t stream) {
   const int blocks = batch * tokens;
-  qkv_split_norm_rope_kernel<<<blocks, qkv_rope_block_size(), 0, stream>>>(
+  qkv_split_norm_rope_kernel<<<blocks, qkv_rope_block_size(tokens), 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(packed_qkv),
       reinterpret_cast<const __nv_bfloat16*>(norm_q_weight),
       reinterpret_cast<const __nv_bfloat16*>(norm_k_weight),

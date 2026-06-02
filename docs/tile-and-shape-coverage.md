@@ -38,6 +38,16 @@ Tile variables:
 - Default policy must be chosen per operation family, not only one global
   number, if the sweep shows a consistent split.
 
+Current SM120 default policy:
+
+- `bias_gelu_quantize_fp8_static_bf16`: 512 for biased decode micro-batches,
+  1024 for `M <= 32` with `N <= 8192`, 512 for biased VLA-width `M <= 32`,
+  otherwise 256.
+- `gelu_quantize_fp8_static_bf16`: 256 for `M = 1` and VLA-width cases, 1024
+  for `2 <= M <= 32` with `N <= 8192`, otherwise 256.
+- `channel_scale_quantize_fp8_static_bf16`: 1024 for `M <= 32` with
+  `N <= 8192`, 512 for 4096-wide `M <= 128`, otherwise 256.
+
 Promotion threshold:
 
 - Correctness: exact FP8 byte parity with the PyTorch fake-quant reference.
@@ -62,8 +72,8 @@ Applies to:
 Tile variables:
 
 - `FLASHRT_QKV_ROPE_BLOCK_SIZE in {128, 256, 512}`.
-- Current package default remains 256 until the internal sweep selects a
-  benchmark-backed policy.
+- Current SM120 default is 512-thread CTAs for `tokens <= 64` and 256-thread
+  CTAs otherwise.
 
 Promotion threshold:
 
