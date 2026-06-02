@@ -28,3 +28,6 @@ The first buildable slice exposes NVFP4 scale-factor layout conversion.
 The fused GEMM epilogues follow after CUTLASS dependency isolation.
 
 Current validation status is recorded in `VALIDATION.md`.
+
+See `examples/nvfp4_scale_factor_layout.py` for a minimal layout-conversion
+example.

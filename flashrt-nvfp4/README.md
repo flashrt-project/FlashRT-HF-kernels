@@ -43,6 +43,10 @@ not only against PyTorch eager.
 See `VALIDATION.md` for the current tested shapes, RTX 5090 smoke environment,
 and remaining builder/build gaps.
 
+See `examples/nvfp4_scale_factor_layout.py` for a minimal HF-style example that
+converts linear NVFP4 scale-factor bytes into the CUTLASS Sm1xx swizzled
+layout.
+
 ## Showcase Criteria
 
 - Make NVFP4/SFA/SFB layout constraints explicit.
