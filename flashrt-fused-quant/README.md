@@ -7,15 +7,13 @@ in Transformer, VLA, and diffusion forward passes.
 
 ## Scope
 
-Initial candidate APIs:
+Selected first APIs:
 
-- `rmsnorm_quant`
-- `residual_rmsnorm_quant`
-- `layernorm_quant`
-- `swiglu_quant`
-- `geglu_quant`
-- `qkv_split_rope`
-- `qkv_split_rope_kvwrite`
+- `silu_mul_quant_nvfp4_swizzled_bf16`
+- `silu_mul_merged_quant_nvfp4_swizzled_bf16`
+- `residual_rmsnorm_quant_nvfp4_swizzled_bf16`
+- `rmsnorm_quant_nvfp4_sfa_fp16`
+- `residual_rmsnorm_quant_nvfp4_sfa_fp16`
 
 ## Non-Goals
 
@@ -27,3 +25,6 @@ Initial candidate APIs:
 
 Benchmarks should compare against PyTorch eager sequences and FlashRT internal
 reference output where available.
+
+See `SELECTED_KERNELS.md` for the first concrete source slices and why they are
+kept separate from GEMM epilogues.

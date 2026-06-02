@@ -2,7 +2,9 @@
 
 Planned test groups:
 
-- Quantize/dequantize round-trip checks.
-- SFA/SFB byte size checks.
-- SFA/SFB layout parity with FlashRT internal helpers.
+- `nvfp4_sf_swizzled_bytes` matches the reference allocation formula for common
+  and boundary shapes.
+- `nvfp4_sf_linear_to_swizzled` matches a CPU/PyTorch reference layout transform.
+- Fused GEMM epilogues match FlashRT internal outputs and a fake-quant PyTorch
+  reference within NVFP4 tolerances.
 - Rejected shape and alignment cases.

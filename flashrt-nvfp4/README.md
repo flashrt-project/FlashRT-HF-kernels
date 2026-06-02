@@ -8,15 +8,18 @@ packages can depend on or mirror.
 
 ## Scope
 
-Initial candidate APIs:
+Selected first APIs:
 
-- `quantize_nvfp4`
-- `dequantize_nvfp4`
-- `quantize_nvfp4_sfa`
-- `nvfp4_linear`
-- `nvfp4_linear_bias_gelu`
-- `reshape_linear_scales_to_sfa`
-- `sfa_size_bytes`
+- `nvfp4_sf_linear_to_swizzled`
+- `nvfp4_sf_swizzled_bytes`
+- `nvfp4_linear_bias_gelu_fp4out_sm120`
+- `nvfp4_linear_bias_gelu_bf16out_sm120`
+- `nvfp4_linear_streamk_bias_bf16out_sm120`
+
+The first source slice should start with the scale-factor layout helpers,
+because they are small, reusable, and make the fused GEMM outputs inspectable.
+The GEMM epilogue surfaces should follow once CUTLASS include requirements and
+Tensor binding constraints are isolated.
 
 ## Non-Goals
 
@@ -37,3 +40,6 @@ not only against PyTorch eager.
 - Make NVFP4/SFA/SFB layout constraints explicit.
 - Separate data-movement helpers from GEMM APIs in docs and benchmarks.
 - Treat Blackwell-only speedups as a strong but architecture-scoped story.
+
+See `SELECTED_KERNELS.md` for the exact FlashRT source provenance and promotion
+order.

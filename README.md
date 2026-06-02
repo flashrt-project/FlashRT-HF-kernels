@@ -51,9 +51,11 @@ and at least one downstream HF-style calling example should all be documented.
 
 ## Repository Status
 
-`flashrt-gemm-epilogues` is the first buildable package. Other package
-directories intentionally use `build.toml.draft` until they have real synced
-source files, Tensor-based bindings, tests, and a passing local build.
+`flashrt-gemm-epilogues` and `flashrt-vla-video` are the first buildable
+packages. The remaining draft package directories now carry concrete first
+kernel selections, but intentionally keep `build.toml.draft` until the selected
+source slice has Tensor-based bindings, tests, benchmarks, and a passing local
+build.
 
 Do not upload a package to the Hub until its draft build file has been promoted
 to `build.toml` and the validation checklist in `docs/validation.md` passes.

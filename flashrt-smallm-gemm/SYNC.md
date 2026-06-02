@@ -2,14 +2,16 @@
 
 Upstream source: `../official/FlashRT`
 
-Candidate source areas:
+Selected source areas:
 
-- `csrc/gemm/fp8_smallM_handtuned*`
-- `csrc/kernels/bf16_matvec_*`
-- `csrc/kernels/bf16_matmul_*`
-- `csrc/kernels/fp4_w4a4_*`
+| Package path | Upstream path | Status |
+| --- | --- | --- |
+| `csrc/fp4_w4a4_matvec_sm120.*` | `official/FlashRT/csrc/kernels/fp4_w4a4_matvec_sm120.*` | Draft target |
+| `csrc/fp4_w4a4_mma_warpsplit_mrows_sm120.*` | `official/FlashRT/csrc/kernels/fp4_w4a4_mma_warpsplit_mrows_sm120.*` | Draft target |
+| `csrc/tinyfp8_kernels_sm120.*` | `official/FlashRT/csrc/kernels/megakernel/tinyfp8_kernels_sm120.*` | Draft target |
 
 ## First Source Slice
 
-Start with one kernel whose shape constraints can be documented cleanly without
-model-specific terminology.
+Start with W4A4 matvec because the shape constraints are easiest to document
+without model-specific terminology. Add warpsplit and tiny FP8 only after the
+matvec Tensor binding and reference test are stable.

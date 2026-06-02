@@ -2,20 +2,23 @@
 
 Upstream source: `../official/FlashRT`
 
-Candidate source areas:
+Selected source areas:
 
-- `csrc/quantize/quantize_fp4_dynamic.*`
-- `csrc/quantize/quantize_fp4_sfa.*`
-- `csrc/quantize/reshape_scales_sfa.*`
-- `csrc/fused_fp4/`
-- selected headers from `csrc/gemm/fp4/`
+| Package path | Upstream path | Status |
+| --- | --- | --- |
+| `csrc/nvfp4_sf_reshape_sm120.*` | `official/FlashRT/csrc/quantize/nvfp4_sf_reshape_sm120.*` | First sync target |
+| `csrc/cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.*` | `official/FlashRT/csrc/gemm/fp4/cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.*` | Draft target |
+| `csrc/cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.*` | `official/FlashRT/csrc/gemm/fp4/cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.*` | Draft target |
+| `csrc/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.*` | `official/FlashRT/csrc/gemm/fp4/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.*` | Draft target |
 
 ## First Source Slice
 
 Recommended first APIs:
 
 ```text
-quantize_nvfp4_sfa(input, is_weight: bool) -> (packed, sfa)
-reshape_linear_scales_to_sfa(scales, rows, dim, is_weight: bool) -> Tensor
-sfa_size_bytes(rows, dim, is_weight: bool) -> int
+nvfp4_sf_linear_to_swizzled(scales, rows, cols, is_weight: bool) -> Tensor
+nvfp4_sf_swizzled_bytes(rows, cols, is_weight: bool) -> int
 ```
+
+The fused GEMM epilogues should be synced after the layout helper is buildable,
+because they bring in the heavier CUTLASS dependency surface.

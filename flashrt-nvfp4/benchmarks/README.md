@@ -2,6 +2,8 @@
 
 Planned benchmark groups:
 
-- BF16/FP16 to NVFP4 quantization throughput.
-- Linear scale to SFA/SFB layout conversion.
-- Fused quantization plus layout conversion versus two-step baseline.
+- Layout conversion latency and bandwidth for scale-factor tensors.
+- Fused `GEMM + bias + GELU + FP4 quant` against unfused CUTLASS/cuBLAS plus
+  separate epilogue kernels.
+- Stream-K down GEMM against the strongest available CUTLASS/cuBLASLt path for
+  the same shape and dtype.

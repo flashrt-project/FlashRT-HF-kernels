@@ -2,7 +2,7 @@
 
 Planned benchmark groups:
 
-- Norm plus quantization versus PyTorch eager.
-- Residual plus norm plus quantization versus PyTorch eager.
-- Activation multiply plus quantization versus PyTorch eager.
-- FlashRT-real shape families for VLA and diffusion blocks.
+- Split and merged `SiLU(gate) * up + quant` against PyTorch eager chains.
+- `residual + RMSNorm + quant` against separate PyTorch/CUDA launches.
+- Decode, prefill, image-token, and video-token sequence lengths.
+- Report both latency and effective memory bandwidth.

@@ -14,8 +14,14 @@ Draft kernel card for FlashRT decode-oriented small-M GEMM/GEMV kernels.
 
 This package is not ready for Hub publication yet.
 
-## Planned Features
+## Selected First Features
 
-- Low-latency small-M GEMM.
-- Split-K decode GEMV/GEMM variants.
-- BF16, FP8, and NVFP4 paths where generally useful.
+- NVFP4 W4A4 decode matvec with BF16 output.
+- NVFP4 W4A4 small-M warpsplit MMA with BF16 output.
+- Tiny FP8 fixed-family small-M GEMM kernels.
+
+## Status
+
+This package stays draft until the shape-specialized APIs have explicit
+supported shape grids, correctness tests, and latency benchmarks against
+cuBLASLt/CUTLASS where applicable.

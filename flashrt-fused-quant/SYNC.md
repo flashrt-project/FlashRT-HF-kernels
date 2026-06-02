@@ -2,21 +2,24 @@
 
 Upstream source: `../official/FlashRT`
 
-Candidate source areas:
+Selected source areas:
 
-- `csrc/kernels/norm.*`
-- `csrc/kernels/fusion.*`
-- `csrc/kernels/quantize.*`
-- `csrc/kernels/rope.*`
-- `csrc/quantize/qkv_split_norm_rope_bf16.*`
-- selected fused FP4 files only when the API is not layout-only
+| Package path | Upstream path | Status |
+| --- | --- | --- |
+| `csrc/silu_mul_to_nvfp4_swizzled.*` | `official/FlashRT/csrc/kernels/silu_mul_to_nvfp4_swizzled.*` | First sync target |
+| `csrc/norm_silu_fp4_sfa.*` | `official/FlashRT/csrc/fused_fp4/norm_silu_fp4_sfa.*` | Draft target |
+| `csrc/res_rms_fp4_sfa_v2.*` | `official/FlashRT/csrc/fused_fp4/res_rms_fp4_sfa_v2.*` | Draft target |
+| `csrc/bagel_res_rms_fp4_sfa_bf16.cu` | `official/FlashRT/flash_wm/csrc/bagel_res_rms_fp4_sfa_bf16.cu` | Draft target with generic public name |
+| `csrc/bagel_silu_mul_fp4_sfa.cu` | `official/FlashRT/flash_wm/csrc/bagel_silu_mul_fp4_sfa.cu` | Draft target with generic public name |
 
 ## First Source Slice
 
-Recommended first API:
+Recommended first APIs:
 
 ```text
-residual_rmsnorm_quant(input, residual, weight, scale, dtype) -> Tensor
+silu_mul_quant_nvfp4_swizzled_bf16(gate, up) -> (packed, scales)
+silu_mul_merged_quant_nvfp4_swizzled_bf16(merged) -> (packed, scales)
 ```
 
-Use a PyTorch reference implementation for correctness.
+Use a PyTorch fake-quant reference implementation for correctness. Add
+residual/RMSNorm variants after the activation+quant path is stable.

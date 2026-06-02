@@ -7,12 +7,15 @@ model-specific names.
 
 ## Scope
 
-Initial candidate APIs:
+Selected first APIs:
 
-- `smallm_fp8_gemm`
-- `smallm_nvfp4_gemm`
-- `splitk_decode_gemv`
-- `smallm_bf16_matmul`
+- `nvfp4_w4a4_decode_matvec_bf16out`
+- `nvfp4_w4a4_smallm_warpsplit_bf16out`
+- `tiny_fp8_smallm_gemm_bf16out`
+
+These are intentionally shape-specialized. The package should be honest about
+supported M/K/N families and should expose dispatch wrappers only after each
+tile policy has a benchmark-backed reason to exist.
 
 ## Naming Rule
 
@@ -32,3 +35,5 @@ where appropriate.
   against cuBLASLt or a strong CUTLASS baseline.
 - Document hardware-specific paths separately instead of presenting one kernel
   as universally supported.
+
+See `SELECTED_KERNELS.md` for the first concrete source slices.
