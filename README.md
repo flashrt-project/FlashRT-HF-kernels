@@ -75,7 +75,8 @@ FlashRT-dependent validation:
   Hub-compatible tests belong in each package's `tests/` directory.
 
 The first-batch tuning grid is documented in
-`docs/tile-and-shape-coverage.md`.
+`docs/tile-and-shape-coverage.md`. Packaging gates and release blockers are
+tracked in `docs/release-gating.md`.
 
 ## Expected Layout Per Package
 
