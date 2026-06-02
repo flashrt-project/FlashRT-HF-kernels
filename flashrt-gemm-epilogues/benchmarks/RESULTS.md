@@ -3,7 +3,7 @@
 These are preliminary local numbers. They are useful for prioritizing kernel
 work, but they are not yet a stable release benchmark table.
 
-Validated on June 1, 2026.
+Validated on June 2, 2026.
 
 Environment:
 
@@ -25,8 +25,8 @@ Timing method:
 
 | API | Shape | Fused us | PyTorch eager us | Speedup |
 | --- | ---: | ---: | ---: | ---: |
-| `bf16_gemm_bias_gelu` | `(M,N,K)=(64,4096,4096)` | 60.008 | 42.174 | 0.70x |
-| `bf16_gemm_bias` | `(M,N,K)=(64,4096,4096)` | 36.619 | 40.652 | 1.11x |
+| `bf16_gemm_bias_gelu` | `(M,N,K)=(64,4096,4096)` | 30.813 | 42.530 | 1.38x |
+| `bf16_gemm_bias` | `(M,N,K)=(64,4096,4096)` | 18.506 | 40.565 | 2.19x |
 | `bias_gelu_quantize_fp8_static_bf16` | `(64,4096)` | 4.084 | 22.729 | 5.57x |
 | `channel_scale_quantize_fp8_static_bf16` | `(64,4096)` | 2.464 | 19.581 | 7.95x |
 
@@ -34,12 +34,11 @@ Timing method:
 
 - The FP8 quantization epilogue kernels are already strong on the local 5090
   environment.
-- `bf16_gemm_bias` is slightly faster than the eager BF16 GEMM plus bias path
-  for this shape.
-- `bf16_gemm_bias_gelu` is slower than PyTorch eager for this shape. Treat this
-  as a tuning target before promoting it as a performance win. Likely next
-  checks are cuBLASLt heuristic selection, workspace size, and a broader shape
-  sweep.
+- The BF16 GEMM epilogue path now uses per-shape cuBLASLt algorithm autotuning
+  and caching. The autotuned M=64 path removes the previous `GELU_BIAS`
+  regression.
+- First use of a new `(M,N,K,epilogue)` shape pays a small autotune cost. Later
+  calls reuse the cached algorithm.
 
 ## GEMM Shape Sweep
 
@@ -48,20 +47,20 @@ Same environment and local source-extension path. This sweep uses
 
 | API | Shape | Fused us | PyTorch eager us | Speedup |
 | --- | ---: | ---: | ---: | ---: |
-| `bf16_gemm_bias` | `(1,4096,4096)` | 48.512 | 50.551 | 1.04x |
-| `bf16_gemm_bias_gelu` | `(1,4096,4096)` | 50.720 | 52.558 | 1.04x |
-| `bf16_gemm_bias` | `(8,4096,4096)` | 22.593 | 24.633 | 1.09x |
-| `bf16_gemm_bias_gelu` | `(8,4096,4096)` | 22.569 | 27.225 | 1.21x |
-| `bf16_gemm_bias` | `(16,4096,4096)` | 26.399 | 24.667 | 0.93x |
-| `bf16_gemm_bias_gelu` | `(16,4096,4096)` | 22.732 | 26.711 | 1.18x |
-| `bf16_gemm_bias` | `(64,4096,4096)` | 36.600 | 40.658 | 1.11x |
-| `bf16_gemm_bias_gelu` | `(64,4096,4096)` | 59.702 | 43.504 | 0.73x |
-| `bf16_gemm_bias` | `(128,4096,4096)` | 32.909 | 34.942 | 1.06x |
-| `bf16_gemm_bias_gelu` | `(128,4096,4096)` | 30.843 | 37.007 | 1.20x |
+| `bf16_gemm_bias` | `(1,4096,4096)` | 18.480 | 50.685 | 2.74x |
+| `bf16_gemm_bias_gelu` | `(1,4096,4096)` | 18.463 | 52.610 | 2.85x |
+| `bf16_gemm_bias` | `(8,4096,4096)` | 18.470 | 24.633 | 1.33x |
+| `bf16_gemm_bias_gelu` | `(8,4096,4096)` | 18.467 | 26.679 | 1.44x |
+| `bf16_gemm_bias` | `(16,4096,4096)` | 22.374 | 24.623 | 1.10x |
+| `bf16_gemm_bias_gelu` | `(16,4096,4096)` | 22.543 | 26.823 | 1.19x |
+| `bf16_gemm_bias` | `(64,4096,4096)` | 18.506 | 40.565 | 2.19x |
+| `bf16_gemm_bias_gelu` | `(64,4096,4096)` | 30.813 | 42.530 | 1.38x |
+| `bf16_gemm_bias` | `(128,4096,4096)` | 32.880 | 34.968 | 1.06x |
+| `bf16_gemm_bias_gelu` | `(128,4096,4096)` | 30.822 | 36.998 | 1.20x |
 
-The GELU epilogue regression appears shape-specific rather than universal.
-`M=64` is the outlier in this sweep and should be investigated through
-cuBLASLt algorithm logging or explicit algorithm selection.
+The previous `M=64` GELU regression was caused by using only the first
+cuBLASLt heuristic result. Benchmarking multiple candidate algorithms and
+caching the fastest candidate fixes the outlier on the local test GPU.
 
 ## Next Benchmark Work
 

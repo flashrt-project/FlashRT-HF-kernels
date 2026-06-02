@@ -6,7 +6,7 @@ tests belong under the ignored `internal-tests/` directory.
 
 ## Current Status
 
-Validated on June 1, 2026.
+Validated on June 2, 2026.
 
 Build target:
 
@@ -51,6 +51,8 @@ python internal-tests/flashrt-gemm-epilogues/manual_torch_extension_smoke.py --l
 - ABI compatibility check passed for manylinux_2_28 and Python ABI 3.9.
 - `get_kernel` loading check passed for `flashrt_gemm_epilogues`.
 - `check-builds` passed.
+- Rebuilt after adding per-shape cuBLASLt algorithm autotuning for BF16 GEMM
+  epilogue paths.
 
 Installed build layout:
 
@@ -90,7 +92,8 @@ Covered shapes:
 - Only one HF build variant has been built so far.
 - Docker does not currently expose the NVIDIA runtime, so GPU execution tests
   are run on the host instead of inside the Docker/Nix builder.
-- Package benchmarks are scaffolded but not yet recorded.
+- First use of a new GEMM shape performs local cuBLASLt algorithm autotuning;
+  later calls use the cached algorithm.
 - FP8 GEMM wrappers are intentionally not exposed yet; the first attempted
   cuBLASLt FP8 route compiled but did not return a supported heuristic on the
   local RTX 5090 environment.

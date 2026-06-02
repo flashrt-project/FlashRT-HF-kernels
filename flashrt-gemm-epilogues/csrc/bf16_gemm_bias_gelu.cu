@@ -3,6 +3,10 @@
 #include <cublasLt.h>
 #include <cuda_runtime.h>
 
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -13,6 +17,9 @@ namespace flash_rt::gemm {
 namespace {
 
 constexpr size_t kWorkspaceSize = 32 * 1024 * 1024;
+constexpr int kMaxHeuristicResults = 16;
+constexpr int kAutotuneWarmupIters = 3;
+constexpr int kAutotuneMeasureIters = 10;
 
 std::string cublas_error(cublasStatus_t status, const char* expr) {
   return std::string("cuBLASLt error ") + std::to_string(static_cast<int>(status)) +
@@ -115,6 +122,179 @@ struct MatmulPreference {
   }
 };
 
+struct AlgoCacheKey {
+  int M = 0;
+  int N = 0;
+  int K = 0;
+  int epilogue = 0;
+
+  bool operator<(const AlgoCacheKey& other) const {
+    if (M != other.M) return M < other.M;
+    if (N != other.N) return N < other.N;
+    if (K != other.K) return K < other.K;
+    return epilogue < other.epilogue;
+  }
+};
+
+std::mutex& algo_cache_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::map<AlgoCacheKey, cublasLtMatmulHeuristicResult_t>& algo_cache() {
+  static std::map<AlgoCacheKey, cublasLtMatmulHeuristicResult_t> cache;
+  return cache;
+}
+
+bool log_autotune() {
+  const char* value = std::getenv("FLASHRT_GEMM_EPILOGUES_LOG_AUTOTUNE");
+  return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+cublasLtMatmulHeuristicResult_t select_algo(
+    DeviceRuntime& runtime,
+    cublasLtMatmulDesc_t matmul_desc,
+    cublasLtMatrixLayout_t A_desc,
+    cublasLtMatrixLayout_t B_desc,
+    cublasLtMatrixLayout_t D_desc,
+    cublasLtMatmulPreference_t preference,
+    const void* A,
+    const void* B,
+    void* D,
+    int M,
+    int N,
+    int K,
+    int epilogue,
+    cudaStream_t stream) {
+  const AlgoCacheKey key{M, N, K, epilogue};
+  {
+    std::lock_guard<std::mutex> lock(algo_cache_mutex());
+    const auto it = algo_cache().find(key);
+    if (it != algo_cache().end()) {
+      return it->second;
+    }
+  }
+
+  cublasLtMatmulHeuristicResult_t results[kMaxHeuristicResults];
+  int returned_results = 0;
+  FLASHRT_CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(
+      runtime.handle,
+      matmul_desc,
+      A_desc,
+      B_desc,
+      D_desc,
+      D_desc,
+      preference,
+      kMaxHeuristicResults,
+      results,
+      &returned_results));
+  if (returned_results == 0) {
+    throw std::runtime_error("cuBLASLt bf16 GEMM epilogue: no algorithm found");
+  }
+
+  float alpha = 1.0f;
+  float beta = 0.0f;
+  int best_index = 0;
+  float best_ms = std::numeric_limits<float>::infinity();
+
+  cudaEvent_t start = nullptr;
+  cudaEvent_t stop = nullptr;
+  FLASHRT_CUDA_CHECK(cudaEventCreate(&start));
+  FLASHRT_CUDA_CHECK(cudaEventCreate(&stop));
+
+  for (int i = 0; i < returned_results; ++i) {
+    bool ok = true;
+    for (int warmup = 0; warmup < kAutotuneWarmupIters; ++warmup) {
+      const cublasStatus_t status = cublasLtMatmul(
+          runtime.handle,
+          matmul_desc,
+          &alpha,
+          B,
+          A_desc,
+          A,
+          B_desc,
+          &beta,
+          D,
+          D_desc,
+          D,
+          D_desc,
+          &results[i].algo,
+          runtime.workspace,
+          runtime.workspace_size,
+          stream);
+      if (status != CUBLAS_STATUS_SUCCESS) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      continue;
+    }
+    FLASHRT_CUDA_CHECK(cudaStreamSynchronize(stream));
+    FLASHRT_CUDA_CHECK(cudaEventRecord(start, stream));
+    for (int iter = 0; iter < kAutotuneMeasureIters; ++iter) {
+      const cublasStatus_t status = cublasLtMatmul(
+          runtime.handle,
+          matmul_desc,
+          &alpha,
+          B,
+          A_desc,
+          A,
+          B_desc,
+          &beta,
+          D,
+          D_desc,
+          D,
+          D_desc,
+          &results[i].algo,
+          runtime.workspace,
+          runtime.workspace_size,
+          stream);
+      if (status != CUBLAS_STATUS_SUCCESS) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) {
+      continue;
+    }
+    FLASHRT_CUDA_CHECK(cudaEventRecord(stop, stream));
+    FLASHRT_CUDA_CHECK(cudaEventSynchronize(stop));
+    float elapsed_ms = 0.0f;
+    FLASHRT_CUDA_CHECK(cudaEventElapsedTime(&elapsed_ms, start, stop));
+    const float candidate_ms = elapsed_ms / kAutotuneMeasureIters;
+    if (candidate_ms < best_ms) {
+      best_ms = candidate_ms;
+      best_index = i;
+    }
+  }
+
+  FLASHRT_CUDA_CHECK(cudaEventDestroy(start));
+  FLASHRT_CUDA_CHECK(cudaEventDestroy(stop));
+
+  if (!std::isfinite(best_ms)) {
+    best_index = 0;
+  }
+
+  if (log_autotune()) {
+    printf(
+        "[flashrt-gemm-epilogues] epilogue=%d shape=(%d,%d,%d) best=%d/%d %.3fus\n",
+        epilogue,
+        M,
+        N,
+        K,
+        best_index,
+        returned_results,
+        best_ms * 1000.0f);
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(algo_cache_mutex());
+    algo_cache()[key] = results[best_index];
+  }
+  return results[best_index];
+}
+
 }  // namespace
 
 void bf16_gemm_bias(
@@ -163,22 +343,21 @@ void bf16_gemm_bias(
       &runtime.workspace_size,
       sizeof(runtime.workspace_size)));
 
-  int returned_results = 0;
-  cublasLtMatmulHeuristicResult_t heuristic;
-  FLASHRT_CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(
-      runtime.handle,
+  cublasLtMatmulHeuristicResult_t heuristic = select_algo(
+      runtime,
       matmul_desc.value,
       A_desc.value,
       B_desc.value,
       D_desc.value,
-      D_desc.value,
       preference.value,
-      1,
-      &heuristic,
-      &returned_results));
-  if (returned_results == 0) {
-    throw std::runtime_error("cuBLASLt bf16_gemm_bias: no algorithm found");
-  }
+      A,
+      B,
+      D,
+      M,
+      N,
+      K,
+      static_cast<int>(epilogue),
+      stream);
 
   float alpha = 1.0f;
   float beta = 0.0f;
@@ -251,22 +430,21 @@ void bf16_gemm_bias_gelu(
       &runtime.workspace_size,
       sizeof(runtime.workspace_size)));
 
-  int returned_results = 0;
-  cublasLtMatmulHeuristicResult_t heuristic;
-  FLASHRT_CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(
-      runtime.handle,
+  cublasLtMatmulHeuristicResult_t heuristic = select_algo(
+      runtime,
       matmul_desc.value,
       A_desc.value,
       B_desc.value,
       D_desc.value,
-      D_desc.value,
       preference.value,
-      1,
-      &heuristic,
-      &returned_results));
-  if (returned_results == 0) {
-    throw std::runtime_error("cuBLASLt bf16_gemm_bias_gelu: no algorithm found");
-  }
+      A,
+      B,
+      D,
+      M,
+      N,
+      K,
+      static_cast<int>(epilogue),
+      stream);
 
   float alpha = 1.0f;
   float beta = 0.0f;
