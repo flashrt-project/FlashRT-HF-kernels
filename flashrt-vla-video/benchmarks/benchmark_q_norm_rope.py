@@ -120,6 +120,17 @@ class QNormRopeBenchmark(Benchmark):
     def verify_heads16(self):
         return self._reference()
 
+    def setup_heads24(self):
+        self._setup_heads(24)
+
+    def benchmark_heads24(self):
+        self.kernel.q_norm_rope_bf16(
+            self.q, self.weight, self.cos, self.sin, out=self.out
+        )
+
+    def verify_heads24(self):
+        return self._reference()
+
     def setup_heads32(self):
         self._setup_heads(32)
 
@@ -183,10 +194,7 @@ class QKVSplitNormRopeBenchmark(Benchmark):
             self.head_dim,
         )[0]
 
-    def setup_tokens64(self):
-        self._setup_tokens(64)
-
-    def benchmark_tokens64(self):
+    def _benchmark(self):
         self.kernel.qkv_split_norm_rope_bf16(
             self.packed_qkv,
             self.norm_q_weight,
@@ -198,6 +206,39 @@ class QKVSplitNormRopeBenchmark(Benchmark):
             q_out=self.q_out,
             k_out=self.k_out,
         )
+
+    def setup_tokens1(self):
+        self._setup_tokens(1)
+
+    def benchmark_tokens1(self):
+        self._benchmark()
+
+    def verify_tokens1(self):
+        return self._reference()
+
+    def setup_tokens4(self):
+        self._setup_tokens(4)
+
+    def benchmark_tokens4(self):
+        self._benchmark()
+
+    def verify_tokens4(self):
+        return self._reference()
+
+    def setup_tokens16(self):
+        self._setup_tokens(16)
+
+    def benchmark_tokens16(self):
+        self._benchmark()
+
+    def verify_tokens16(self):
+        return self._reference()
+
+    def setup_tokens64(self):
+        self._setup_tokens(64)
+
+    def benchmark_tokens64(self):
+        self._benchmark()
 
     def verify_tokens64(self):
         return self._reference()
@@ -206,17 +247,7 @@ class QKVSplitNormRopeBenchmark(Benchmark):
         self._setup_tokens(256)
 
     def benchmark_tokens256(self):
-        self.kernel.qkv_split_norm_rope_bf16(
-            self.packed_qkv,
-            self.norm_q_weight,
-            self.norm_k_weight,
-            self.freqs_re,
-            self.freqs_im,
-            heads=self.heads,
-            head_dim=self.head_dim,
-            q_out=self.q_out,
-            k_out=self.k_out,
-        )
+        self._benchmark()
 
     def verify_tokens256(self):
         return self._reference()
@@ -225,17 +256,7 @@ class QKVSplitNormRopeBenchmark(Benchmark):
         self._setup_tokens(1024)
 
     def benchmark_tokens1024(self):
-        self.kernel.qkv_split_norm_rope_bf16(
-            self.packed_qkv,
-            self.norm_q_weight,
-            self.norm_k_weight,
-            self.freqs_re,
-            self.freqs_im,
-            heads=self.heads,
-            head_dim=self.head_dim,
-            q_out=self.q_out,
-            k_out=self.k_out,
-        )
+        self._benchmark()
 
     def verify_tokens1024(self):
         return self._reference()
@@ -244,19 +265,18 @@ class QKVSplitNormRopeBenchmark(Benchmark):
         self._setup_tokens(2520)
 
     def benchmark_tokens2520(self):
-        self.kernel.qkv_split_norm_rope_bf16(
-            self.packed_qkv,
-            self.norm_q_weight,
-            self.norm_k_weight,
-            self.freqs_re,
-            self.freqs_im,
-            heads=self.heads,
-            head_dim=self.head_dim,
-            q_out=self.q_out,
-            k_out=self.k_out,
-        )
+        self._benchmark()
 
     def verify_tokens2520(self):
+        return self._reference()
+
+    def setup_tokens4096(self):
+        self._setup_tokens(4096)
+
+    def benchmark_tokens4096(self):
+        self._benchmark()
+
+    def verify_tokens4096(self):
         return self._reference()
 
 
@@ -327,6 +347,18 @@ class KNormRopeVCacheBenchmark(Benchmark):
         )
 
     def verify_heads16(self):
+        return self._reference()
+
+    def setup_heads24(self):
+        self._setup_heads(24)
+
+    def benchmark_heads24(self):
+        self.kernel.k_norm_rope_v_cache_bf16(
+            self.k, self.v, self.weight, self.cos, self.sin,
+            k_out=self.k_out, v_out=self.v_out
+        )
+
+    def verify_heads24(self):
         return self._reference()
 
     def setup_heads32(self):

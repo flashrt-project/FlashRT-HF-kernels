@@ -41,6 +41,9 @@ Run this checklist before promoting any package from draft to buildable.
 - Benchmarks report latency, bandwidth or TFLOPS where relevant, and speedup
   versus PyTorch eager or a known baseline.
 - Benchmark scripts pin warmup/iteration counts and synchronize CUDA timing.
+- Shape and tile coverage follows `docs/tile-and-shape-coverage.md`.
+- Tile overrides used during tuning are documented and are not left as the only
+  way to reach expected performance.
 
 ## Build and ABI
 

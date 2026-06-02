@@ -32,4 +32,9 @@ For active development, use the ignored local source-extension benchmark in
 prints TFLOPS/GB/s and promote/watch/reject status without invoking the full
 HF/Nix builder.
 
+Internal first-batch sweeps cover decode, small-M, prefill, wide hidden, and
+VLA/video FFN dimensions from `docs/tile-and-shape-coverage.md`. During tuning,
+`FLASHRT_QUANT_BLOCK_SIZE=128|256|512|1024` is swept before changing the default
+tile policy.
+
 Preliminary local source-extension results are tracked in `RESULTS.md`.
