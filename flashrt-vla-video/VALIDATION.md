@@ -63,6 +63,6 @@ Package-local QKV split + norm + RoPE benchmark:
 
 - Full `kernel-builder build` has not been run for this package yet.
 - Hub benchmark runner has not been run for `benchmarks/benchmark_q_norm_rope.py`.
-- A downstream HF-style model-block example is still needed before making this
-  the first showcase update.
+- A downstream HF-style model-block example exists under `examples/`, but it
+  still needs to be run against a built or uploaded Hub package.
 - Runtime validation is currently RTX 5090 only.

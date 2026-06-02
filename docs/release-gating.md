@@ -21,7 +21,7 @@ possible `kernels-community` promotion.
 | Package | Current gate | Ready claim | Blocking gaps |
 | --- | --- | --- | --- |
 | `flashrt-gemm-epilogues` | G4 partial | First buildable package; FP8 quant epilogue headline on RTX 5090 | Torch 2.12 builder variants, public benchmark result refresh after final tile policy, multi-hardware validation |
-| `flashrt-vla-video` | G2/G4 partial | Strong VLA/video QKV post-processing showcase candidate with 20x+ local evidence | Full builder build, public benchmark runner, HF-style model-block example, multi-hardware validation |
+| `flashrt-vla-video` | G5 partial | Strong VLA/video QKV post-processing showcase candidate with 19-40x local evidence and an HF-style block example | Full builder build, public benchmark runner, run example against built/Hub package, multi-hardware validation |
 | `flashrt-nvfp4` | G2 | Buildable NVFP4 scale-factor layout helper | Full builder build, benchmark runner, fused GEMM epilogue surfaces, multi-hardware validation |
 | `flashrt-smallm-gemm` | G0 | Decode-latency candidate | Tensor binding, correctness tests, tile sweep, fair cuBLASLt/CUTLASS baseline |
 | `flashrt-fused-quant` | G0 | Shared fused quantization utility candidate | Tensor binding, correctness tests, tile sweep, memory-bandwidth benchmark |

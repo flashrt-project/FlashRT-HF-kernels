@@ -57,6 +57,10 @@ should be added after package-local validation.
 - Include a minimal HF-style Python example once a kernel can be used in a
   downstream model block.
 
+See `examples/qkv_postprocess_block.py` for a minimal HF-style module that
+replaces packed-QKV split, Q/K RMSNorm, and interleaved RoPE with one fused
+kernel call.
+
 ## Usage
 
 ```python

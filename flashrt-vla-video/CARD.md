@@ -30,3 +30,6 @@ The first implemented slice targets Q/K post-processing:
 
 CUDA GPU with BF16 support. The current implementation is optimized for
 head_dim=128 decode and video/VLA token paths.
+
+See `examples/qkv_postprocess_block.py` for a minimal HF-style module using
+`qkv_split_norm_rope_bf16`.
