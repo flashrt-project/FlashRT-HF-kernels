@@ -21,6 +21,25 @@ def _flashrt_allclose(input, other, rtol=1e-05, atol=1e-08, equal_nan=False):
 torch.allclose = _flashrt_allclose
 
 
+QUANT_SHAPES = [
+    ("decode_m1", 1, 4096),
+    ("decode_m2", 2, 4096),
+    ("decode_m4", 4, 4096),
+    ("decode_m8", 8, 4096),
+    ("small_m16", 16, 4096),
+    ("small_m32", 32, 4096),
+    ("prefill_m64", 64, 4096),
+    ("prefill_m128", 128, 4096),
+    ("prefill_m256", 256, 4096),
+    ("wide_n8192_m16", 16, 8192),
+    ("wide_n8192_m128", 128, 8192),
+    ("vla_n12288_m16", 16, 12288),
+    ("vla_n12288_m64", 64, 12288),
+    ("vla_n16384_m16", 16, 16384),
+    ("vla_n16384_m64", 64, 16384),
+]
+
+
 class ChannelScaleFp8QuantizeBenchmark(Benchmark):
     seed = 2
 
@@ -113,3 +132,25 @@ class ChannelScaleFp8QuantizeBenchmark(Benchmark):
 
     def verify_wide_n8192_m128(self) -> torch.Tensor:
         return self._reference()
+
+
+def _register_channel_scale_shapes() -> None:
+    for label, m, n in QUANT_SHAPES:
+
+        def setup(self, m=m, n=n) -> None:
+            self._setup_shape(m, n)
+
+        def benchmark(self) -> None:
+            self.kernel.channel_scale_quantize_fp8_static_bf16(
+                self.input, self.channel_scale, self.scale, out=self.out
+            )
+
+        def verify(self) -> torch.Tensor:
+            return self._reference()
+
+        setattr(ChannelScaleFp8QuantizeBenchmark, f"setup_{label}", setup)
+        setattr(ChannelScaleFp8QuantizeBenchmark, f"benchmark_{label}", benchmark)
+        setattr(ChannelScaleFp8QuantizeBenchmark, f"verify_{label}", verify)
+
+
+_register_channel_scale_shapes()

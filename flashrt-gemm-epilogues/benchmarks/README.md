@@ -4,8 +4,8 @@ These scripts are Hugging Face `kernels benchmark` workloads. Each file defines
 one `kernels.benchmark.Benchmark` subclass and several named shape workloads.
 
 `benchmark.py` compares GELU plus FP8 quantization, with and without bias,
-against the equivalent PyTorch eager expression across decode and prefill
-shapes.
+against the equivalent PyTorch eager expression across decode, small-M,
+prefill, wide hidden, and VLA/video FFN shapes.
 
 `benchmark_bf16_gemm_bias_gelu.py` compares BF16 GEMM plus bias, with or
 without GELU, against `torch.addmm` and `gelu(torch.addmm)` across decode,
@@ -14,6 +14,14 @@ small-batch, prefill, and wider projection shapes.
 `benchmark_channel_scale.py` compares per-channel scaling plus FP8 quantization
 against the equivalent PyTorch eager expression across the same quantization
 shape suite.
+
+The current FP8 quantization benchmark grid is:
+
+- decode: `(M,N)=(1,4096),(2,4096),(4,4096),(8,4096)`;
+- small-M: `(16,4096),(32,4096)`;
+- prefill: `(64,4096),(128,4096),(256,4096)`;
+- wide hidden: `(16,8192),(128,8192)`;
+- VLA/video FFN: `(16,12288),(64,12288),(16,16384),(64,16384)`.
 
 These scripts expect `flashrt_gemm_epilogues` to be importable with its
 generated `_ops` module. In normal use that means running them after loading or
