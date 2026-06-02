@@ -1,7 +1,8 @@
 # Benchmark Results: flashrt-vla-video
 
-These are preliminary local numbers used to select the first showcase slice.
-They are not yet a stable release benchmark table.
+These are local RTX 5090 numbers used to select and tune the first showcase
+slice. They are suitable for first-batch triage, but not yet a multi-hardware
+release benchmark table.
 
 Validated on June 2, 2026.
 
@@ -12,18 +13,31 @@ Environment:
 - CUDA runtime reported by PyTorch: 12.8
 - Timing path: FlashRT internal pybind module for source selection, followed by
   a package-local source-extension smoke benchmark.
+- Tile sweep: warmup 20, measured iterations 100.
+- Tile override: `FLASHRT_QKV_ROPE_BLOCK_SIZE in {128, 256, 512}`.
 
 ## Current Triage
 
-- `q_norm_rope_bf16` and `k_norm_rope_v_cache_bf16` are the first showcase
-  candidates. They show stable 29-34x speedups versus PyTorch eager for
-  head_dim=128 decode post-processing.
-- `qkv_split_norm_rope_bf16` is the next package-local showcase candidate. It
-  shows 21-38x speedups versus PyTorch eager for packed video/VLA QKV
-  post-processing.
+- `qkv_split_norm_rope_bf16` is the strongest first showcase candidate. It
+  removes packed-QKV split, Q/K RMSNorm, and interleaved RoPE intermediate
+  launches, and reaches 24-40x on the short/vision token shapes and 19-29x on
+  long video-token shapes in the current RTX 5090 sweep.
+- `q_norm_rope_bf16` and `k_norm_rope_v_cache_bf16` are smaller decode
+  primitives. They remain useful package APIs and show stable high-20x to
+  low-30x speedups versus PyTorch eager for head_dim=128 post-processing.
 - NVFP4 fused quantization epilogues are useful but currently measure in the
   2.5-5.2x range versus PyTorch eager plus FlashRT quantization, so they are
   not the first headline if the bar is a 30x-class kernel.
+
+## Tile Policy
+
+The current SM120 default policy is:
+
+- use 512-thread CTAs for `tokens <= 64`;
+- use 256-thread CTAs for longer token blocks.
+
+The policy favors short-context and head-count sweep wins while avoiding the
+long-token regression seen with 512-thread CTAs at `tokens >= 2520`.
 
 ## Q RMSNorm + RoPE + Stage Write
 
@@ -61,15 +75,31 @@ The package-local source extension was compiled with
 | heads=8 | 2.464 | 71.944 | 29.20x | 2.555 | 74.246 | 29.06x |
 | heads=48 | 2.454 | 75.614 | 30.81x | 2.667 | 77.466 | 29.05x |
 
-## Package-Local QKV Split + Norm + RoPE Smoke
+## Package-Local QKV Split + Norm + RoPE Sweep
 
 Compiled with the same package-local source extension. Baseline is PyTorch
-eager split + RMSNorm + interleaved RoPE.
+eager split + RMSNorm + interleaved RoPE. The table below follows the current
+default tile policy.
 
-| Tokens | Fused us | PyTorch eager us | Speedup |
-| ---: | ---: | ---: | ---: |
-| 4 | 4.473 | 168.442 | 37.66x |
-| 64 | 4.856 | 162.639 | 33.49x |
-| 256 | 6.209 | 158.634 | 25.55x |
-| 1024 | 10.812 | 229.836 | 21.26x |
-| 2520 | 20.552 | 504.120 | 24.53x |
+| Shape | Tile | Fused us | PyTorch eager us | Speedup | Max error |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| B=1,T=1,H=24,D=128 | 512 | 4.155 | 162.573 | 39.13x | 0.06250 |
+| B=1,T=4,H=24,D=128 | 512 | 4.149 | 165.208 | 39.82x | 0.12500 |
+| B=1,T=16,H=24,D=128 | 512 | 4.157 | 164.253 | 39.51x | 0.12500 |
+| B=1,T=64,H=24,D=128 | 512 | 4.158 | 165.057 | 39.69x | 0.12500 |
+| B=1,T=256,H=24,D=128 | 256 | 6.193 | 161.163 | 26.02x | 0.12500 |
+| B=1,T=1024,H=24,D=128 | 256 | 12.131 | 235.017 | 19.37x | 0.25000 |
+| B=1,T=2520,H=24,D=128 | 256 | 20.546 | 506.212 | 24.64x | 0.12500 |
+| B=1,T=4096,H=24,D=128 | 256 | 36.022 | 1043.616 | 28.97x | 0.12500 |
+
+## Head-Count Sweep
+
+These shapes use `tokens=64`, `head_dim=128`, and the current default
+512-thread CTA path.
+
+| Shape | Fused us | PyTorch eager us | Speedup | Max error |
+| ---: | ---: | ---: | ---: | ---: |
+| B=1,T=64,H=8,D=128 | 4.096 | 162.366 | 39.64x | 0.06250 |
+| B=1,T=64,H=16,D=128 | 4.134 | 162.510 | 39.31x | 0.12500 |
+| B=1,T=64,H=32,D=128 | 4.176 | 165.738 | 39.69x | 0.12500 |
+| B=1,T=64,H=48,D=128 | 6.201 | 163.707 | 26.40x | 0.12500 |

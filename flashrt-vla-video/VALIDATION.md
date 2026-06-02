@@ -48,16 +48,21 @@ Package-local source benchmark:
 
 Package-local QKV split + norm + RoPE benchmark:
 
-| Tokens | Fused us | PyTorch eager us | Speedup |
-| ---: | ---: | ---: | ---: |
-| 4 | 4.473 | 168.442 | 37.66x |
-| 64 | 4.856 | 162.639 | 33.49x |
-| 256 | 6.209 | 158.634 | 25.55x |
-| 1024 | 10.812 | 229.836 | 21.26x |
-| 2520 | 20.552 | 504.120 | 24.53x |
+| Shape | Tile | Fused us | PyTorch eager us | Speedup | Max error |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| B=1,T=1,H=24,D=128 | 512 | 4.155 | 162.573 | 39.13x | 0.06250 |
+| B=1,T=4,H=24,D=128 | 512 | 4.149 | 165.208 | 39.82x | 0.12500 |
+| B=1,T=16,H=24,D=128 | 512 | 4.157 | 164.253 | 39.51x | 0.12500 |
+| B=1,T=64,H=24,D=128 | 512 | 4.158 | 165.057 | 39.69x | 0.12500 |
+| B=1,T=256,H=24,D=128 | 256 | 6.193 | 161.163 | 26.02x | 0.12500 |
+| B=1,T=1024,H=24,D=128 | 256 | 12.131 | 235.017 | 19.37x | 0.25000 |
+| B=1,T=2520,H=24,D=128 | 256 | 20.546 | 506.212 | 24.64x | 0.12500 |
+| B=1,T=4096,H=24,D=128 | 256 | 36.022 | 1043.616 | 28.97x | 0.12500 |
 
 ## Remaining Gaps
 
 - Full `kernel-builder build` has not been run for this package yet.
 - Hub benchmark runner has not been run for `benchmarks/benchmark_q_norm_rope.py`.
+- A downstream HF-style model-block example is still needed before making this
+  the first showcase update.
 - Runtime validation is currently RTX 5090 only.
