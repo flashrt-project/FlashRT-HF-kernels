@@ -13,3 +13,5 @@ Example:
 ```bash
 python scripts/prebuild_check.py --check-config
 ```
+
+See `docs/release-runbook.md` for the full build-window procedure.

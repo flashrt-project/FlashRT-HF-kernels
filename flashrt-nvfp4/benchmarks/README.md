@@ -1,5 +1,11 @@
 # Benchmarks
 
+Public result ledger:
+
+```text
+RESULTS.md
+```
+
 Implemented benchmark groups:
 
 - Layout conversion latency and bandwidth for scale-factor tensors.

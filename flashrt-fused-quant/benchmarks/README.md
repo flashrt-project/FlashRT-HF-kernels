@@ -1,5 +1,11 @@
 # Benchmarks
 
+Public result ledger:
+
+```text
+RESULTS.md
+```
+
 Current benchmark scope:
 
 - Split and merged `SiLU(gate) * up + quant` against PyTorch eager chains.

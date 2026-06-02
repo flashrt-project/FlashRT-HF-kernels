@@ -70,8 +70,10 @@ FlashRT-dependent validation:
 The first-batch tuning grid is documented in
 `docs/tile-and-shape-coverage.md`. Packaging gates and release blockers are
 tracked in `docs/release-gating.md`. The four-block v1 release plan is tracked
-in `docs/v1-batch-plan.md`. Run `python scripts/prebuild_check.py
---check-config` before starting a full release build window.
+in `docs/v1-batch-plan.md`. Benchmark baseline rules are defined in
+`docs/benchmark-baselines.md`. The full build procedure is in
+`docs/release-runbook.md`. Run `python scripts/prebuild_check.py --check-config`
+before starting a full release build window.
 
 ## Expected Layout Per Package
 

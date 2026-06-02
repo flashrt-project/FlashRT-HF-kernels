@@ -23,6 +23,13 @@ V1_PACKAGES = [
     "flashrt-smallm-gemm",
     "flashrt-fused-quant",
 ]
+REQUIRED_DOCS = [
+    "docs/benchmark-baselines.md",
+    "docs/release-gating.md",
+    "docs/release-runbook.md",
+    "docs/tile-and-shape-coverage.md",
+    "docs/v1-batch-plan.md",
+]
 REQUIRED_FILES = [
     "README.md",
     "CARD.md",
@@ -30,6 +37,7 @@ REQUIRED_FILES = [
     "build.toml",
     "flake.nix",
     "flake.lock",
+    "benchmarks/RESULTS.md",
 ]
 REQUIRED_DIRS = [
     "csrc",
@@ -124,6 +132,12 @@ def check_internal_dirs(errors: list[str]) -> None:
         fail(errors, "internal-docs/ or internal-tests/ contains tracked files")
 
 
+def check_docs(errors: list[str]) -> None:
+    for rel in REQUIRED_DOCS:
+        if not (ROOT / rel).is_file():
+            fail(errors, f"missing required doc {rel}")
+
+
 def check_config(pkg: str, builder: str, errors: list[str]) -> None:
     result = run([builder, "check-config", "."], cwd=ROOT / pkg)
     if result.returncode != 0:
@@ -153,6 +167,7 @@ def main() -> int:
         if args.check_config:
             check_config(pkg, args.builder, errors)
 
+    check_docs(errors)
     check_internal_dirs(errors)
 
     for item in warnings:

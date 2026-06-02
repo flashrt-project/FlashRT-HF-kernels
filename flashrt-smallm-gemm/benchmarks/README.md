@@ -1,5 +1,11 @@
 # Benchmarks
 
+Public result ledger:
+
+```text
+RESULTS.md
+```
+
 Current benchmark scope:
 
 - Decode `M=1` W4A4 matvec vs CUTLASS/cuBLASLt and PyTorch dequant+matmul.

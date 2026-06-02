@@ -29,6 +29,8 @@ of v1.
 7. Run source-extension compile and smoke tests.
 8. Only then run full `kernel-builder` builds for all promoted packages.
 
+Benchmark baseline rules are defined in `docs/benchmark-baselines.md`.
+
 ## Package Checklist
 
 ### `flashrt-gemm-epilogues`
@@ -108,7 +110,7 @@ Before v1 build window:
 ## Release Build Window
 
 Run this only after every v1 package has stable source, tests, benchmarks, and
-examples:
+examples. The detailed procedure is in `docs/release-runbook.md`:
 
 1. Run `python scripts/prebuild_check.py --check-config`.
 2. Clean any stale build outputs, result symlinks, or cache warnings reported by

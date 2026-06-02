@@ -52,11 +52,13 @@ Before uploading the v1 batch to the Hub:
 - Every promoted v1 package completes `kernel-builder build` and
   `check-builds` for the intended torch/CUDA variants during the release
   validation window.
+- The release window follows `docs/release-runbook.md`.
 - Package `README.md`, `CARD.md`, and `VALIDATION.md` state the same hardware
   and API scope.
 - `python scripts/prebuild_check.py --check-config` passes before starting the
   full build window.
 - Benchmarks include the shape grid from `docs/tile-and-shape-coverage.md`.
+- Benchmark baselines follow `docs/benchmark-baselines.md`.
 - Headline speedups use a fair baseline and name the GPU, driver, PyTorch, CUDA
   runtime, warmup count, and measured iterations.
 
