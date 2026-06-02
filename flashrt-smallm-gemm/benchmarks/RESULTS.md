@@ -58,20 +58,18 @@ python scripts/run_built_artifact_benchmarks.py \
   --package flashrt-smallm-gemm --warmup 10 --iterations 50
 ```
 
-| Workload | K | N | Mean ms | Ref ms | Speedup | Verified | Notes |
-| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
 The benchmark uses random packed W4A4 inputs and a PyTorch readability
 baseline that dequantizes FP4 values/scales and performs the matvec. The older
 constant-input table compared against `torch.full` and is invalidated.
 
 | Workload | K | N | Mean ms | Ref ms | Speedup | Verified | Notes |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| `k4096_n1024` | 4096 | 1024 | 0.0333 | 0.4676 | 14.03x | yes | random/dequant baseline |
-| `k4096_n4096` | 4096 | 4096 | 0.1081 | 1.4944 | 13.83x | yes | random/dequant baseline |
-| `k4096_n12288` | 4096 | 12288 | 0.2597 | 4.2138 | 16.23x | yes | random/dequant baseline |
-| `k12288_n1024` | 12288 | 1024 | 0.0843 | 0.5544 | 6.58x | yes | random/dequant baseline |
-| `k12288_n4096` | 12288 | 4096 | 0.3079 | 1.8074 | 5.87x | yes | random/dequant baseline |
-| `k12288_n12288` | 12288 | 12288 | 0.7574 | 5.1062 | 6.74x | yes | random/dequant baseline |
+| `k4096_n1024` | 4096 | 1024 | 0.0331 | 0.4672 | 14.12x | yes | random/dequant baseline |
+| `k4096_n4096` | 4096 | 4096 | 0.1078 | 1.4832 | 13.76x | yes | random/dequant baseline |
+| `k4096_n12288` | 4096 | 12288 | 0.2596 | 4.1848 | 16.12x | yes | random/dequant baseline |
+| `k12288_n1024` | 12288 | 1024 | 0.0844 | 0.5472 | 6.48x | yes | random/dequant baseline |
+| `k12288_n4096` | 12288 | 4096 | 0.3080 | 1.8043 | 5.86x | yes | random/dequant baseline |
+| `k12288_n12288` | 12288 | 12288 | 0.7575 | 5.0800 | 6.71x | yes | random/dequant baseline |
 
 ## Release Blockers
 

@@ -24,7 +24,7 @@ Timing method:
 ## Current Triage
 
 - The FP8 quantization epilogue kernels are strong across the current shape
-  suite on the built artifact: verified speedups range from 2.60x to 4.08x
+  suite on the built artifact: verified speedups range from 2.58x to 4.44x
   against the benchmark script PyTorch eager references.
 - The BF16 GEMM epilogue wrapper is shape-sensitive. `M=1` is strong against
   the older source-extension `torch.addmm` baseline, but the public benchmark

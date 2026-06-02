@@ -26,7 +26,7 @@ Environment:
 - `q_norm_rope_bf16`, `k_norm_rope_v_cache_bf16`, and
   `qkv_split_norm_rope_bf16` pass built-artifact benchmark verification.
 - QKV benchmark verifies Q and K through separate benchmark classes.
-- Current built-artifact speedup range: 10.04x to 29.33x against the PyTorch
+- Current built-artifact speedup range: 9.79x to 29.30x against the PyTorch
   eager references in `benchmark_q_norm_rope.py`.
 
 ## Source Accuracy Gate

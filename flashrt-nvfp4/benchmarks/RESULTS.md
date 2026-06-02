@@ -55,7 +55,7 @@ python scripts/run_built_artifact_benchmarks.py \
 
 | Workload | Mean ms | Ref ms | Speedup | Verified | Notes |
 | --- | ---: | ---: | ---: | --- | --- |
-| `rows1_d4096` | 0.0073 | 0.4929 | 67.22x | yes | Python layout reference |
+| `rows1_d4096` | 0.0074 | 0.5229 | 70.68x | yes | Python layout reference |
 | `rows2_d4096` | 0.0073 | 0.9593 | 130.60x | yes | Python layout reference |
 | `rows31_d4096` | 0.0074 | 14.2711 | 1939.87x | yes | Python layout reference |
 | `rows32_d4096` | 0.0073 | 14.8109 | 2032.16x | yes | Python layout reference |
@@ -67,7 +67,7 @@ python scripts/run_built_artifact_benchmarks.py \
 | `rows16_d2048` | 0.0073 | 3.7716 | 516.47x | yes | Python layout reference |
 | `rows16_d8192` | 0.0074 | 21.1831 | 2847.88x | yes | Python layout reference |
 | `rows16_d12288` | 0.0074 | 31.9058 | 4333.69x | yes | Python layout reference |
-| `rows64_d16384` | 0.0074 | 128.9588 | 17408.41x | yes | Python layout reference |
+| `rows64_d16384` | 0.0074 | 133.1886 | 18031.32x | yes | Python layout reference |
 
 ## Release Blockers
 

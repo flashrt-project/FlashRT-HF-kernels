@@ -77,9 +77,9 @@ Representative output:
 
 | Example | Result |
 | --- | --- |
-| `flashrt-gemm-epilogues/examples/fp8_quant_epilogue_block.py` | `M=64,N=4096`: 7.652 us vs 24.328 us, 3.18x |
-| `flashrt-vla-video/examples/qkv_postprocess_block.py` | `T=256,H=24,D=128`: 8.214 us vs 141.332 us, 17.21x |
-| `flashrt-nvfp4/examples/nvfp4_scale_factor_layout.py` | `rows=128,D=4096`: 3.400 us |
+| `flashrt-gemm-epilogues/examples/fp8_quant_epilogue_block.py` | `M=64,N=4096`: 5.047 us vs 24.888 us, 4.93x |
+| `flashrt-vla-video/examples/qkv_postprocess_block.py` | `T=256,H=24,D=128`: 7.710 us vs 143.796 us, 18.65x |
+| `flashrt-nvfp4/examples/nvfp4_scale_factor_layout.py` | `rows=128,D=4096`: 3.212 us |
 | `flashrt-smallm-gemm/examples/nvfp4_w4a4_decode_matvec.py` | output `(1024,)`, BF16 |
 | `flashrt-fused-quant/examples/swiglu_nvfp4_quant_block.py` | split and merged packed/scales outputs produced |
 
@@ -98,10 +98,10 @@ the copied built artifacts. It does not replace the official Hub
 
 | Package | Built-artifact benchmark result |
 | --- | --- |
-| `flashrt-gemm-epilogues` | FP8 quant epilogues verified, 2.60x-4.08x vs PyTorch eager references; BF16 GEMM benchmark is latency-only |
-| `flashrt-vla-video` | Q/K/QKV post-processing verified, 10.04x-29.33x vs PyTorch eager references |
-| `flashrt-nvfp4` | scale-factor layout helper byte-verified, 67.22x-17408.41x vs Python layout reference |
-| `flashrt-smallm-gemm` | W4A4 decode matvec verified, 5.87x-16.23x vs random/dequant PyTorch readability baseline |
+| `flashrt-gemm-epilogues` | FP8 quant epilogues verified, 2.58x-4.44x vs PyTorch eager references; BF16 GEMM benchmark is latency-only |
+| `flashrt-vla-video` | Q/K/QKV post-processing verified, 9.79x-29.30x vs PyTorch eager references |
+| `flashrt-nvfp4` | scale-factor layout helper byte-verified, 70.68x-18031.32x vs Python layout reference |
+| `flashrt-smallm-gemm` | W4A4 decode matvec verified, 5.86x-16.12x vs random/dequant PyTorch readability baseline |
 | `flashrt-fused-quant` | split and merged fused quant latency grid completed; multi-output byte parity remains covered by accuracy sweep |
 
 ## Full Matrix Status
@@ -114,6 +114,12 @@ This is not a full HF matrix build. The package variant lists are:
   x86_64 variants because they require CUDA 12.8+ and SM120.
 
 The full `kernel-builder build-and-copy` matrix remains a release-window job.
-After that matrix passes, run hardware validation on the other target machines
-before widening public hardware claims. SM120 packages should stay labeled
-CUDA 12.8+ SM120 until a non-SM120 source path is added.
+An attempted full-matrix build on June 2, 2026 failed before any FlashRT source
+compile in the Torch 2.12/CUDA 13.2 dependency path because the Nix
+fixed-output derivation for `triton-3.7.0` reported a hash mismatch. The v1
+release-candidate artifact above is therefore the selected torch211/cu128
+variant, not a full HF matrix artifact.
+
+After the full matrix passes, run hardware validation on the other target
+machines before widening public hardware claims. SM120 packages should stay
+labeled CUDA 12.8+ SM120 until a non-SM120 source path is added.
