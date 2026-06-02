@@ -14,6 +14,7 @@ Runtime smoke environment:
 - GPU: NVIDIA GeForce RTX 5090
 - PyTorch: 2.9.1+cu128
 - CUDA capability: 12.0
+- Build scope: CUDA 12.8+ and SM120
 
 ## Current Scope
 
@@ -63,5 +64,6 @@ Results:
 - Full `kernel-builder build` has not been run for this package.
 - Public benchmark scripts are present, but built-artifact benchmark results
   and fair CUTLASS/cuBLASLt baselines are still pending.
-- Runtime validation is currently RTX 5090 only.
+- Runtime validation is currently RTX 5090 only; this v1 source slice is
+  declared SM120-only in `build.toml`.
 - Warpsplit small-M and tiny FP8 source slices are not yet exposed.

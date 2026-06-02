@@ -4,6 +4,9 @@ license = "Apache-2.0"
 version = 1
 backends = ["cuda"]
 
+[general.cuda]
+minver = "12.8"
+
 [general.hub]
 repo-id = "flashrt/flashrt-smallm-gemm"
 
@@ -18,8 +21,8 @@ src = [
 backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
-# Restrict cuda-capabilities after builder support for SM120-only packages is
-# confirmed with Hugging Face.
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0"]
 src = [
   "csrc/fp4_w4a4_matvec_sm120.cu",
   "csrc/fp4_w4a4_matvec_sm120.cuh",

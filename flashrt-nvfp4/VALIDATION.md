@@ -29,6 +29,7 @@ Runtime smoke environment:
 - PyTorch: 2.9.1+cu128
 - CUDA runtime reported by PyTorch: 12.8
 - CUDA capability: 12.0
+- Build scope: CUDA 12.8+ and SM120
 
 Builder tooling:
 
@@ -95,5 +96,5 @@ loop.
 - Runtime validation is currently RTX 5090 only.
 - Current public API is a data-layout helper. Fused NVFP4 GEMM epilogues are
   not included in this buildable slice yet.
-- The current CUDA implementation is Blackwell-oriented; keep SM120/SM120a
-  scope explicit until other architectures are implemented and measured.
+- The current CUDA implementation is declared CUDA 12.8+ SM120-only in
+  `build.toml`; add a separate source path before making non-SM120 claims.

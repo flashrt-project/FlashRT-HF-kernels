@@ -71,8 +71,8 @@ Before presenting v1 as a strong community update:
 - Include a model-block or HF-style call path, not only microbenchmarks.
 - State exactly which shapes are fast and which shapes are just compatibility
   coverage.
-- Keep SM120-only kernels labeled as SM120/SM120a until other hardware is
-  measured.
+- Keep SM120-only kernels labeled as CUDA 12.8+ SM120 until a non-SM120 source
+  path is added.
 
 ## Development Loop Policy
 

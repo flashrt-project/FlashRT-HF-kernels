@@ -34,15 +34,17 @@ compatibility, but it is not always strong enough for headline claims.
 
 ### `flashrt-nvfp4`
 
+- The v1 layout helper is declared CUDA 12.8+ SM120-only.
 - Layout-only helpers may use byte-parity correctness and PyTorch/CUDA tensor
   reshapes as readable baselines.
 - Fused NVFP4 GEMM epilogues require CUTLASS/cuBLASLt or an unfused strong
   CUDA chain before becoming headline claims.
-- SM120-only paths must be labeled SM120/SM120a until other hardware is
-  measured.
+- SM120-only paths must be labeled CUDA 12.8+ SM120 until a non-SM120 source
+  path is added.
 
 ### `flashrt-smallm-gemm`
 
+- The v1 decode matvec source slice is declared CUDA 12.8+ SM120-only.
 - PyTorch dequant plus matmul is acceptable as a readable baseline.
 - Headline low-bit GEMM/GEMV claims require cuBLASLt/CUTLASS or a known strong
   FlashRT internal low-bit baseline when available.
@@ -51,6 +53,7 @@ compatibility, but it is not always strong enough for headline claims.
 
 ### `flashrt-fused-quant`
 
+- The v1 SwiGLU quantization source slice is declared CUDA 12.8+ SM120-only.
 - PyTorch eager is acceptable as a readable baseline for
   `SiLU(gate) * up + quant`.
 - Report effective memory bandwidth because this package is memory-bound.

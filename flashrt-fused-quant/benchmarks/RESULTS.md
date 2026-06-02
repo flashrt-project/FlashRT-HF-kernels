@@ -11,7 +11,7 @@ Environment:
 - GPU: NVIDIA GeForce RTX 5090
 - PyTorch: 2.9.1+cu128
 - CUDA runtime reported by PyTorch: 12.8
-- Hardware scope: SM120 local validation only so far
+- Hardware scope: CUDA 12.8+ SM120 local validation only so far
 - Benchmark path: pending built package artifact
 
 ## Current Scope
@@ -59,4 +59,5 @@ Record:
 - HF benchmark runner has not been run against a built artifact.
 - Memory-bandwidth benchmark results are not recorded.
 - Residual/RMSNorm and SFA variants are not exposed.
-- Multi-hardware validation is not complete.
+- Non-SM120 hardware validation is not applicable to the current v1 surface
+  unless a non-SM120 source path is added.

@@ -4,6 +4,9 @@ license = "Apache-2.0"
 version = 1
 backends = ["cuda"]
 
+[general.cuda]
+minver = "12.8"
+
 [general.hub]
 repo-id = "flashrt/flashrt-fused-quant"
 
@@ -18,7 +21,8 @@ src = [
 backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
-# cuda-capabilities = ["8.0", "8.9", "9.0", "10.0", "12.0"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0"]
 src = [
   "csrc/silu_mul_to_nvfp4_swizzled.cu",
   "csrc/silu_mul_to_nvfp4_swizzled.cuh",
