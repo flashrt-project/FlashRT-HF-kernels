@@ -39,7 +39,8 @@ output helpers additionally require PyTorch and hardware/runtime support for
 
 ## Validation
 
-The first validated HF build target is `torch211-cxx11-cu128-x86_64-linux`.
-Builder ABI checks and host-side correctness smoke passed on an RTX 5090 with
-PyTorch 2.9.1+cu128. See `VALIDATION.md` for the full record and remaining
-gaps.
+Validated HF builder targets currently include
+`torch211-cxx11-cu128-x86_64-linux` and
+`torch211-cxx11-cu126-x86_64-linux`. Builder ABI checks passed for both
+variants. Host-side correctness smoke passed on an RTX 5090 with PyTorch
+2.9.1+cu128. See `VALIDATION.md` for the full record and remaining gaps.

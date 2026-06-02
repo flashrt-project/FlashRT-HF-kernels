@@ -54,8 +54,10 @@ This is the recommended first buildable package.
 
 ## Validation
 
-The first HF builder target and host-side CUDA correctness smoke have passed.
-See `VALIDATION.md` for exact variants, commands, environment, and known gaps.
+HF builder validation has passed for the torch211 CUDA 12.8 and CUDA 12.6
+variants. Host-side CUDA correctness smoke has passed on the local RTX 5090
+environment. See `VALIDATION.md` for exact variants, commands, environment,
+and known gaps.
 
 ## Usage
 
