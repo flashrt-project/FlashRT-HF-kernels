@@ -33,8 +33,10 @@ REQUIRED_DOCS = [
 ]
 REQUIRED_SCRIPTS = [
     "scripts/correctness_audit.py",
+    "scripts/copy_docker_variant_artifacts.py",
     "scripts/prebuild_check.py",
     "scripts/release_build_plan.py",
+    "scripts/run_built_artifact_benchmarks.py",
 ]
 REQUIRED_FILES = [
     "README.md",

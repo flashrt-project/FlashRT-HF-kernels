@@ -1,7 +1,7 @@
 # Benchmark Results: flashrt-gemm-epilogues
 
-These are preliminary local numbers. They are useful for prioritizing kernel
-work, but they are not yet a stable release benchmark table.
+This file contains the current built-artifact release-candidate benchmark
+results, followed by older source-extension triage notes.
 
 Validated on June 2, 2026.
 
@@ -9,35 +9,133 @@ Environment:
 
 - GPU: NVIDIA GeForce RTX 5090
 - Driver: 580.82.07
-- PyTorch: 2.9.1+cu128
+- Driver: 580.82.07
+- Built artifact: `torch211-cxx11-cu128-x86_64-linux`
+- PyTorch inside HF testshell: 2.11.0+cu128
 - CUDA runtime reported by PyTorch: 12.8
-- Benchmark path: local source extension loaded through
-  `torch.utils.cpp_extension`
+- Benchmark path: local release-candidate runner over copied built artifact
 
 Timing method:
 
-- CUDA synchronized wall-clock timing
-- 10-20 warmup iterations depending on the sweep
-- 50-100 iterations for GEMM
-- 100-200 iterations for quantization kernels
-- Status threshold used for triage:
-  - GEMM epilogue: `promote` at `>=2.0x` against `torch.addmm` or
-    `gelu(torch.addmm)`, `watch` at `>=1.5x`
-  - FP8 quantization: `promote` at `>=4.0x`, `watch` at `>=1.5x`
+- `scripts/run_built_artifact_benchmarks.py`
+- warmup 10, measured iterations 50
+- reference timing uses the benchmark script's PyTorch eager reference
 
 ## Current Triage
 
 - The FP8 quantization epilogue kernels are strong across the current shape
-  suite after row/column tile policy tuning. The only current watch item in
-  the default-policy table is `gelu_quantize_fp8_static_bf16` at
-  `(M,N)=(128,4096)`, which measures 3.90x against PyTorch eager.
+  suite on the built artifact: verified speedups range from 2.60x to 4.08x
+  against the benchmark script PyTorch eager references.
 - The BF16 GEMM epilogue wrapper is shape-sensitive. `M=1` is strong against
-  the stricter `torch.addmm` baseline. `M=64` bias is close but remains a
-  watch shape. `M=8`, `M=16`, `M=128`, and the current wider projection shapes
-  should not be promoted as headline shapes yet.
+  the older source-extension `torch.addmm` baseline, but the public benchmark
+  script is now performance-only for BF16 GEMM. Do not use BF16 GEMM as the v1
+  headline claim.
 - The GEMM path needs stronger baseline reporting. PyTorch eager is useful for
   HF benchmark readability, but serious GEMM claims should also compare against
   cuBLASLt or another vendor-library baseline.
+
+## Source Accuracy Gate
+
+```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-gemm-epilogues
+```
+
+Result: passed 45 exact FP8 parity checks for:
+
+- `bias_gelu_quantize_fp8_static_bf16`
+- `gelu_quantize_fp8_static_bf16`
+- `channel_scale_quantize_fp8_static_bf16`
+
+BF16 GEMM epilogue wrappers are triage/compatibility APIs for v1 and are not
+the headline correctness evidence in this package.
+
+## Built Artifact Release-Candidate Results
+
+Command:
+
+```bash
+python scripts/run_built_artifact_benchmarks.py \
+  --package flashrt-gemm-epilogues --warmup 10 --iterations 50
+```
+
+Bias + GELU + FP8 quantization:
+
+| Workload | Mean us | Ref us | Speedup | Verified |
+| --- | ---: | ---: | ---: | --- |
+| `decode_m1` | 7.25 | 28.93 | 3.99x | yes |
+| `decode_m2` | 7.25 | 28.35 | 3.91x | yes |
+| `decode_m4` | 7.54 | 30.80 | 4.08x | yes |
+| `decode_m8` | 7.58 | 29.17 | 3.85x | yes |
+| `small_m16` | 7.50 | 29.71 | 3.96x | yes |
+| `small_m32` | 7.52 | 29.32 | 3.90x | yes |
+| `prefill_m64` | 7.75 | 28.89 | 3.73x | yes |
+| `prefill_m128` | 8.47 | 28.33 | 3.34x | yes |
+| `prefill_m256` | 9.57 | 33.70 | 3.52x | yes |
+| `wide_n8192_m16` | 7.34 | 28.95 | 3.95x | yes |
+| `wide_n8192_m128` | 9.74 | 33.48 | 3.44x | yes |
+| `vla_n12288_m16` | 7.70 | 29.08 | 3.78x | yes |
+| `vla_n12288_m64` | 9.14 | 30.83 | 3.37x | yes |
+| `vla_n16384_m16` | 7.72 | 29.47 | 3.82x | yes |
+| `vla_n16384_m64` | 9.76 | 33.74 | 3.46x | yes |
+
+GELU + FP8 quantization:
+
+| Workload | Mean us | Ref us | Speedup | Verified |
+| --- | ---: | ---: | ---: | --- |
+| `decode_m1` | 7.24 | 21.16 | 2.92x | yes |
+| `decode_m2` | 7.35 | 22.13 | 3.01x | yes |
+| `decode_m4` | 7.48 | 21.90 | 2.93x | yes |
+| `decode_m8` | 7.32 | 21.77 | 2.98x | yes |
+| `small_m16` | 7.33 | 21.04 | 2.87x | yes |
+| `small_m32` | 7.50 | 22.28 | 2.97x | yes |
+| `prefill_m64` | 7.10 | 22.14 | 3.12x | yes |
+| `prefill_m128` | 8.44 | 22.63 | 2.68x | yes |
+| `prefill_m256` | 9.63 | 26.39 | 2.74x | yes |
+| `wide_n8192_m16` | 7.39 | 21.45 | 2.90x | yes |
+| `wide_n8192_m128` | 9.50 | 26.53 | 2.79x | yes |
+| `vla_n12288_m16` | 7.43 | 22.58 | 3.04x | yes |
+| `vla_n12288_m64` | 8.94 | 23.22 | 2.60x | yes |
+| `vla_n16384_m16` | 7.60 | 21.96 | 2.89x | yes |
+| `vla_n16384_m64` | 9.73 | 26.52 | 2.73x | yes |
+
+Channel scale + FP8 quantization:
+
+| Workload | Mean us | Ref us | Speedup | Verified |
+| --- | ---: | ---: | ---: | --- |
+| `decode_m1` | 7.31 | 26.05 | 3.56x | yes |
+| `decode_m2` | 7.41 | 27.83 | 3.75x | yes |
+| `decode_m4` | 7.44 | 26.69 | 3.59x | yes |
+| `decode_m8` | 7.41 | 26.12 | 3.52x | yes |
+| `small_m16` | 7.33 | 26.25 | 3.58x | yes |
+| `small_m32` | 7.39 | 25.78 | 3.49x | yes |
+| `prefill_m64` | 7.73 | 25.01 | 3.24x | yes |
+| `prefill_m128` | 8.15 | 27.43 | 3.37x | yes |
+| `prefill_m256` | 9.49 | 29.38 | 3.10x | yes |
+| `wide_n8192_m16` | 7.37 | 26.28 | 3.56x | yes |
+| `wide_n8192_m128` | 9.33 | 30.11 | 3.23x | yes |
+| `vla_n12288_m16` | 7.40 | 25.27 | 3.41x | yes |
+| `vla_n12288_m64` | 8.70 | 26.52 | 3.05x | yes |
+| `vla_n16384_m16` | 7.64 | 25.66 | 3.36x | yes |
+| `vla_n16384_m64` | 9.34 | 29.91 | 3.20x | yes |
+
+BF16 GEMM epilogue latency-only compatibility measurements:
+
+| Workload | Mean us | Notes |
+| --- | ---: | --- |
+| `bias_decode_m1` | 24.72 | performance-only |
+| `gelu_decode_m1` | 25.38 | performance-only |
+| `bias_decode_m8` | 25.28 | performance-only |
+| `gelu_decode_m8` | 25.15 | performance-only |
+| `bias_small_m16` | 25.97 | performance-only |
+| `gelu_small_m16` | 26.19 | performance-only |
+| `bias_prefill_m64` | 24.59 | performance-only |
+| `gelu_prefill_m64` | 37.07 | performance-only |
+| `bias_prefill_m128` | 37.66 | performance-only |
+| `gelu_prefill_m128` | 36.29 | performance-only |
+| `bias_wide_n8192_m16` | 39.76 | performance-only |
+| `gelu_wide_n8192_m16` | 39.73 | performance-only |
+| `bias_wide_k8192_m16` | 39.56 | performance-only |
+| `gelu_wide_k8192_m16` | 39.37 | performance-only |
 
 ## GEMM Shape Suite
 
@@ -119,6 +217,6 @@ calls reuse the cached algorithm.
 - Add cuBLASLt/vendor-library baseline reporting for GEMM epilogue shapes.
 - Investigate tile/algo policy for weak GEMM shapes before making broad public
   claims.
-- Re-run the HF benchmark CLI against a built or uploaded kernel artifact.
+- Re-run the official Hub `kernels benchmark` after upload.
 - Validate the FP8 quantization table on non-SM120 hardware before making a
   broad CUDA hardware claim.

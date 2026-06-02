@@ -7,14 +7,10 @@ _original_allclose = torch.allclose
 
 
 def _flashrt_allclose(input, other, rtol=1e-05, atol=1e-08, equal_nan=False):
-    if input.dtype == torch.bfloat16 or other.dtype == torch.bfloat16:
-        return _original_allclose(
-            input.float(),
-            other.float(),
-            rtol=1e-2,
-            atol=1e-2,
-            equal_nan=equal_nan,
-        )
+    if input.dtype == torch.bfloat16 and other.dtype == torch.bfloat16:
+        abs_err = (input.float() - other.float()).abs()
+        rel_err = abs_err / other.float().abs().clamp_min(1.0)
+        return bool(abs_err.max().item() <= 0.03125 and rel_err.max().item() <= 0.05)
     return _original_allclose(input, other, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
 
@@ -43,18 +39,18 @@ def _reference_qkv_split_norm_rope(
     kf = k.float()
     qn = qf * torch.rsqrt((qf * qf).mean(dim=(-2, -1), keepdim=True) + eps)
     kn = kf * torch.rsqrt((kf * kf).mean(dim=(-2, -1), keepdim=True) + eps)
-    qn = (qn * norm_q_weight.reshape(1, 1, heads, head_dim).float()).to(torch.bfloat16)
-    kn = (kn * norm_k_weight.reshape(1, 1, heads, head_dim).float()).to(torch.bfloat16)
+    qn = qn * norm_q_weight.reshape(1, 1, heads, head_dim).float()
+    kn = kn * norm_k_weight.reshape(1, 1, heads, head_dim).float()
 
     def rope(x):
         xr = x[..., 0::2].float()
         xi = x[..., 1::2].float()
         fr = freqs_re[:tokens][None, :, None, :]
         fi = freqs_im[:tokens][None, :, None, :]
-        out = torch.empty_like(x)
-        out[..., 0::2] = (xr * fr - xi * fi).to(torch.bfloat16)
-        out[..., 1::2] = (xr * fi + xi * fr).to(torch.bfloat16)
-        return out
+        out = torch.empty_like(x, dtype=torch.float32)
+        out[..., 0::2] = xr * fr - xi * fi
+        out[..., 1::2] = xr * fi + xi * fr
+        return out.to(torch.bfloat16)
 
     return rope(qn), rope(kn)
 

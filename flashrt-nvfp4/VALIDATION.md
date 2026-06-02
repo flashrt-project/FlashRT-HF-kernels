@@ -45,15 +45,22 @@ From this package directory:
 /home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-config .
 ```
 
-Host-side source-extension correctness was validated with a package-local
-`torch.utils.cpp_extension.load` smoke that compiled:
+Host-side source-extension correctness was validated with:
+
+```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-nvfp4
+```
+
+Result: passed 13 checks.
+
+The sweep compiles:
 
 ```text
 torch-ext/torch_binding.cpp
 csrc/nvfp4_sf_reshape_sm120.cu
 ```
 
-## Correctness Smoke
+## Correctness Sweep
 
 The source-extension smoke compares byte-for-byte against the Python reference
 layout transform.
@@ -62,12 +69,19 @@ Covered shapes:
 
 | rows | D | swizzled bytes |
 | ---: | ---: | ---: |
-| 1 | 1024 | 8192 |
-| 4 | 4096 | 32768 |
+| 1 | 4096 | 32768 |
+| 2 | 4096 | 32768 |
+| 31 | 4096 | 32768 |
+| 32 | 4096 | 32768 |
 | 33 | 4096 | 32768 |
+| 127 | 4096 | 32768 |
 | 128 | 4096 | 32768 |
 | 129 | 4096 | 65536 |
+| 16 | 1024 | 8192 |
+| 16 | 2048 | 16384 |
+| 16 | 8192 | 65536 |
 | 16 | 12288 | 98304 |
+| 64 | 16384 | 131072 |
 
 Package tests additionally cover layout boundary rows and invalid shape
 rejection:
@@ -81,18 +95,15 @@ rejection:
 ## Builder Results
 
 - `check-config` passed for the promoted `build.toml`.
-- Full `kernel-builder build` has not been completed for this package yet.
-
-The first full build attempt generated `flake.lock` correctly, then entered a
-large first-time Nix dependency build. That path is intentionally deferred to
-the release-validation window instead of being used as the normal development
-loop.
+- `kernel-builder build --variant torch211-cxx11-cu128-x86_64-linux` passed.
+- The copied `torch211-cxx11-cu128-x86_64-linux` artifact passed package tests,
+  examples, installed accuracy sweep, and the local release-candidate benchmark
+  runner.
+- Full `kernel-builder build-and-copy` matrix has not been run yet.
 
 ## Known Gaps
 
-- Full `kernel-builder build` and `check-builds` are still pending.
-- Hub benchmark runner has not been run for
-  `benchmarks/benchmark_nvfp4_sf_reshape.py`.
+- Official Hub `kernels benchmark` has not been run after upload.
 - Runtime validation is currently RTX 5090 only.
 - Current public API is a data-layout helper. Fused NVFP4 GEMM epilogues are
   not included in this buildable slice yet.

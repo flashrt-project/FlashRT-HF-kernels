@@ -47,14 +47,15 @@ Before v1 build window:
 
 ### `flashrt-vla-video`
 
-Current status: G2. Buildable by config and example added. Previous QKV
-speedup table is invalidated until Q and K outputs both pass an accuracy-first
-sweep.
+Current status: G2. Buildable by config and example added. Source accuracy
+sweep passes for Q/K and QKV outputs over the v1 rows/tokens/heads grid.
+Previous QKV speedup table remains invalidated as benchmark evidence.
 
 Before v1 build window:
 
 - Complete full builder build and `check-builds`.
-- Re-run QKV split + norm + RoPE accuracy sweep before any speedup claim.
+- Re-run source accuracy sweep after source changes and before any speedup
+  claim.
 - Run `benchmarks/benchmark_q_norm_rope.py` against a built package artifact.
 - Run `examples/qkv_postprocess_block.py` against a built or Hub package.
 - Refresh `examples/model-block-note.md` with built-artifact benchmark results.
@@ -76,8 +77,8 @@ Before v1 build window:
 ### `flashrt-smallm-gemm`
 
 Current status: G2. First SM120 NVFP4 W4A4 decode matvec source slice compiles
-locally, passes deterministic correctness for `K=4096,12288`, and passes
-`check-config`.
+locally and passes constant plus random/dequant source accuracy over the v1
+`K/N` grid.
 The public benchmark harness covers `K in {4096,12288}` and
 `N in {1024,4096,12288}`.
 
@@ -94,8 +95,8 @@ Before v1 build window:
 ### `flashrt-fused-quant`
 
 Current status: G2. The split and merged `SiLU(gate) * up` NVFP4 swizzled
-quantization source slice compiles locally, passes byte parity against a
-fake-quant reference, and passes `check-config`.
+quantization source slice compiles locally and passes packed/scales byte parity
+over the v1 decode, small-batch, prefill, and video shape grid.
 The public benchmark harness covers split and merged gate/up variants over the
 v1 decode, small-batch, prefill, and VLA/video FFN shape grid.
 
@@ -114,12 +115,13 @@ Before v1 build window:
 Run this only after every v1 package has stable source, tests, benchmarks, and
 examples. The detailed procedure is in `docs/release-runbook.md`:
 
-1. Run `python scripts/correctness_audit.py`.
-2. Run `python scripts/prebuild_check.py --check-config`.
-3. Clean any stale build outputs, result symlinks, or cache warnings reported by
+1. Run `python scripts/accuracy_sweep.py --backend source --mode full --package all`.
+2. Run `python scripts/correctness_audit.py`.
+3. Run `python scripts/prebuild_check.py --check-config`.
+4. Clean any stale build outputs, result symlinks, or cache warnings reported by
    the prebuild check.
-4. Run full `kernel-builder build` for all promoted packages.
-5. Run `kernel-builder check-builds`.
-6. Run package tests, benchmark CLIs, and examples against built artifacts.
-7. Update every `VALIDATION.md` with exact variants, hardware, and failures.
-8. Push one final v1-ready commit before upload.
+5. Run full `kernel-builder build` for all promoted packages.
+6. Run `kernel-builder check-builds`.
+7. Run package tests, benchmark CLIs, and examples against built artifacts.
+8. Update every `VALIDATION.md` with exact variants, hardware, and failures.
+9. Push one final v1-ready commit before upload.

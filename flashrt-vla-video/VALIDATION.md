@@ -36,14 +36,29 @@ Result: passed for:
 - `torch-ext/torch_binding.cpp`
 - `csrc/q_norm_rope_bf16.cu`
 
-Correctness smoke:
+Source accuracy sweep:
 
-- Shapes: `(1,128)`, `(8,128)`, `(2,4,128)`, `(48,128)`
-- `q_norm_rope_bf16`: max error 0 in the smoke run.
-- `k_norm_rope_v_cache_bf16`: max K error 0 and V copy exact in the smoke run.
-- `qkv_split_norm_rope_bf16`: package-local source extension passed launch, but
-  previous benchmark evidence is invalidated until Q and K outputs both pass an
-  accuracy-first sweep.
+```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-vla-video
+```
+
+Result: passed 110 checks.
+
+Covered:
+
+- `q_norm_rope_bf16`: rows `1,4,8,16,24,32,48,64,128,256`.
+- `k_norm_rope_v_cache_bf16`: same rows; K output checked against BF16
+  reference and V copy checked by byte parity.
+- `qkv_split_norm_rope_bf16`: Q and K outputs both checked for tokens
+  `1,4,16,64,256,1024,2520,4096` and heads `8,16,24,32,48`.
+
+Accuracy contract:
+
+- BF16 Q/K outputs: `max_abs <= 0.03125`, `max_rel <= 0.05` with
+  `rel_floor=1`.
+- V output: byte parity.
+
+Worst recorded QKV source-sweep max absolute error: `0.015625`.
 
 Package-local source benchmark:
 
@@ -59,14 +74,18 @@ Package-local QKV split + norm + RoPE benchmark:
 - Previous max absolute error reached `0.25`.
 - The public HF benchmark script verified only one output tensor before this
   validation update.
-- Re-run only after Q and K outputs both report `max_abs_error`,
-  `max_rel_error`, and a pre-declared pass/fail threshold.
+- The source accuracy sweep above replaces that correctness evidence, but the
+  speedup table remains invalidated until rerun against the corrected reference
+  and built package artifact.
 
 ## Remaining Gaps
 
-- Full `kernel-builder build` has not been run for this package yet.
-- Hub benchmark runner has not been run for `benchmarks/benchmark_q_norm_rope.py`.
-- QKV split + norm + RoPE accuracy gate is not complete.
+- `kernel-builder build --variant torch211-cxx11-cu128-x86_64-linux` passed
+  for this package, and the copied artifact passed package tests, examples,
+  installed accuracy sweep, and the local release-candidate benchmark runner.
+- Full `kernel-builder build-and-copy` matrix has not been run for this
+  package yet.
+- Official Hub `kernels benchmark` has not been run after upload.
 - A downstream HF-style model-block example exists under `examples/`, but it
-  still needs to be run against a built or uploaded Hub package.
+  still needs a real model-level throughput run.
 - Runtime validation is currently RTX 5090 only.

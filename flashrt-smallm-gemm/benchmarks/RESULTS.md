@@ -9,16 +9,18 @@ Validated on June 2, 2026.
 Environment:
 
 - GPU: NVIDIA GeForce RTX 5090
-- PyTorch: 2.9.1+cu128
+- Driver: 580.82.07
+- Built artifact: `torch211-cxx11-cu128-x86_64-linux`
+- PyTorch inside HF testshell: 2.11.0+cu128
 - CUDA runtime reported by PyTorch: 12.8
 - Hardware scope: CUDA 12.8+ SM120 local validation only so far
-- Benchmark path: pending built package artifact
+- Benchmark path: local release-candidate runner over copied built artifact
 
 ## Current Scope
 
 | API | Scope | Current status |
 | --- | --- | --- |
-| `nvfp4_w4a4_decode_matvec_bf16out` | SM120 NVFP4 W4A4 M=1 decode matvec with BF16 output | Source synced, Tensor binding present, deterministic correctness smoke passed |
+| `nvfp4_w4a4_decode_matvec_bf16out` | SM120 NVFP4 W4A4 M=1 decode matvec with BF16 output | Source accuracy full grid passed |
 
 ## Required Shape Grid
 
@@ -36,25 +38,42 @@ Environment:
 - Keep all current claims labeled CUDA 12.8+ SM120 until another source path is
   added.
 
-## Pending Results
-
-Run after a built package artifact exists:
+## Source Accuracy Gate
 
 ```bash
-kernels benchmark flashrt/flashrt-smallm-gemm \
-  --benchmark-script benchmarks/benchmark_nvfp4_w4a4_decode_matvec.py
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-smallm-gemm
 ```
 
-Record:
+Result: passed 12 checks. The sweep covers constant inputs and random
+packed/dequantized references over `K in {4096,12288}` and
+`N in {1024,4096,12288}`. Source sweep measured BF16 output `max_ulp <= 4`;
+the built artifact release gate is `max_ulp <= 5`.
+
+## Built Artifact Release-Candidate Results
+
+Command:
+
+```bash
+python scripts/run_built_artifact_benchmarks.py \
+  --package flashrt-smallm-gemm --warmup 10 --iterations 50
+```
 
 | Workload | K | N | Mean ms | Ref ms | Speedup | Verified | Notes |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| pending | pending | pending | pending | pending | pending | pending | Built-artifact benchmark not run yet |
+| `k4096_n1024` | 4096 | 1024 | 0.0123 | 0.0121 | 0.99x | yes | compatibility coverage |
+| `k4096_n4096` | 4096 | 4096 | 0.0171 | 0.0123 | 0.72x | yes | compatibility coverage |
+| `k4096_n12288` | 4096 | 12288 | 0.0276 | 0.0123 | 0.45x | yes | compatibility coverage |
+| `k12288_n1024` | 12288 | 1024 | 0.0157 | 0.0312 | 1.99x | yes | current best readability-baseline shape |
+| `k12288_n4096` | 12288 | 4096 | 0.0319 | 0.0122 | 0.38x | yes | compatibility coverage |
+| `k12288_n12288` | 12288 | 12288 | 0.0628 | 0.0212 | 0.34x | yes | compatibility coverage |
 
 ## Release Blockers
 
-- Full `kernel-builder build` has not been run.
-- HF benchmark runner has not been run against a built artifact.
+- `torch211-cxx11-cu128-x86_64-linux` built artifact passed installed
+  accuracy sweep.
+- Full `kernel-builder build-and-copy` matrix has not been run.
+- Local release-candidate benchmark runner has been run against the built
+  artifact. Official Hub `kernels benchmark` has not been run after upload.
 - Fair low-bit vendor/library baseline is not recorded.
 - Warpsplit small-M and tiny FP8 source slices are not exposed.
 - Non-SM120 hardware validation is not applicable to the current v1 surface

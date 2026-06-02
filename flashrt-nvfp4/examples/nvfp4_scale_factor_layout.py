@@ -13,7 +13,11 @@ from __future__ import annotations
 import argparse
 
 import torch
-from kernels import get_kernel
+
+try:
+    from kernels import get_kernel
+except ModuleNotFoundError:
+    get_kernel = None
 
 
 def reference_swizzle(scales: torch.Tensor) -> torch.Tensor:
@@ -67,7 +71,12 @@ def main() -> None:
     if args.d <= 0 or args.d % 16 != 0:
         raise SystemExit("d must be positive and divisible by 16")
 
-    ops = get_kernel(args.repo_id, version=args.version, trust_remote_code=True)
+    if get_kernel is not None:
+        ops = get_kernel(args.repo_id, version=args.version, trust_remote_code=True)
+    else:
+        import flashrt_nvfp4
+
+        ops = flashrt_nvfp4
     scales = torch.randint(
         0,
         256,

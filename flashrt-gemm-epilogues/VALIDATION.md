@@ -96,6 +96,31 @@ Covered APIs:
 - `gelu_quantize_fp8_static_bf16`
 - `channel_scale_quantize_fp8_static_bf16`
 
+Source accuracy sweep:
+
+```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-gemm-epilogues
+```
+
+Result: passed 45 FP8 quant epilogue checks.
+
+The v1 headline correctness claim for this package is exact FP8 output parity
+for:
+
+- `bias_gelu_quantize_fp8_static_bf16`
+- `gelu_quantize_fp8_static_bf16`
+- `channel_scale_quantize_fp8_static_bf16`
+
+Covered v1 shape grid:
+
+- decode `M in {1,2,4,8}`, `N=4096`
+- small `M in {16,32}`, `N=4096`
+- prefill `M in {64,128,256}`, `N=4096`
+- wide/VLA `N in {8192,12288,16384}` selected `M in {16,64,128}`
+
+BF16 GEMM epilogue wrappers remain compatibility APIs and are not the v1
+headline evidence.
+
 Covered shapes:
 
 - BF16 GEMM: `(M, N, K) = (16, 64, 32)`

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Static correctness gate audit for the v1 batch.
 
-This script does not prove numerical correctness by itself. It prevents us from
-starting a release build while known correctness gaps are still documented.
+Numerical proof is provided by scripts/accuracy_sweep.py. This script checks
+that the repo documents that gate and has no known static correctness blocker.
 """
 
 from __future__ import annotations
@@ -13,35 +13,32 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-BLOCKERS = {
-    "flashrt-vla-video": [
-        "QKV split + norm + RoPE needs Q and K accuracy sweep across token/head grids.",
-    ],
-    "flashrt-smallm-gemm": [
-        "Full K/N decode grid and random/dequantized references are not complete.",
-    ],
-    "flashrt-fused-quant": [
-        "Full v1 shape-grid byte parity for packed outputs and scales is not complete.",
-    ],
-    "flashrt-nvfp4": [
-        "Full v1 layout benchmark grid must be verified before release results.",
-    ],
-    "flashrt-gemm-epilogues": [
-        "BF16 GEMM epilogue wrappers use loose tolerances and are not headline-ready.",
-    ],
-}
+REQUIRED_DOCS = [
+    "docs/correctness-gating.md",
+    "docs/source-accuracy-results.md",
+]
 
 
 def main() -> int:
-    doc = ROOT / "docs" / "correctness-gating.md"
-    if not doc.is_file():
-        print("FAIL missing docs/correctness-gating.md")
-        return 1
+    for rel in REQUIRED_DOCS:
+        doc = ROOT / rel
+        if not doc.is_file():
+            print(f"FAIL missing {rel}")
+            return 1
 
     errors: list[str] = []
-    for package, blockers in BLOCKERS.items():
-        for blocker in blockers:
-            errors.append(f"{package}: {blocker}")
+    evidence = (ROOT / "docs" / "source-accuracy-results.md").read_text()
+    required_phrases = [
+        "python scripts/accuracy_sweep.py --backend source --mode full --package all",
+        "`flashrt-gemm-epilogues`",
+        "`flashrt-vla-video`",
+        "`flashrt-nvfp4`",
+        "`flashrt-smallm-gemm`",
+        "`flashrt-fused-quant`",
+    ]
+    for phrase in required_phrases:
+        if phrase not in evidence:
+            errors.append(f"docs/source-accuracy-results.md missing {phrase}")
 
     for error in errors:
         print(f"BLOCKER {error}")
@@ -50,7 +47,7 @@ def main() -> int:
         print("correctness audit failed: do not start release build")
         return 1
 
-    print("correctness audit passed")
+    print("correctness audit passed; run accuracy_sweep.py after any source change")
     return 0
 
 

@@ -8,16 +8,18 @@ Validated on June 2, 2026.
 Environment:
 
 - GPU: NVIDIA GeForce RTX 5090
-- PyTorch: 2.9.1+cu128
+- Driver: 580.82.07
+- Built artifact: `torch211-cxx11-cu128-x86_64-linux`
+- PyTorch inside HF testshell: 2.11.0+cu128
 - CUDA runtime reported by PyTorch: 12.8
 - Hardware scope: CUDA 12.8+ SM120 local validation only so far
-- Benchmark path: pending built package artifact
+- Benchmark path: local release-candidate runner over copied built artifact
 
 ## Current Scope
 
 | API | Scope | Current status |
 | --- | --- | --- |
-| `nvfp4_sf_linear_to_swizzled` | CUTLASS Sm1xx NVFP4 scale-factor layout helper | Source synced, Tensor binding present, tests and benchmark harness present |
+| `nvfp4_sf_linear_to_swizzled` | CUTLASS Sm1xx NVFP4 scale-factor layout helper | Source accuracy full grid passed |
 
 ## Required Shape Grid
 
@@ -34,24 +36,44 @@ Environment:
   NVFP4 GEMM epilogue surface is added and compared against CUTLASS/cuBLASLt or
   an unfused strong CUDA chain.
 
-## Pending Results
-
-Run after a built package artifact exists:
+## Source Accuracy Gate
 
 ```bash
-kernels benchmark flashrt/flashrt-nvfp4 \
-  --benchmark-script benchmarks/benchmark_nvfp4_sf_reshape.py
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-nvfp4
 ```
 
-Record:
+Result: passed 13 byte-parity checks over the required layout grid.
+
+## Built Artifact Release-Candidate Results
+
+Command:
+
+```bash
+python scripts/run_built_artifact_benchmarks.py \
+  --package flashrt-nvfp4 --warmup 10 --iterations 50
+```
 
 | Workload | Mean ms | Ref ms | Speedup | Verified | Notes |
 | --- | ---: | ---: | ---: | --- | --- |
-| pending | pending | pending | pending | pending | Built-artifact benchmark not run yet |
+| `rows1_d4096` | 0.0073 | 0.4929 | 67.22x | yes | Python layout reference |
+| `rows2_d4096` | 0.0073 | 0.9593 | 130.60x | yes | Python layout reference |
+| `rows31_d4096` | 0.0074 | 14.2711 | 1939.87x | yes | Python layout reference |
+| `rows32_d4096` | 0.0073 | 14.8109 | 2032.16x | yes | Python layout reference |
+| `rows33_d4096` | 0.0074 | 15.2548 | 2054.55x | yes | Python layout reference |
+| `rows127_d4096` | 0.0074 | 58.2877 | 7924.57x | yes | Python layout reference |
+| `rows128_d4096` | 0.0075 | 58.1967 | 7763.73x | yes | Python layout reference |
+| `rows129_d4096` | 0.0074 | 70.4571 | 9555.14x | yes | Python layout reference |
+| `rows16_d1024` | 0.0073 | 1.9320 | 265.90x | yes | Python layout reference |
+| `rows16_d2048` | 0.0073 | 3.7716 | 516.47x | yes | Python layout reference |
+| `rows16_d8192` | 0.0074 | 21.1831 | 2847.88x | yes | Python layout reference |
+| `rows16_d12288` | 0.0074 | 31.9058 | 4333.69x | yes | Python layout reference |
+| `rows64_d16384` | 0.0074 | 128.9588 | 17408.41x | yes | Python layout reference |
 
 ## Release Blockers
 
-- Full `kernel-builder build` has not been run.
-- HF benchmark runner has not been run against a built artifact.
+- `torch211-cxx11-cu128-x86_64-linux` built artifact passed local
+  release-candidate benchmark runner.
+- Full `kernel-builder build-and-copy` matrix has not been run.
+- Official Hub `kernels benchmark` has not been run after upload.
 - Non-SM120 hardware validation is not applicable to the current v1 surface
   unless a non-SM120 source path is added.

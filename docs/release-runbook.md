@@ -8,6 +8,7 @@ cheap prebuild checks from full `kernel-builder` builds.
 Run these during normal development:
 
 ```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package all
 python scripts/correctness_audit.py
 python scripts/prebuild_check.py --check-config
 python -m py_compile scripts/prebuild_check.py
@@ -16,7 +17,8 @@ git diff --check
 
 Expected result:
 
-- `correctness_audit.py` has no blockers;
+- source accuracy sweep passes for every v1 package;
+- `correctness_audit.py` has no static blockers;
 - no tracked files under `internal-docs/` or `internal-tests/`;
 - no `result`, `build`, or `dist` artifacts in package directories;
 - every v1 package has `build.toml`, `flake.nix`, `flake.lock`, tests,
@@ -28,25 +30,38 @@ Expected result:
 Run this only after source, tests, benchmark scripts, and docs have settled:
 
 ```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package all
 python scripts/correctness_audit.py
 python scripts/prebuild_check.py --check-config
 ```
 
-Then build all promoted v1 packages:
+Then build and copy the selected release-candidate variant for all promoted v1
+packages:
 
 ```bash
 python scripts/release_build_plan.py
 python scripts/release_build_plan.py --execute
 ```
 
+This plan uses `kernel-builder build --variant` and then copies the selected
+variant out of the Docker container Nix store with
+`scripts/copy_docker_variant_artifacts.py`. It is the fast release-candidate
+path, not the full HF variant matrix.
+
 Do not change source while this build window is running unless the build fails.
 Record failures in the corresponding `VALIDATION.md` before making fixes.
+
+For full HF packaging, run `kernel-builder build-and-copy` from each package.
+That command does not accept a single `--variant`; it builds every applicable
+variant declared by `build.toml`.
 
 ## Built-Artifact Validation
 
 After each package builds:
 
 - run package tests against the built artifact;
+- for Docker-based testshell validation, make the driver library visible:
+  `LD_LIBRARY_PATH=/usr/lib64:${LD_LIBRARY_PATH:-}`;
 - run the package benchmark script through the HF benchmark runner;
 - run the package example;
 - update `benchmarks/RESULTS.md`;
@@ -80,6 +95,7 @@ After each package builds:
 Before upload or sharing with Hugging Face:
 
 ```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package all
 python scripts/prebuild_check.py --check-config
 git status --short --ignored
 ```

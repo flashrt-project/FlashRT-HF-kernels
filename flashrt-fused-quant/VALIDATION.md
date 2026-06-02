@@ -34,17 +34,25 @@ Supported by the synced source slice:
 - BF16 contiguous CUDA inputs
 - `cols` divisible by 16
 
-## Local Source-Extension Smoke
+## Source Accuracy Sweep
 
-The local source-extension smoke compiled:
+The local source-extension sweep compiled:
 
 ```text
 torch-ext/torch_binding.cpp
 csrc/silu_mul_to_nvfp4_swizzled.cu
 ```
 
-The smoke uses the Hugging Face kernel-builder `registration.h` template
-include path locally. Full HF builder packaging has not been run yet.
+The sweep uses the Hugging Face kernel-builder `registration.h` template
+include path locally.
+
+Command:
+
+```bash
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-fused-quant
+```
+
+Result: passed 144 checks.
 
 Correctness was checked against a Python fake-quant reference that reproduces:
 
@@ -55,22 +63,28 @@ Correctness was checked against a Python fake-quant reference that reproduces:
 - CUTLASS Sm1xx scale-factor swizzle;
 - zero-filled padding bytes in the swizzled scale buffer.
 
-Results:
+Covered shape grid:
 
-| rows | cols | APIs | Result |
-| ---: | ---: | --- | --- |
-| 1 | 16 | split, merged | byte parity pass |
-| 3 | 64 | split, merged | byte parity pass |
-| 33 | 128 | split, merged | byte parity pass |
+- decode rows `1,2,4,8`, hidden `4096,8192,12288,16384`;
+- small rows `16,32`, hidden `4096,8192,12288,16384`;
+- prefill rows `64,128,256`, hidden `4096,8192,12288`;
+- video rows `1024,2520`, hidden `4096,8192,12288`.
+
+Both split and merged APIs passed packed-output and swizzled-scale byte parity
+over the full grid.
 
 ## Known Gaps
 
 - `build.toml`, `flake.nix`, and `flake.lock` are present.
 - `/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker
   check-config .` passed for this package.
-- Full `kernel-builder build` has not been run for this package.
-- Public benchmark scripts are present, but built-artifact benchmark results
-  and memory-bandwidth results are still pending.
+- `kernel-builder build --variant torch211-cxx11-cu128-x86_64-linux` passed
+  for this package, and the copied artifact passed package tests, examples,
+  installed accuracy sweep, and the local release-candidate benchmark runner.
+- Full `kernel-builder build-and-copy` matrix has not been run for this
+  package.
+- Official Hub `kernels benchmark` has not been run after upload.
+- Memory-bandwidth results are still pending.
 - Runtime validation is currently RTX 5090 only; this v1 source slice is
   declared SM120-only in `build.toml`.
 - Residual/RMSNorm and SFA variants are not yet exposed.

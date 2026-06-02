@@ -9,17 +9,19 @@ Validated on June 2, 2026.
 Environment:
 
 - GPU: NVIDIA GeForce RTX 5090
-- PyTorch: 2.9.1+cu128
+- Driver: 580.82.07
+- Built artifact: `torch211-cxx11-cu128-x86_64-linux`
+- PyTorch inside HF testshell: 2.11.0+cu128
 - CUDA runtime reported by PyTorch: 12.8
 - Hardware scope: CUDA 12.8+ SM120 local validation only so far
-- Benchmark path: pending built package artifact
+- Benchmark path: local release-candidate runner over copied built artifact
 
 ## Current Scope
 
 | API | Scope | Current status |
 | --- | --- | --- |
-| `silu_mul_quant_nvfp4_swizzled_bf16` | Split `gate, up` BF16 SwiGLU product plus NVFP4 swizzled quantization | Source synced, Tensor binding present, byte-parity smoke passed |
-| `silu_mul_merged_quant_nvfp4_swizzled_bf16` | Merged `[gate | up]` BF16 SwiGLU product plus NVFP4 swizzled quantization | Source synced, Tensor binding present, byte-parity smoke passed |
+| `silu_mul_quant_nvfp4_swizzled_bf16` | Split `gate, up` BF16 SwiGLU product plus NVFP4 swizzled quantization | Source accuracy full grid passed |
+| `silu_mul_merged_quant_nvfp4_swizzled_bf16` | Merged `[gate | up]` BF16 SwiGLU product plus NVFP4 swizzled quantization | Source accuracy full grid passed |
 
 ## Required Shape Grid
 
@@ -38,26 +40,53 @@ Environment:
 - Multi-output correctness stays in package tests because the HF benchmark
   runner verifies one tensor output.
 
-## Pending Results
-
-Run after a built package artifact exists:
+## Source Accuracy Gate
 
 ```bash
-kernels benchmark flashrt/flashrt-fused-quant \
-  --benchmark-script benchmarks/benchmark_silu_mul_quant_nvfp4.py
+python scripts/accuracy_sweep.py --backend source --mode full --package flashrt-fused-quant
 ```
 
-Record:
+Result: passed 144 checks. Both split and merged APIs passed packed output and
+swizzled scale byte parity over the required shape grid.
 
-| Workload | Shape | Mean ms | Ref ms | Speedup | GB/s | Notes |
-| --- | --- | ---: | ---: | ---: | ---: | --- |
-| pending | pending | pending | pending | pending | pending | Built-artifact benchmark not run yet |
+## Built Artifact Release-Candidate Results
+
+Command:
+
+```bash
+python scripts/run_built_artifact_benchmarks.py \
+  --package flashrt-fused-quant --warmup 10 --iterations 50
+```
+
+The current public benchmark script is latency-only because the APIs return
+both packed data and swizzled scales, while the HF runner verifies one output
+tensor. Multi-output byte parity is covered by `accuracy_sweep.py`.
+
+| API | Decode 4096 us | Decode 8192 us | Decode 12288 us | Decode 16384 us | Video 2520 x 12288 us |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| split | 12.90-13.18 | 18.48-18.84 | 24.49-26.10 | 29.94-30.10 | 171.02 |
+| merged | 12.82-12.92 | 18.53-18.57 | 23.86-24.20 | 29.33-29.91 | 168.46 |
+
+Selected full-shape latencies:
+
+| API | Workload | Mean us |
+| --- | --- | ---: |
+| split | `small_r16_h4096` | 12.77 |
+| split | `small_r32_h8192` | 18.82 |
+| split | `prefill_r256_h12288` | 26.10 |
+| split | `video_r1024_h4096` | 22.36 |
+| split | `video_r2520_h12288` | 171.02 |
+| merged | `small_r16_h4096` | 12.95 |
+| merged | `small_r32_h8192` | 18.68 |
+| merged | `prefill_r256_h12288` | 25.64 |
+| merged | `video_r1024_h4096` | 22.25 |
+| merged | `video_r2520_h12288` | 168.46 |
 
 ## Release Blockers
 
-- Full `kernel-builder build` has not been run.
-- HF benchmark runner has not been run against a built artifact.
-- Memory-bandwidth benchmark results are not recorded.
+- Local release-candidate benchmark runner has been run against the built
+  artifact. Official Hub `kernels benchmark` has not been run after upload.
+- Memory-bandwidth benchmark results are not recorded yet.
 - Residual/RMSNorm and SFA variants are not exposed.
 - Non-SM120 hardware validation is not applicable to the current v1 surface
   unless a non-SM120 source path is added.

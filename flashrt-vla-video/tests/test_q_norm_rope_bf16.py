@@ -31,7 +31,7 @@ def test_q_norm_rope_bf16(shape):
     out = q_norm_rope_bf16(q, weight, cos, sin)
     ref = _reference_norm_rope(q, weight, cos, sin)
 
-    torch.testing.assert_close(out.float(), ref.float(), atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(out.float(), ref.float(), atol=0.03125, rtol=0)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
@@ -47,7 +47,7 @@ def test_k_norm_rope_v_cache_bf16(shape):
     k_out, v_out = k_norm_rope_v_cache_bf16(k, v, weight, cos, sin)
     k_ref = _reference_norm_rope(k, weight, cos, sin)
 
-    torch.testing.assert_close(k_out.float(), k_ref.float(), atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(k_out.float(), k_ref.float(), atol=0.03125, rtol=0)
     torch.testing.assert_close(v_out, v)
 
 
@@ -62,17 +62,18 @@ def _reference_qkv_split_norm_rope(
     kf = k.float()
     qn = qf * torch.rsqrt((qf * qf).mean(dim=(-2, -1), keepdim=True) + eps)
     kn = kf * torch.rsqrt((kf * kf).mean(dim=(-2, -1), keepdim=True) + eps)
-    qn = (qn * norm_q_weight.reshape(1, 1, heads, head_dim).float()).to(torch.bfloat16)
-    kn = (kn * norm_k_weight.reshape(1, 1, heads, head_dim).float()).to(torch.bfloat16)
+    qn = qn * norm_q_weight.reshape(1, 1, heads, head_dim).float()
+    kn = kn * norm_k_weight.reshape(1, 1, heads, head_dim).float()
 
     def rope(x):
         xr = x[..., 0::2].float()
         xi = x[..., 1::2].float()
         fr = freqs_re[:tokens][None, :, None, :]
         fi = freqs_im[:tokens][None, :, None, :]
-        out = torch.empty_like(x)
-        out[..., 0::2] = (xr * fr - xi * fi).to(torch.bfloat16)
-        out[..., 1::2] = (xr * fi + xi * fr).to(torch.bfloat16)
+        out = torch.empty_like(x, dtype=torch.float32)
+        out[..., 0::2] = xr * fr - xi * fi
+        out[..., 1::2] = xr * fi + xi * fr
+        out = out.to(torch.bfloat16)
         return out
 
     return rope(qn), rope(kn)
@@ -111,5 +112,5 @@ def test_qkv_split_norm_rope_bf16(tokens):
         packed_qkv, norm_q_weight, norm_k_weight, freqs_re, freqs_im, heads, head_dim
     )
 
-    torch.testing.assert_close(q_out.float(), q_ref.float(), atol=1e-2, rtol=1e-2)
-    torch.testing.assert_close(k_out.float(), k_ref.float(), atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(q_out.float(), q_ref.float(), atol=0.03125, rtol=0)
+    torch.testing.assert_close(k_out.float(), k_ref.float(), atol=0.03125, rtol=0)

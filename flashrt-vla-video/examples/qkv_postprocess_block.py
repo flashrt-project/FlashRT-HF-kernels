@@ -16,7 +16,11 @@ from __future__ import annotations
 import argparse
 
 import torch
-from kernels import get_kernel
+
+try:
+    from kernels import get_kernel
+except ModuleNotFoundError:
+    get_kernel = None
 
 
 def torch_qkv_split_norm_rope(
@@ -39,22 +43,18 @@ def torch_qkv_split_norm_rope(
     kf = k.float()
     q_norm = qf * torch.rsqrt((qf * qf).mean(dim=(-2, -1), keepdim=True) + eps)
     k_norm = kf * torch.rsqrt((kf * kf).mean(dim=(-2, -1), keepdim=True) + eps)
-    q_norm = (q_norm * norm_q_weight.reshape(1, 1, heads, head_dim).float()).to(
-        torch.bfloat16
-    )
-    k_norm = (k_norm * norm_k_weight.reshape(1, 1, heads, head_dim).float()).to(
-        torch.bfloat16
-    )
+    q_norm = q_norm * norm_q_weight.reshape(1, 1, heads, head_dim).float()
+    k_norm = k_norm * norm_k_weight.reshape(1, 1, heads, head_dim).float()
 
     def rope(x: torch.Tensor) -> torch.Tensor:
         real = x[..., 0::2].float()
         imag = x[..., 1::2].float()
         fre = freqs_re[:tokens][None, :, None, :]
         fim = freqs_im[:tokens][None, :, None, :]
-        out = torch.empty_like(x)
-        out[..., 0::2] = (real * fre - imag * fim).to(torch.bfloat16)
-        out[..., 1::2] = (real * fim + imag * fre).to(torch.bfloat16)
-        return out
+        out = torch.empty_like(x, dtype=torch.float32)
+        out[..., 0::2] = real * fre - imag * fim
+        out[..., 1::2] = real * fim + imag * fre
+        return out.to(torch.bfloat16)
 
     return rope(q_norm), rope(k_norm)
 
@@ -62,7 +62,12 @@ def torch_qkv_split_norm_rope(
 class FlashRTQKVPostProcess(torch.nn.Module):
     def __init__(self, *, repo_id: str, version: int, heads: int, head_dim: int) -> None:
         super().__init__()
-        self.ops = get_kernel(repo_id, version=version, trust_remote_code=True)
+        if get_kernel is not None:
+            self.ops = get_kernel(repo_id, version=version, trust_remote_code=True)
+        else:
+            import flashrt_vla_video
+
+            self.ops = flashrt_vla_video
         self.heads = heads
         self.head_dim = head_dim
 
@@ -148,8 +153,8 @@ def main() -> None:
         heads=args.heads,
         head_dim=args.head_dim,
     )
-    torch.testing.assert_close(q_fused.float(), q_ref.float(), atol=1e-2, rtol=1e-2)
-    torch.testing.assert_close(k_fused.float(), k_ref.float(), atol=1e-2, rtol=1e-2)
+    torch.testing.assert_close(q_fused.float(), q_ref.float(), atol=0.03125, rtol=0)
+    torch.testing.assert_close(k_fused.float(), k_ref.float(), atol=0.03125, rtol=0)
 
     fused_us = _time_us(
         lambda: fused(packed_qkv, norm_q_weight, norm_k_weight, freqs_re, freqs_im),

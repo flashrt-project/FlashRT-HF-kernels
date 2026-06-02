@@ -16,7 +16,11 @@ from __future__ import annotations
 import argparse
 
 import torch
-from kernels import get_kernel
+
+try:
+    from kernels import get_kernel
+except ModuleNotFoundError:
+    get_kernel = None
 
 
 def torch_bias_gelu_fp8(
@@ -49,7 +53,12 @@ def torch_channel_scale_fp8(
 class FlashRTFP8QuantEpilogue(torch.nn.Module):
     def __init__(self, *, repo_id: str, version: int) -> None:
         super().__init__()
-        self.ops = get_kernel(repo_id, version=version, trust_remote_code=True)
+        if get_kernel is not None:
+            self.ops = get_kernel(repo_id, version=version, trust_remote_code=True)
+        else:
+            import flashrt_gemm_epilogues
+
+            self.ops = flashrt_gemm_epilogues
 
     def bias_gelu(
         self,

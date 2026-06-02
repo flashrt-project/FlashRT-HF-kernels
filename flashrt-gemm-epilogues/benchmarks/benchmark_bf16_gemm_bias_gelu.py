@@ -3,24 +3,6 @@ import torch
 from kernels.benchmark import Benchmark
 
 
-_original_allclose = torch.allclose
-
-
-def _flashrt_allclose(input, other, rtol=1e-05, atol=1e-08, equal_nan=False):
-    if input.dtype == torch.bfloat16 or other.dtype == torch.bfloat16:
-        return _original_allclose(
-            input.float(),
-            other.float(),
-            rtol=max(rtol, 3e-2),
-            atol=max(atol, 2.5),
-            equal_nan=equal_nan,
-        )
-    return _original_allclose(input, other, rtol=rtol, atol=atol, equal_nan=equal_nan)
-
-
-torch.allclose = _flashrt_allclose
-
-
 class Bf16GemmEpilogueBenchmark(Benchmark):
     seed = 0
 
@@ -44,7 +26,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_bias_decode_m1(self) -> None:
         self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
-    def verify_bias_decode_m1(self) -> torch.Tensor:
+    def reference_bias_decode_m1(self) -> torch.Tensor:
         return self._bias_reference()
 
     def setup_gelu_decode_m1(self) -> None:
@@ -53,7 +35,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_gelu_decode_m1(self) -> None:
         self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
 
-    def verify_gelu_decode_m1(self) -> torch.Tensor:
+    def reference_gelu_decode_m1(self) -> torch.Tensor:
         return self._gelu_reference()
 
     def setup_bias_decode_m8(self) -> None:
@@ -62,7 +44,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_bias_decode_m8(self) -> None:
         self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
-    def verify_bias_decode_m8(self) -> torch.Tensor:
+    def reference_bias_decode_m8(self) -> torch.Tensor:
         return self._bias_reference()
 
     def setup_gelu_decode_m8(self) -> None:
@@ -71,7 +53,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_gelu_decode_m8(self) -> None:
         self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
 
-    def verify_gelu_decode_m8(self) -> torch.Tensor:
+    def reference_gelu_decode_m8(self) -> torch.Tensor:
         return self._gelu_reference()
 
     def setup_bias_small_m16(self) -> None:
@@ -80,7 +62,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_bias_small_m16(self) -> None:
         self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
-    def verify_bias_small_m16(self) -> torch.Tensor:
+    def reference_bias_small_m16(self) -> torch.Tensor:
         return self._bias_reference()
 
     def setup_gelu_small_m16(self) -> None:
@@ -89,7 +71,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_gelu_small_m16(self) -> None:
         self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
 
-    def verify_gelu_small_m16(self) -> torch.Tensor:
+    def reference_gelu_small_m16(self) -> torch.Tensor:
         return self._gelu_reference()
 
     def setup_bias_prefill_m64(self) -> None:
@@ -98,7 +80,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_bias_prefill_m64(self) -> None:
         self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
-    def verify_bias_prefill_m64(self) -> torch.Tensor:
+    def reference_bias_prefill_m64(self) -> torch.Tensor:
         return self._bias_reference()
 
     def setup_gelu_prefill_m64(self) -> None:
@@ -107,7 +89,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_gelu_prefill_m64(self) -> None:
         self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
 
-    def verify_gelu_prefill_m64(self) -> torch.Tensor:
+    def reference_gelu_prefill_m64(self) -> torch.Tensor:
         return self._gelu_reference()
 
     def setup_bias_prefill_m128(self) -> None:
@@ -116,7 +98,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_bias_prefill_m128(self) -> None:
         self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
-    def verify_bias_prefill_m128(self) -> torch.Tensor:
+    def reference_bias_prefill_m128(self) -> torch.Tensor:
         return self._bias_reference()
 
     def setup_gelu_prefill_m128(self) -> None:
@@ -125,7 +107,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_gelu_prefill_m128(self) -> None:
         self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
 
-    def verify_gelu_prefill_m128(self) -> torch.Tensor:
+    def reference_gelu_prefill_m128(self) -> torch.Tensor:
         return self._gelu_reference()
 
     def setup_bias_wide_n8192_m16(self) -> None:
@@ -134,7 +116,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_bias_wide_n8192_m16(self) -> None:
         self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
-    def verify_bias_wide_n8192_m16(self) -> torch.Tensor:
+    def reference_bias_wide_n8192_m16(self) -> torch.Tensor:
         return self._bias_reference()
 
     def setup_gelu_wide_n8192_m16(self) -> None:
@@ -143,7 +125,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_gelu_wide_n8192_m16(self) -> None:
         self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
 
-    def verify_gelu_wide_n8192_m16(self) -> torch.Tensor:
+    def reference_gelu_wide_n8192_m16(self) -> torch.Tensor:
         return self._gelu_reference()
 
     def setup_bias_wide_k8192_m16(self) -> None:
@@ -152,7 +134,7 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_bias_wide_k8192_m16(self) -> None:
         self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
-    def verify_bias_wide_k8192_m16(self) -> torch.Tensor:
+    def reference_bias_wide_k8192_m16(self) -> torch.Tensor:
         return self._bias_reference()
 
     def setup_gelu_wide_k8192_m16(self) -> None:
@@ -161,5 +143,5 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
     def benchmark_gelu_wide_k8192_m16(self) -> None:
         self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
 
-    def verify_gelu_wide_k8192_m16(self) -> torch.Tensor:
+    def reference_gelu_wide_k8192_m16(self) -> torch.Tensor:
         return self._gelu_reference()
