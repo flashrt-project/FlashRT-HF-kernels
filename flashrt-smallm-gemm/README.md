@@ -23,8 +23,9 @@ tile policy has a benchmark-backed reason to exist.
 The first synced source slice is an SM120 NVFP4 W4A4 M=1 decode matvec with
 BF16 output. It currently supports `K in {4096, 12288}` and expects packed FP4
 activation/weight bytes plus CUTLASS Sm1xx swizzled UE4M3 scale-factor buffers.
-The package remains draft until source-extension correctness and benchmark
-results are recorded.
+The package has local source-extension correctness and a public HF-style
+benchmark harness. It remains draft until benchmark results, fair baselines, and
+full HF builder validation are recorded.
 
 ## Naming Rule
 

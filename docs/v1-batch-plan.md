@@ -73,13 +73,15 @@ Before v1 build window:
 
 Current status: draft G1. First SM120 NVFP4 W4A4 decode matvec source slice
 compiles locally and passes deterministic correctness for `K=4096,12288`.
+The public benchmark harness covers `K in {4096,12288}` and
+`N in {1024,4096,12288}`.
 
 Before v1 build window:
 
 - Promote `build.toml.draft` only after source-extension tests and benchmark
   scripts are stable.
-- Add benchmark scripts for `K in {4096,12288}` and
-  `N in {1024,4096,12288}`.
+- Run `benchmarks/benchmark_nvfp4_w4a4_decode_matvec.py` against a built
+  package artifact.
 - Add a fair baseline: PyTorch dequant+matmul for readability and
   CUTLASS/cuBLASLt or FlashRT internal low-bit baseline for serious claims.
 - Decide whether v1 also includes warpsplit small-M or tiny FP8.
@@ -89,11 +91,15 @@ Before v1 build window:
 Current status: draft G1. The split and merged `SiLU(gate) * up` NVFP4
 swizzled quantization source slice compiles locally and passes byte parity
 against a fake-quant reference.
+The public benchmark harness covers split and merged gate/up variants over the
+v1 decode, small-batch, prefill, and VLA/video FFN shape grid.
 
 Before v1 build window:
 
 - Add memory-bandwidth benchmarks for decode, small batch, prefill, and
   VLA/video FFN hidden sizes.
+- Run `benchmarks/benchmark_silu_mul_quant_nvfp4.py` against a built package
+  artifact.
 - Add an HF-style FFN epilogue example if the public API is stable enough.
 - Decide whether v1 also includes residual/RMSNorm variants.
 
