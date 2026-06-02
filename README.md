@@ -19,20 +19,40 @@ Tensor-based kernel APIs that can be built and loaded by the Hugging Face
 - Keep source synchronization from FlashRT explicit and reviewable.
 - Make it easy to promote mature packages to `kernels-community` later.
 
+## Showcase Strategy
+
+The first public surface is intentionally narrow: use `flashrt-gemm-epilogues`
+to prove the Hugging Face package format, then make FP8 quantization epilogues
+the headline. These kernels are easy to call from Python, easy to benchmark
+against PyTorch, and show clear launch and bandwidth wins without depending on
+FlashRT serving internals.
+
+The next showcase should not be another generic wrapper. It should target a
+visible ecosystem gap where FlashRT has unusually strong kernels:
+
+- VLA, vision, video, and diffusion primitives with clear model-level examples.
+- NVFP4/FP4 Blackwell kernels with fused quantization, SFA/SFB layout, and GEMM
+  epilogues.
+- Decode-oriented small-M GEMM/GEMV kernels where latency dominates.
+
+The bar for a showcase package is higher than the bar for a buildable package:
+correctness tests, strong microbenchmarks, shape constraints, hardware scope,
+and at least one downstream HF-style calling example should all be documented.
+
 ## Package Plan
 
 | Package | Stage | Purpose |
 | --- | --- | --- |
-| `flashrt-gemm-epilogues` | First | GEMM plus fused epilogues such as bias, activation, residual, dequant, and quantized output. |
-| `flashrt-fused-quant` | First | Memory-bound fusion kernels: norm, residual, activation, RoPE/QKV post-processing, and quantization. |
-| `flashrt-nvfp4` | First/second | NVFP4 data movement and layout primitives: quantize, dequantize, SFA/SFB layout, and low-bit helpers. |
-| `flashrt-smallm-gemm` | Second | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |
-| `flashrt-vla-video` | Second | VLA, vision, video, and diffusion kernels that are reusable outside the FlashRT serving engine. |
+| `flashrt-gemm-epilogues` | First package | FP8 quant epilogue helpers plus selected BF16 GEMM epilogues. |
+| `flashrt-vla-video` | First showcase candidate | VLA, vision, video, and diffusion kernels that are reusable outside the FlashRT serving engine. |
+| `flashrt-nvfp4` | First showcase candidate | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
+| `flashrt-smallm-gemm` | Second showcase candidate | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |
+| `flashrt-fused-quant` | Shared utility package | Memory-bound fusion kernels: norm, residual, activation, RoPE/QKV post-processing, and quantization. |
 
 ## Repository Status
 
-This is a phase-0 scaffold. The package directories intentionally use
-`build.toml.draft` rather than `build.toml` until a package has real synced
+`flashrt-gemm-epilogues` is the first buildable package. Other package
+directories intentionally use `build.toml.draft` until they have real synced
 source files, Tensor-based bindings, tests, and a passing local build.
 
 Do not upload a package to the Hub until its draft build file has been promoted
@@ -83,10 +103,13 @@ stream APIs.
 4. Write a small Python wrapper that imports `ops` from `._ops`.
 5. Add Hub-compatible correctness tests against PyTorch reference output.
 6. Add internal FlashRT parity tests under `internal-tests/` when needed.
-7. Add a benchmark for representative generic shapes and one FlashRT-real
-   shape family.
+7. Add benchmarks for representative generic shapes and at least one
+   FlashRT-real shape family.
 8. Promote `build.toml.draft` to `build.toml`.
-9. Run `kernel-builder build`, `kernel-builder check-abi`, and package tests.
+9. Run local source-extension tests and benchmarks as the regular development
+   loop.
+10. Run full `kernel-builder` builds for release validation, not for every
+    small source edit.
 
 ## References
 

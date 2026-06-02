@@ -7,14 +7,17 @@ tags:
 - nvfp4
 ---
 
-# FlashRT GEMM Epilogues
+# FlashRT GEMM and FP8 Quant Epilogues
 
-Fused GEMM epilogue kernels from FlashRT.
+Fused GEMM and FP8 quantization epilogue kernels from FlashRT.
 
-This package currently exposes a BF16 GEMM with cuBLASLt fused bias and GELU
-epilogue. It also exposes the first post-GEMM epilogue slice:
+The main current surface is the post-GEMM FP8 quantization epilogue slice:
 BF16 input plus optional BF16 bias, GELU(tanh), and FP8 e4m3 quantized output,
 plus a per-channel BF16 scaling and FP8 quantization primitive.
+
+The package also exposes BF16 GEMM wrappers using cuBLASLt fused bias and GELU
+epilogues. These wrappers are shape-sensitive and should be evaluated for the
+target workload before promotion.
 
 ## Planned Features
 
@@ -37,6 +40,10 @@ FP8 quantize epilogue helpers are the strongest current surface across the
 local shape suite. BF16 GEMM epilogue wrappers are shape-sensitive and should be
 evaluated against `torch.addmm`/`gelu(torch.addmm)` for target shapes before
 promotion.
+
+The first public performance message should center on the FP8 quantization
+helpers. GEMM epilogue numbers should be reported per shape, not as a broad
+claim.
 
 ## Hardware
 

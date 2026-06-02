@@ -23,3 +23,12 @@ only in benchmark labels or provenance notes.
 
 Benchmarks should compare against cuBLASLt, generic CUTLASS, and PyTorch eager
 where appropriate.
+
+## Showcase Criteria
+
+- Focus on M=1, small batch, and split-K decode shapes where launch and latency
+  dominate.
+- Include wide-N and wide-K cases only when the tuned tile policy is competitive
+  against cuBLASLt or a strong CUTLASS baseline.
+- Document hardware-specific paths separately instead of presenting one kernel
+  as universally supported.

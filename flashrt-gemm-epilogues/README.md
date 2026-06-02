@@ -1,11 +1,22 @@
 # flashrt-gemm-epilogues
 
-First buildable package for FlashRT fused GEMM epilogue kernels.
+First buildable package for FlashRT fused GEMM and quantization epilogue
+kernels.
 
 This package should expose generic Linear/GEMM-style APIs with fused output
 work, rather than raw FlashRT internal launchers. The first target is a small
 set of operations that remove common post-GEMM launches in Transformer, VLA,
 and diffusion inference.
+
+The strongest current surface is FP8 quantization epilogue fusion:
+
+- BF16 input plus optional BF16 bias.
+- GELU(tanh) or per-channel scaling.
+- Direct FP8 e4m3 output.
+
+The BF16 GEMM epilogue wrappers are included for completeness and selected
+decode shapes, but they are shape-sensitive and should not be used as the main
+performance headline without target-shape validation.
 
 ## Scope
 
@@ -30,7 +41,8 @@ Planned APIs:
 
 The first implemented kernels cover the post-GEMM epilogue pattern
 ``bias + GELU(tanh) + FP8 quantize`` and the adjacent
-``per-channel scale + FP8 quantize`` pattern. The first full GEMM wrapper is
+``per-channel scale + FP8 quantize`` pattern. The full GEMM wrappers cover
+``BF16 GEMM + BF16 bias -> BF16`` and
 ``BF16 GEMM + BF16 bias + GELU -> BF16`` using cuBLASLt epilogue support.
 
 ## Non-Goals
@@ -57,7 +69,9 @@ stricter `torch.addmm` baseline.
 
 ## Promotion Target
 
-This is the recommended first buildable package.
+This is the recommended first buildable package. The first public message
+should emphasize the FP8 quantization epilogue helpers; BF16 GEMM epilogue
+results should be presented per shape.
 
 ## Validation
 
@@ -74,13 +88,6 @@ from kernels import get_kernel
 
 ops = get_kernel("flashrt/flashrt-gemm-epilogues", version=1, trust_remote_code=True)
 
-a = torch.randn((64, 4096), device="cuda", dtype=torch.bfloat16)
-b = torch.randn((4096, 4096), device="cuda", dtype=torch.bfloat16)
-bias = torch.randn((4096,), device="cuda", dtype=torch.bfloat16)
-
-y = ops.bf16_gemm_bias_gelu(a, b, bias)
-y_no_activation = ops.bf16_gemm_bias(a, b, bias)
-
 x = torch.randn((4, 4096), device="cuda", dtype=torch.bfloat16)
 bias = torch.randn((4096,), device="cuda", dtype=torch.bfloat16)
 scale = torch.tensor([0.25], device="cuda", dtype=torch.float32)
@@ -89,4 +96,10 @@ y_fp8 = ops.bias_gelu_quantize_fp8_static_bf16(x, bias, scale)
 
 channel_scale = torch.ones((4096,), device="cuda", dtype=torch.bfloat16)
 y_scaled_fp8 = ops.channel_scale_quantize_fp8_static_bf16(x, channel_scale, scale)
+
+a = torch.randn((1, 4096), device="cuda", dtype=torch.bfloat16)
+b = torch.randn((4096, 4096), device="cuda", dtype=torch.bfloat16)
+gemm_bias = torch.randn((4096,), device="cuda", dtype=torch.bfloat16)
+
+y_gemm = ops.bf16_gemm_bias_gelu(a, b, gemm_bias)
 ```
