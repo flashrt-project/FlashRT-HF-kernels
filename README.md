@@ -21,33 +21,27 @@ Tensor-based kernel APIs that can be built and loaded by the Hugging Face
 
 ## Showcase Strategy
 
-The first public surface is intentionally narrow: use `flashrt-gemm-epilogues`
-to prove the Hugging Face package format, then make FP8 quantization epilogues
-the headline. These kernels are easy to call from Python, easy to benchmark
-against PyTorch, and show clear launch and bandwidth wins without depending on
-FlashRT serving internals.
+The first public surface is a four-block v1 batch, not a single-package pilot:
 
-The next showcase should not be another generic wrapper. It should target a
-visible ecosystem gap where FlashRT has unusually strong kernels:
+- FP8/GEMM epilogues.
+- VLA, vision, video, and diffusion post-processing primitives.
+- Blackwell NVFP4/FP4 layout and low-bit GEMM/decode kernels.
+- Fused activation, normalization, residual, and quantization kernels.
 
-- VLA, vision, video, and diffusion primitives with clear model-level examples.
-- NVFP4/FP4 Blackwell kernels with fused quantization, SFA/SFB layout, and GEMM
-  epilogues.
-- Decode-oriented small-M GEMM/GEMV kernels where latency dominates.
-
-The bar for a showcase package is higher than the bar for a buildable package:
+The bar for the v1 batch is higher than the bar for one buildable package:
 correctness tests, strong microbenchmarks, shape constraints, hardware scope,
-and at least one downstream HF-style calling example should all be documented.
+and downstream HF-style calling examples should all be documented before the
+full builder release window.
 
 ## Package Plan
 
 | Package | Stage | Purpose |
 | --- | --- | --- |
-| `flashrt-gemm-epilogues` | First package | FP8 quant epilogue helpers plus selected BF16 GEMM epilogues. |
-| `flashrt-vla-video` | First showcase candidate | VLA, vision, video, and diffusion kernels that are reusable outside the FlashRT serving engine. |
-| `flashrt-nvfp4` | First showcase candidate | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
-| `flashrt-smallm-gemm` | Second showcase candidate | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |
-| `flashrt-fused-quant` | Shared utility package | Memory-bound fusion kernels: norm, residual, activation, RoPE/QKV post-processing, and quantization. |
+| `flashrt-gemm-epilogues` | V1 block | FP8 quant epilogue helpers plus selected BF16 GEMM epilogues. |
+| `flashrt-vla-video` | V1 block | VLA, vision, video, and diffusion kernels that are reusable outside the FlashRT serving engine. |
+| `flashrt-nvfp4` | V1 block | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
+| `flashrt-smallm-gemm` | V1 block | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |
+| `flashrt-fused-quant` | V1 block | Memory-bound fusion kernels: norm, residual, activation, and quantization. |
 
 ## Repository Status
 
@@ -76,7 +70,8 @@ FlashRT-dependent validation:
 
 The first-batch tuning grid is documented in
 `docs/tile-and-shape-coverage.md`. Packaging gates and release blockers are
-tracked in `docs/release-gating.md`.
+tracked in `docs/release-gating.md`. The four-block v1 release plan is tracked
+in `docs/v1-batch-plan.md`.
 
 ## Expected Layout Per Package
 

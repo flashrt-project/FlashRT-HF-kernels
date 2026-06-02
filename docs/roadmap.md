@@ -3,24 +3,27 @@
 ## North Star
 
 This repository is the HF-facing distribution layer for selected FlashRT
-kernels. The first goal is not to mirror every FlashRT kernel. The first goal
-is to publish a small number of kernels that are:
+kernels. The first public version is a batch of four peer blocks:
 
-- Generic enough for Hugging Face users to call.
-- Fast enough to be worth external attention.
-- Documented with shape constraints, baselines, and hardware scope.
-- Connected to a concrete model or workload story where possible.
+- FP8/GEMM epilogues.
+- VLA/video post-processing.
+- Blackwell NVFP4/FP4 low-bit kernels.
+- Fused quantization.
 
-## Phase 0: Shape the Repository
+The goal is not to upload one small package as soon as it builds. The goal is
+to finish enough source, tests, benchmarks, and examples across all four blocks
+that the first update looks like a coherent FlashRT kernel release.
+
+## Phase 0: Repository Shape
 
 Status: complete.
 
 Deliverables:
 
-- Monorepo skeleton with five package directories.
-- Package-level README files with scope and non-goals.
-- Draft `build.toml` files.
-- Validation checklist.
+- Monorepo skeleton with package directories.
+- Package-level README and CARD files with scope and non-goals.
+- Draft or promoted `build.toml` files.
+- Validation checklist and release-gating docs.
 - Source synchronization rules.
 
 Exit criteria:
@@ -28,128 +31,82 @@ Exit criteria:
 - HF collaborators can review package boundaries and naming.
 - FlashRT maintainers agree on the first source files to sync.
 
-## Phase 1: First Buildable Package
+## Phase 1: V1 Source And API Readiness
 
-Recommended first package: `flashrt-gemm-epilogues`.
-
-Status: buildable source slice implemented and builder-validated for the
-selected CUDA/PyTorch matrix.
-
-Why:
-
-- FP8 quantization epilogues are easy to explain to Transformers, Diffusers,
-  and VLA/video users.
-- The value proposition is clear: remove launches and memory round-trips around
-  activation, bias, channel scaling, and quantized output.
-- Tests can compare against PyTorch reference expressions.
-- Benchmarks can use generic Linear plus activation/residual/quant patterns.
+Status: in progress.
 
 Deliverables:
 
-- One buildable CUDA package.
-- Tensor-based public API.
-- Correctness tests.
-- Microbenchmarks with generic and FlashRT-real shape families.
-- `kernel-builder` build/check validation.
+- Tensor-based public APIs for every v1 block.
+- Synced source slices with minimal dependency surfaces.
+- Python wrappers that expose tensors, not raw pointers or stream handles.
+- Runtime guards for dtype, device, shape, layout, and hardware scope.
 
 Exit criteria:
 
-- Package can be loaded locally through `kernels.get_local_kernel`.
-- FP8 quant epilogue results are strong enough to be the first public headline.
-- BF16 GEMM epilogue results are documented conservatively by shape.
+- Every v1 package reaches at least G1 in `docs/release-gating.md`.
+- Draft packages are not promoted until their Tensor bindings and correctness
+  tests pass locally.
 
-## Phase 2: First Showcase Package
+## Phase 2: V1 Correctness And Benchmark Readiness
 
-Recommended candidates:
-
-- `flashrt-vla-video`
-- `flashrt-nvfp4`
-- `flashrt-smallm-gemm`
-
-Selection rule:
-
-Pick the package with the strongest combination of microbenchmark speedup,
-model-level relevance, and ecosystem gap. A package should not be presented as
-a showcase only because it builds.
-
-Preferred story:
-
-- VLA, vision, video, or diffusion kernels that current HF kernel examples do
-  not already cover deeply.
-- A direct HF-style call path showing how a downstream model or model block
-  benefits.
-- A benchmark table that includes PyTorch eager, a strong library baseline when
-  applicable, and FlashRT.
-
-Exit criteria:
-
-- At least one public API has a clear model-block use case.
-- Benchmarks include broad generic shapes plus at least one real FlashRT shape
-  family.
-- Hardware scope is explicit: for example SM120-only for Blackwell NVFP4
-  kernels versus broader CUDA support for simpler epilogue kernels.
-
-## Phase 3: Fused Quant and NVFP4
-
-Recommended packages:
-
-- `flashrt-fused-quant`
-- `flashrt-nvfp4`
+Status: in progress.
 
 Deliverables:
 
-- Fused norm/residual/activation quantization APIs.
-- NVFP4 quant/dequant/SFA helpers.
-- Representative benchmarks for LLM, VLA, and diffusion-style shapes.
+- Package-local correctness tests.
+- Internal FlashRT parity tests only where public references are not enough.
+- Benchmark scripts covering `docs/tile-and-shape-coverage.md`.
+- Public `RESULTS.md` summaries with GPU, driver, PyTorch, CUDA runtime,
+  warmup, measured iterations, and fair baselines.
 
 Exit criteria:
 
-- APIs are generic enough to discuss with Transformers maintainers.
-- Benchmarks show clear launch and bandwidth wins versus PyTorch eager.
+- Every v1 block has a documented shape grid and benchmark baseline.
+- Every headline claim is tied to exact shapes and hardware.
 
-## Phase 4: Small-M Decode Kernels
+## Phase 3: V1 Examples And Model-Block Story
 
-Recommended package: `flashrt-smallm-gemm`.
+Status: in progress.
 
 Deliverables:
 
-- Generic small-M GEMM/GEMV APIs.
-- Decode-oriented benchmark set.
-- Shape constraints documented explicitly.
+- HF-style examples for each stable v1 public API surface.
+- At least one model-block note for the VLA/video path.
+- Clear distinction between helper APIs, showcase APIs, and SM120-only APIs.
 
 Exit criteria:
 
-- Package is useful without model-specific naming.
-- Benchmarks isolate small-M latency wins.
+- Users can see which PyTorch/HF op sequence each fused kernel replaces.
+- The four blocks can be presented together without over-claiming any one
+  package.
 
-## Phase 5: VLA and Video Kernels
+## Phase 4: V1 Batch Build Window
 
-Recommended package: `flashrt-vla-video`.
+Status: pending.
 
 Deliverables:
 
-- Reusable VLA, vision, video, and diffusion primitives.
-- Benchmarks covering patch, DiT, video convolution, and quantized layout paths.
-- Integration notes for downstream model libraries.
+- Clean build tree with no stale `result` symlinks or committed outputs.
+- `kernel-builder-docker check-config .` passes for every promoted v1 package.
+- Full `kernel-builder build` and `check-builds` run for the intended matrix.
+- Package tests, benchmark CLIs, and examples run against built artifacts.
+- `VALIDATION.md` files updated with exact build variants and failures.
 
 Exit criteria:
 
-- Package demonstrates a gap not already covered by current
-  `kernels-community` attention, MoE, or quantization packages.
+- The whole v1 batch can be uploaded together.
+- Known gaps are explicit and do not contradict public package cards.
 
-## Phase 6: Community Promotion
+## Phase 5: Hub Upload And Community Path
 
-Promotion candidates:
-
-- `flashrt-gemm-epilogues`
-- `flashrt-fused-quant`
-- `flashrt-nvfp4`
+Status: pending.
 
 Paths:
 
-- Keep packages under the FlashRT Hub namespace if we own fast iteration.
-- Propose selected stable packages to `kernels-community` if Transformers,
-  Diffusers, or another HF project wants to consume them by default.
+- Keep packages under the FlashRT Hub namespace while APIs iterate quickly.
+- Propose stable, high-impact packages to `kernels-community` only if HF
+  projects want to consume or maintain them by default.
 - Ask for trusted publisher status once APIs and security posture are stable.
 
 Promotion bar:

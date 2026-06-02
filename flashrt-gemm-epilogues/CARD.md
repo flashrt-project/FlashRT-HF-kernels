@@ -41,9 +41,9 @@ local shape suite. BF16 GEMM epilogue wrappers are shape-sensitive and should be
 evaluated against `torch.addmm`/`gelu(torch.addmm)` for target shapes before
 promotion.
 
-The first public performance message should center on the FP8 quantization
-helpers. GEMM epilogue numbers should be reported per shape, not as a broad
-claim.
+The v1 performance message for this package should center on the FP8
+quantization helpers. GEMM epilogue numbers should be reported per shape, not
+as a broad claim.
 
 ## Hardware
 

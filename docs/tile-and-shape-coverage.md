@@ -1,8 +1,8 @@
 # Tile And Shape Coverage
 
-This document defines the first-batch tuning standard. A kernel is not ready
-for the first public package batch until it has a documented shape grid, tile
-sweep, correctness baseline, and performance baseline.
+This document defines the v1 batch tuning standard. A kernel is not ready for
+the first public v1 batch until it has a documented shape grid, tile sweep,
+correctness baseline, and performance baseline.
 
 ## Coverage Levels
 

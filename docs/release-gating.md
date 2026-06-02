@@ -1,8 +1,9 @@
 # Release Gating
 
-This document is the packaging gate for the first FlashRT HF kernel batch. It
-tracks what is ready for local development, Hub upload, public showcase, and
-possible `kernels-community` promotion.
+This document is the packaging gate for the first FlashRT HF kernel batch. The
+v1 release is a batch release, not a single-package release. Development should
+finish the full v1 surface before spending time on full Nix/kernel-builder
+builds.
 
 ## Gate Definitions
 
@@ -20,34 +21,49 @@ possible `kernels-community` promotion.
 
 | Package | Current gate | Ready claim | Blocking gaps |
 | --- | --- | --- | --- |
-| `flashrt-gemm-epilogues` | G5 partial | First buildable package; FP8 quant epilogue headline on RTX 5090 with an HF-style block example | Torch 2.12 builder variants, run example against built/Hub package, multi-hardware validation |
-| `flashrt-vla-video` | G5 partial | Strong VLA/video QKV post-processing showcase candidate with 19-40x local evidence and an HF-style block example | Full builder build, public benchmark runner, run example against built/Hub package, multi-hardware validation |
-| `flashrt-nvfp4` | G2 | Buildable NVFP4 scale-factor layout helper with benchmark and example paths | Full builder build, benchmark runner, fused GEMM epilogue surfaces, multi-hardware validation |
-| `flashrt-smallm-gemm` | G1 | First SM120 NVFP4 W4A4 decode matvec source slice compiles locally and passes deterministic correctness | Promote build file, benchmark grid, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
-| `flashrt-fused-quant` | G0 | Shared fused quantization utility candidate | Tensor binding, correctness tests, tile sweep, memory-bandwidth benchmark |
+| `flashrt-gemm-epilogues` | G5 partial | v1 FP8/GEMM epilogue block with RTX 5090 evidence and an HF-style block example | Run example against built/Hub package, refresh public benchmark runner output, multi-hardware validation |
+| `flashrt-vla-video` | G5 partial | v1 VLA/video block with 19-40x local evidence and an HF-style block example | Full builder build, public benchmark runner, run example against built/Hub package, multi-hardware validation |
+| `flashrt-nvfp4` | G2 | v1 Blackwell layout helper with benchmark and example paths | Full builder build, benchmark runner, fused GEMM epilogue surfaces, multi-hardware validation |
+| `flashrt-smallm-gemm` | G1 | v1 Blackwell small-M slice; first SM120 NVFP4 W4A4 decode matvec compiles locally and passes deterministic correctness | Promote build file, benchmark grid, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
+| `flashrt-fused-quant` | G0 | v1 fused activation/norm/residual quantization block | Tensor binding, correctness tests, tile sweep, memory-bandwidth benchmark |
 
-## First Package Release Criteria
+## V1 Batch Blocks
 
-Before uploading the first package to the Hub:
+The first public version has four equal blocks:
+
+| Block | Packages | Minimum v1 surface |
+| --- | --- | --- |
+| FP8/GEMM epilogues | `flashrt-gemm-epilogues` | FP8 quant epilogues plus conservative BF16 GEMM epilogue wrappers |
+| VLA/video post-processing | `flashrt-vla-video` | Q/K RMSNorm+RoPE/cache and packed-QKV split+norm+RoPE |
+| Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | NVFP4 scale layout helper plus at least one validated small-M/decode W4A4 path |
+| Fused quantization | `flashrt-fused-quant` | SiLU/gate or norm/residual low-bit quantization with reference tests and bandwidth benchmark |
+
+## V1 Batch Release Criteria
+
+Before uploading the v1 batch to the Hub:
 
 - `internal-docs/` and `internal-tests/` remain ignored and untracked.
-- Every public package has no committed build output or `__pycache__`.
-- `kernel-builder-docker check-config .` passes for each promoted package.
-- At least one promoted package completes `kernel-builder build` and
-  `check-builds` for the intended torch/CUDA variants.
+- Every public package has no committed build output, stale `result` symlink, or
+  `__pycache__`.
+- Every v1 package has `README.md`, `CARD.md`, `VALIDATION.md`, tests,
+  benchmarks, and examples or an explicit explanation for why no example is
+  meaningful.
+- `kernel-builder-docker check-config .` passes for every promoted v1 package.
+- Every promoted v1 package completes `kernel-builder build` and
+  `check-builds` for the intended torch/CUDA variants during the release
+  validation window.
 - Package `README.md`, `CARD.md`, and `VALIDATION.md` state the same hardware
   and API scope.
 - Benchmarks include the shape grid from `docs/tile-and-shape-coverage.md`.
 - Headline speedups use a fair baseline and name the GPU, driver, PyTorch, CUDA
   runtime, warmup count, and measured iterations.
 
-## First Showcase Criteria
+## V1 Showcase Criteria
 
-Before presenting this as a strong community update:
+Before presenting v1 as a strong community update:
 
-- Pick one headline package:
-  `flashrt-vla-video` or the fused NVFP4 GEMM slice, not a collection of small
-  helpers.
+- Present the four blocks together. Do not frame this as one package plus
+  extras.
 - Include a model-block or HF-style call path, not only microbenchmarks.
 - State exactly which shapes are fast and which shapes are just compatibility
   coverage.

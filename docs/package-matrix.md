@@ -8,20 +8,21 @@
 | `flashrt-smallm-gemm` | `nvfp4_w4a4_decode_matvec_bf16out`, `nvfp4_w4a4_smallm_warpsplit_bf16out`, `tiny_fp8_smallm_gemm_bf16out` | `csrc/kernels`, `csrc/kernels/megakernel`, small-M matvec/matmul files | cuBLASLt, generic CUTLASS, PyTorch eager | Decode latency showcase for LLM/VLA serving |
 | `flashrt-fused-quant` | `silu_mul_quant_nvfp4_swizzled_bf16`, `silu_mul_merged_quant_nvfp4_swizzled_bf16`, `residual_rmsnorm_quant_nvfp4_swizzled_bf16`, `rmsnorm_quant_nvfp4_sfa_fp16` | `csrc/kernels`, `csrc/quantize`, `csrc/fused_fp4`, `flash_wm/csrc` | PyTorch eager reference | Shared utility package; useful when split from model-specific stacks |
 
-## Showcase Priority
+## V1 Batch Blocks
 
-1. `flashrt-gemm-epilogues`: ship first because the format is proven. Public
-   messaging should emphasize FP8 quant epilogues, not shape-sensitive BF16 GEMM
-   epilogues.
-2. `flashrt-vla-video`: strongest first showcase. The implemented Q/K
-   post-processing slice has internal 20-30x+ benchmark evidence across
-   decode and video-token packed-QKV paths.
-3. `flashrt-nvfp4`: strongest Blackwell low-bit story. Keep hardware support
-   honest; SM120-only kernels should be labeled that way.
-4. `flashrt-smallm-gemm`: strong serving story once benchmarks beat cuBLASLt or
-   generic CUTLASS on the right decode shapes.
-5. `flashrt-fused-quant`: useful as a dependency-like package, but less
-   attention-grabbing unless tied to a model path.
+The first release is a batch release. These blocks are peers; the order below
+is not a priority order.
+
+| V1 block | Packages | Message |
+| --- | --- | --- |
+| FP8/GEMM epilogues | `flashrt-gemm-epilogues` | FP8 quant epilogues plus conservative BF16 GEMM epilogue wrappers |
+| VLA/video post-processing | `flashrt-vla-video` | 19-40x local RTX 5090 evidence for fused QKV/norm/RoPE/cache paths |
+| Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | Layout helpers, fused low-bit GEMM epilogues, and small-M/decode kernels |
+| Fused quantization | `flashrt-fused-quant` | Activation, residual, norm, and low-bit quantization fusion |
+
+Do not run full builder packaging for one block while the other v1 blocks are
+still missing source-extension tests, benchmark grids, or examples. Full
+builder work is reserved for the v1 release window.
 
 ## Evidence Levels
 

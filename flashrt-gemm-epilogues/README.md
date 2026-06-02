@@ -63,13 +63,13 @@ Benchmarks should compare against:
 - cuBLASLt/CUTLASS unfused path when available.
 
 The BF16 GEMM epilogue wrapper is shape-sensitive on the current local RTX 5090
-environment. The FP8 quantize epilogue kernels are the strongest first-package
-surface today; GEMM epilogue shapes should be promoted only when they beat the
+environment. The FP8 quantize epilogue kernels are this package's strongest
+v1 surface; GEMM epilogue shapes should be promoted only when they beat the
 stricter `torch.addmm` baseline.
 
-## Promotion Target
+## V1 Role
 
-This is the recommended first buildable package. The first public message
+This package is the FP8/GEMM epilogue block in the v1 batch. Public messaging
 should emphasize the FP8 quantization epilogue helpers; BF16 GEMM epilogue
 results should be presented per shape.
 
