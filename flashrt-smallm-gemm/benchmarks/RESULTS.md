@@ -60,12 +60,18 @@ python scripts/run_built_artifact_benchmarks.py \
 
 | Workload | K | N | Mean ms | Ref ms | Speedup | Verified | Notes |
 | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| `k4096_n1024` | 4096 | 1024 | 0.0123 | 0.0121 | 0.99x | yes | compatibility coverage |
-| `k4096_n4096` | 4096 | 4096 | 0.0171 | 0.0123 | 0.72x | yes | compatibility coverage |
-| `k4096_n12288` | 4096 | 12288 | 0.0276 | 0.0123 | 0.45x | yes | compatibility coverage |
-| `k12288_n1024` | 12288 | 1024 | 0.0157 | 0.0312 | 1.99x | yes | current best readability-baseline shape |
-| `k12288_n4096` | 12288 | 4096 | 0.0319 | 0.0122 | 0.38x | yes | compatibility coverage |
-| `k12288_n12288` | 12288 | 12288 | 0.0628 | 0.0212 | 0.34x | yes | compatibility coverage |
+The benchmark uses random packed W4A4 inputs and a PyTorch readability
+baseline that dequantizes FP4 values/scales and performs the matvec. The older
+constant-input table compared against `torch.full` and is invalidated.
+
+| Workload | K | N | Mean ms | Ref ms | Speedup | Verified | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| `k4096_n1024` | 4096 | 1024 | 0.0333 | 0.4676 | 14.03x | yes | random/dequant baseline |
+| `k4096_n4096` | 4096 | 4096 | 0.1081 | 1.4944 | 13.83x | yes | random/dequant baseline |
+| `k4096_n12288` | 4096 | 12288 | 0.2597 | 4.2138 | 16.23x | yes | random/dequant baseline |
+| `k12288_n1024` | 12288 | 1024 | 0.0843 | 0.5544 | 6.58x | yes | random/dequant baseline |
+| `k12288_n4096` | 12288 | 4096 | 0.3079 | 1.8074 | 5.87x | yes | random/dequant baseline |
+| `k12288_n12288` | 12288 | 12288 | 0.7574 | 5.1062 | 6.74x | yes | random/dequant baseline |
 
 ## Release Blockers
 
@@ -73,7 +79,8 @@ python scripts/run_built_artifact_benchmarks.py \
   accuracy sweep.
 - Full `kernel-builder build-and-copy` matrix has not been run.
 - Local release-candidate benchmark runner has been run against the built
-  artifact. Official Hub `kernels benchmark` has not been run after upload.
+  artifact with random/dequant baselines. Official Hub `kernels benchmark` has
+  not been run after upload.
 - Fair low-bit vendor/library baseline is not recorded.
 - Warpsplit small-M and tiny FP8 source slices are not exposed.
 - Non-SM120 hardware validation is not applicable to the current v1 surface

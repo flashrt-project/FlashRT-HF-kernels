@@ -101,7 +101,7 @@ the copied built artifacts. It does not replace the official Hub
 | `flashrt-gemm-epilogues` | FP8 quant epilogues verified, 2.60x-4.08x vs PyTorch eager references; BF16 GEMM benchmark is latency-only |
 | `flashrt-vla-video` | Q/K/QKV post-processing verified, 10.04x-29.33x vs PyTorch eager references |
 | `flashrt-nvfp4` | scale-factor layout helper byte-verified, 67.22x-17408.41x vs Python layout reference |
-| `flashrt-smallm-gemm` | W4A4 decode matvec verified; only `K=12288,N=1024` is faster than the current readability baseline |
+| `flashrt-smallm-gemm` | W4A4 decode matvec verified, 5.87x-16.23x vs random/dequant PyTorch readability baseline |
 | `flashrt-fused-quant` | split and merged fused quant latency grid completed; multi-output byte parity remains covered by accuracy sweep |
 
 ## Full Matrix Status
