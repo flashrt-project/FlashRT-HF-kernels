@@ -32,25 +32,8 @@ python scripts/prebuild_check.py --check-config
 Then build all promoted v1 packages:
 
 ```bash
-cd flashrt-gemm-epilogues
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-builds .
-
-cd ../flashrt-vla-video
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-builds .
-
-cd ../flashrt-nvfp4
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-builds .
-
-cd ../flashrt-smallm-gemm
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-builds .
-
-cd ../flashrt-fused-quant
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-builds .
+python scripts/release_build_plan.py
+python scripts/release_build_plan.py --execute
 ```
 
 Do not change source while this build window is running unless the build fails.

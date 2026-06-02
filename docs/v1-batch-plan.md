@@ -54,8 +54,7 @@ Before v1 build window:
 - Complete full builder build and `check-builds`.
 - Run `benchmarks/benchmark_q_norm_rope.py` against a built package artifact.
 - Run `examples/qkv_postprocess_block.py` against a built or Hub package.
-- Add one model-block note showing the PyTorch/HF op sequence replaced by the
-  fused QKV post-processing API.
+- Refresh `examples/model-block-note.md` with built-artifact benchmark results.
 
 ### `flashrt-nvfp4`
 

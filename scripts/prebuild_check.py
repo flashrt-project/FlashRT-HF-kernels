@@ -30,6 +30,10 @@ REQUIRED_DOCS = [
     "docs/tile-and-shape-coverage.md",
     "docs/v1-batch-plan.md",
 ]
+REQUIRED_SCRIPTS = [
+    "scripts/prebuild_check.py",
+    "scripts/release_build_plan.py",
+]
 REQUIRED_FILES = [
     "README.md",
     "CARD.md",
@@ -136,6 +140,10 @@ def check_docs(errors: list[str]) -> None:
     for rel in REQUIRED_DOCS:
         if not (ROOT / rel).is_file():
             fail(errors, f"missing required doc {rel}")
+
+    for rel in REQUIRED_SCRIPTS:
+        if not (ROOT / rel).is_file():
+            fail(errors, f"missing required script {rel}")
 
 
 def check_config(pkg: str, builder: str, errors: list[str]) -> None:
