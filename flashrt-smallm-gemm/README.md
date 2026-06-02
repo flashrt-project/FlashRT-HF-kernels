@@ -43,6 +43,11 @@ The first draft source slice compiles as a local source extension and passes a
 deterministic correctness smoke for `K=4096` and `K=12288` on RTX 5090. See
 `VALIDATION.md` for the exact scope and remaining gaps.
 
+## Example
+
+`examples/nvfp4_w4a4_decode_matvec.py` shows deterministic M=1 decode matvec
+usage with packed FP4 bytes and swizzled scale-factor buffers.
+
 ## Showcase Criteria
 
 - Focus on M=1, small batch, and split-K decode shapes where launch and latency

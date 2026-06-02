@@ -82,6 +82,7 @@ Before v1 build window:
   scripts are stable.
 - Run `benchmarks/benchmark_nvfp4_w4a4_decode_matvec.py` against a built
   package artifact.
+- Run `examples/nvfp4_w4a4_decode_matvec.py` against a built or Hub package.
 - Add a fair baseline: PyTorch dequant+matmul for readability and
   CUTLASS/cuBLASLt or FlashRT internal low-bit baseline for serious claims.
 - Decide whether v1 also includes warpsplit small-M or tiny FP8.
@@ -100,7 +101,7 @@ Before v1 build window:
   VLA/video FFN hidden sizes.
 - Run `benchmarks/benchmark_silu_mul_quant_nvfp4.py` against a built package
   artifact.
-- Add an HF-style FFN epilogue example if the public API is stable enough.
+- Run `examples/swiglu_nvfp4_quant_block.py` against a built or Hub package.
 - Decide whether v1 also includes residual/RMSNorm variants.
 
 ## Release Build Window

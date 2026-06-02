@@ -36,5 +36,10 @@ fake-quant reference tests. It has passed local source-extension compile and
 split/merged byte-parity smoke on RTX 5090. The package remains draft until the
 benchmark grids, bandwidth results, and full HF builder validation are recorded.
 
+## Example
+
+`examples/swiglu_nvfp4_quant_block.py` shows split and merged FFN gate/up usage
+with generic public API names.
+
 See `SELECTED_KERNELS.md` for the first concrete source slices and why they are
 kept separate from GEMM epilogues.
