@@ -54,6 +54,8 @@ Before uploading the v1 batch to the Hub:
   validation window.
 - Package `README.md`, `CARD.md`, and `VALIDATION.md` state the same hardware
   and API scope.
+- `python scripts/prebuild_check.py --check-config` passes before starting the
+  full build window.
 - Benchmarks include the shape grid from `docs/tile-and-shape-coverage.md`.
 - Headline speedups use a fair baseline and name the GPU, driver, PyTorch, CUDA
   runtime, warmup count, and measured iterations.

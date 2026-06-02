@@ -19,6 +19,12 @@ Config check:
 
 Result: passed.
 
+Builder metadata:
+
+- `build.toml` present.
+- `flake.nix` present.
+- `flake.lock` present and aligned with the other v1 packages.
+
 Local source-extension compile:
 
 ```bash

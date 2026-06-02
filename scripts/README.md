@@ -1,10 +1,15 @@
 # Scripts
 
-Repository-level helper scripts can live here after the first buildable package
-exists.
+Repository-level helper scripts for the v1 batch.
 
-Planned scripts:
+Current scripts:
 
-- Check that each package with `build.toml` has all listed sources.
-- Check that draft packages do not accidentally contain upload artifacts.
-- Generate package status summaries for HF review.
+- `prebuild_check.py`: checks v1 package structure, `build.toml` source lists,
+  tracked internal directories, stale build artifacts, and optionally
+  `kernel-builder-docker check-config`.
+
+Example:
+
+```bash
+python scripts/prebuild_check.py --check-config
+```

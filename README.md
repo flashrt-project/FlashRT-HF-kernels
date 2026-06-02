@@ -45,14 +45,13 @@ full builder release window.
 
 ## Repository Status
 
-`flashrt-gemm-epilogues`, `flashrt-vla-video`, and `flashrt-nvfp4` are the first
-buildable packages. Remaining draft package directories carry concrete first
-kernel selections, but intentionally keep `build.toml.draft` until the selected
-source slice has Tensor-based bindings, tests, benchmarks, and a passing local
-build.
+All v1 packages have promoted `build.toml`, `flake.nix`, and `flake.lock`
+files and pass configuration-level prebuild checks. Some packages are still
+draft at the source or benchmark-evidence level; package-specific status is
+tracked in `docs/release-gating.md`.
 
-Do not upload a package to the Hub until its draft build file has been promoted
-to `build.toml` and the validation checklist in `docs/validation.md` passes.
+Do not upload a package to the Hub until the validation checklist in
+`docs/release-gating.md` passes for the full v1 batch.
 
 ## Public vs Internal Content
 
@@ -71,7 +70,8 @@ FlashRT-dependent validation:
 The first-batch tuning grid is documented in
 `docs/tile-and-shape-coverage.md`. Packaging gates and release blockers are
 tracked in `docs/release-gating.md`. The four-block v1 release plan is tracked
-in `docs/v1-batch-plan.md`.
+in `docs/v1-batch-plan.md`. Run `python scripts/prebuild_check.py
+--check-config` before starting a full release build window.
 
 ## Expected Layout Per Package
 

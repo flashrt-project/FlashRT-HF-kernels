@@ -110,8 +110,9 @@ Before v1 build window:
 Run this only after every v1 package has stable source, tests, benchmarks, and
 examples:
 
-1. Clean stale build outputs and result symlinks.
-2. Run `kernel-builder-docker check-config .` for every promoted package.
+1. Run `python scripts/prebuild_check.py --check-config`.
+2. Clean any stale build outputs, result symlinks, or cache warnings reported by
+   the prebuild check.
 3. Run full `kernel-builder build` for all promoted packages.
 4. Run `kernel-builder check-builds`.
 5. Run package tests, benchmark CLIs, and examples against built artifacts.
