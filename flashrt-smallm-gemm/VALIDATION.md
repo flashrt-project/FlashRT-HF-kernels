@@ -39,8 +39,7 @@ csrc/fp4_w4a4_matvec_sm120.cu
 ```
 
 The smoke uses the Hugging Face kernel-builder `registration.h` template
-include path locally. Full HF builder packaging is not run for this draft
-package yet.
+include path locally. Full HF builder packaging has not been run yet.
 
 Correctness was checked with deterministic packed FP4 inputs:
 
@@ -58,8 +57,11 @@ Results:
 
 ## Known Gaps
 
-- `build.toml.draft` has not been promoted to `build.toml`.
+- `build.toml`, `flake.nix`, and `flake.lock` are present.
+- `/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker
+  check-config .` passed for this package.
 - Full `kernel-builder build` has not been run for this package.
-- Benchmark scripts and fair CUTLASS/cuBLASLt baselines are still pending.
+- Public benchmark scripts are present, but built-artifact benchmark results
+  and fair CUTLASS/cuBLASLt baselines are still pending.
 - Runtime validation is currently RTX 5090 only.
 - Warpsplit small-M and tiny FP8 source slices are not yet exposed.

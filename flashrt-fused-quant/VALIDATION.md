@@ -43,8 +43,7 @@ csrc/silu_mul_to_nvfp4_swizzled.cu
 ```
 
 The smoke uses the Hugging Face kernel-builder `registration.h` template
-include path locally. Full HF builder packaging is not run for this draft
-package yet.
+include path locally. Full HF builder packaging has not been run yet.
 
 Correctness was checked against a Python fake-quant reference that reproduces:
 
@@ -65,8 +64,11 @@ Results:
 
 ## Known Gaps
 
-- `build.toml.draft` has not been promoted to `build.toml`.
+- `build.toml`, `flake.nix`, and `flake.lock` are present.
+- `/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker
+  check-config .` passed for this package.
 - Full `kernel-builder build` has not been run for this package.
-- Benchmark scripts and memory-bandwidth results are still pending.
+- Public benchmark scripts are present, but built-artifact benchmark results
+  and memory-bandwidth results are still pending.
 - Runtime validation is currently RTX 5090 only.
 - Residual/RMSNorm and SFA variants are not yet exposed.

@@ -71,15 +71,15 @@ Before v1 build window:
 
 ### `flashrt-smallm-gemm`
 
-Current status: draft G1. First SM120 NVFP4 W4A4 decode matvec source slice
-compiles locally and passes deterministic correctness for `K=4096,12288`.
+Current status: G2. First SM120 NVFP4 W4A4 decode matvec source slice compiles
+locally, passes deterministic correctness for `K=4096,12288`, and passes
+`check-config`.
 The public benchmark harness covers `K in {4096,12288}` and
 `N in {1024,4096,12288}`.
 
 Before v1 build window:
 
-- Promote `build.toml.draft` only after source-extension tests and benchmark
-  scripts are stable.
+- Complete full builder build and `check-builds`.
 - Run `benchmarks/benchmark_nvfp4_w4a4_decode_matvec.py` against a built
   package artifact.
 - Run `examples/nvfp4_w4a4_decode_matvec.py` against a built or Hub package.
@@ -89,9 +89,9 @@ Before v1 build window:
 
 ### `flashrt-fused-quant`
 
-Current status: draft G1. The split and merged `SiLU(gate) * up` NVFP4
-swizzled quantization source slice compiles locally and passes byte parity
-against a fake-quant reference.
+Current status: G2. The split and merged `SiLU(gate) * up` NVFP4 swizzled
+quantization source slice compiles locally, passes byte parity against a
+fake-quant reference, and passes `check-config`.
 The public benchmark harness covers split and merged gate/up variants over the
 v1 decode, small-batch, prefill, and VLA/video FFN shape grid.
 
@@ -99,6 +99,7 @@ Before v1 build window:
 
 - Add memory-bandwidth benchmarks for decode, small batch, prefill, and
   VLA/video FFN hidden sizes.
+- Complete full builder build and `check-builds`.
 - Run `benchmarks/benchmark_silu_mul_quant_nvfp4.py` against a built package
   artifact.
 - Run `examples/swiglu_nvfp4_quant_block.py` against a built or Hub package.
