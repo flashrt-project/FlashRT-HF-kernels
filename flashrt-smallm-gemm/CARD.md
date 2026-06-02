@@ -16,7 +16,8 @@ This package is not ready for Hub publication yet.
 
 ## Selected First Features
 
-- NVFP4 W4A4 decode matvec with BF16 output.
+- NVFP4 W4A4 decode matvec with BF16 output. This draft wrapper currently
+  targets SM120 and `K in {4096, 12288}`.
 - NVFP4 W4A4 small-M warpsplit MMA with BF16 output.
 - Tiny FP8 fixed-family small-M GEMM kernels.
 

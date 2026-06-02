@@ -8,6 +8,7 @@ backends = ["cuda"]
 repo-id = "flashrt/flashrt-smallm-gemm"
 
 [torch]
+include = ["csrc"]
 src = [
   "torch-ext/torch_binding.cpp",
   "torch-ext/torch_binding.h",
@@ -15,9 +16,11 @@ src = [
 
 [kernel.flashrt_smallm_gemm]
 backend = "cuda"
-depends = ["torch", "cutlass_4_0"]
+depends = ["torch"]
 include = ["csrc"]
-# Restrict cuda-capabilities only after selecting source slices.
+# Restrict cuda-capabilities after builder support for SM120-only packages is
+# confirmed with Hugging Face.
 src = [
-  # Add synced source files here before renaming this file to build.toml.
+  "csrc/fp4_w4a4_matvec_sm120.cu",
+  "csrc/fp4_w4a4_matvec_sm120.cuh",
 ]
