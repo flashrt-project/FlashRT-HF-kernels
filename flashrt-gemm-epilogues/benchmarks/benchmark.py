@@ -112,3 +112,94 @@ class BiasGeluFp8QuantizeBenchmark(Benchmark):
 
     def verify_wide_n8192_m128(self) -> torch.Tensor:
         return self._reference()
+
+
+class GeluFp8QuantizeBenchmark(Benchmark):
+    seed = 3
+
+    def _setup_shape(self, m: int, n: int) -> None:
+        self.input = torch.randn((m, n), device=self.device, dtype=torch.bfloat16)
+        self.scale = torch.tensor([0.25], device=self.device, dtype=torch.float32)
+        self.out = torch.empty_like(self.input, dtype=torch.float8_e4m3fn)
+
+    def _reference(self) -> torch.Tensor:
+        y = torch.nn.functional.gelu(self.input.float(), approximate="tanh")
+        y = torch.clamp(y / self.scale.float(), -448.0, 448.0)
+        return y.to(torch.float8_e4m3fn)
+
+    def setup_decode_m1(self) -> None:
+        self._setup_shape(1, 4096)
+
+    def benchmark_decode_m1(self) -> None:
+        self.kernel.gelu_quantize_fp8_static_bf16(
+            self.input, self.scale, out=self.out
+        )
+
+    def verify_decode_m1(self) -> torch.Tensor:
+        return self._reference()
+
+    def setup_decode_m8(self) -> None:
+        self._setup_shape(8, 4096)
+
+    def benchmark_decode_m8(self) -> None:
+        self.kernel.gelu_quantize_fp8_static_bf16(
+            self.input, self.scale, out=self.out
+        )
+
+    def verify_decode_m8(self) -> torch.Tensor:
+        return self._reference()
+
+    def setup_small_m16(self) -> None:
+        self._setup_shape(16, 4096)
+
+    def benchmark_small_m16(self) -> None:
+        self.kernel.gelu_quantize_fp8_static_bf16(
+            self.input, self.scale, out=self.out
+        )
+
+    def verify_small_m16(self) -> torch.Tensor:
+        return self._reference()
+
+    def setup_prefill_m64(self) -> None:
+        self._setup_shape(64, 4096)
+
+    def benchmark_prefill_m64(self) -> None:
+        self.kernel.gelu_quantize_fp8_static_bf16(
+            self.input, self.scale, out=self.out
+        )
+
+    def verify_prefill_m64(self) -> torch.Tensor:
+        return self._reference()
+
+    def setup_prefill_m128(self) -> None:
+        self._setup_shape(128, 4096)
+
+    def benchmark_prefill_m128(self) -> None:
+        self.kernel.gelu_quantize_fp8_static_bf16(
+            self.input, self.scale, out=self.out
+        )
+
+    def verify_prefill_m128(self) -> torch.Tensor:
+        return self._reference()
+
+    def setup_wide_n8192_m16(self) -> None:
+        self._setup_shape(16, 8192)
+
+    def benchmark_wide_n8192_m16(self) -> None:
+        self.kernel.gelu_quantize_fp8_static_bf16(
+            self.input, self.scale, out=self.out
+        )
+
+    def verify_wide_n8192_m16(self) -> torch.Tensor:
+        return self._reference()
+
+    def setup_wide_n8192_m128(self) -> None:
+        self._setup_shape(128, 8192)
+
+    def benchmark_wide_n8192_m128(self) -> None:
+        self.kernel.gelu_quantize_fp8_static_bf16(
+            self.input, self.scale, out=self.out
+        )
+
+    def verify_wide_n8192_m128(self) -> torch.Tensor:
+        return self._reference()

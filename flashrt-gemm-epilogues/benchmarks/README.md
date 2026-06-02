@@ -3,8 +3,9 @@
 These scripts are Hugging Face `kernels benchmark` workloads. Each file defines
 one `kernels.benchmark.Benchmark` subclass and several named shape workloads.
 
-`benchmark.py` compares the first fused epilogue slice against the equivalent
-PyTorch eager expression across decode and prefill shapes.
+`benchmark.py` compares GELU plus FP8 quantization, with and without bias,
+against the equivalent PyTorch eager expression across decode and prefill
+shapes.
 
 `benchmark_bf16_gemm_bias_gelu.py` compares BF16 GEMM plus bias, with or
 without GELU, against the equivalent PyTorch eager expression across decode,

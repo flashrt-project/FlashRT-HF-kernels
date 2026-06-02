@@ -26,8 +26,8 @@ Timing method:
 
 ## Current Triage
 
-- The FP8 quantization epilogue kernels are consistently strong across the
-  current shape suite.
+- The FP8 quantization epilogue kernels are strong across the current shape
+  suite after row/column tile policy tuning.
 - The BF16 GEMM epilogue wrapper is shape-sensitive. `M=1` and `M=64` bias
   are strong against PyTorch eager, but `M=8`, `M=16`, and `M=128` should not
   be promoted as headline shapes yet.
@@ -58,20 +58,27 @@ Timing method:
 
 | API | Label | Shape | Fused us | PyTorch eager us | Speedup | GB/s | Status |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `bias_gelu_quantize_fp8_static_bf16` | `decode_m1` | `(1,4096)` | 2.520 | 30.416 | 12.07x | 8.1 | promote |
-| `channel_scale_quantize_fp8_static_bf16` | `decode_m1` | `(1,4096)` | 3.050 | 25.989 | 8.52x | 6.7 | promote |
-| `bias_gelu_quantize_fp8_static_bf16` | `decode_m8` | `(8,4096)` | 4.126 | 29.525 | 7.16x | 39.7 | promote |
-| `channel_scale_quantize_fp8_static_bf16` | `decode_m8` | `(8,4096)` | 3.238 | 24.806 | 7.66x | 50.6 | promote |
-| `bias_gelu_quantize_fp8_static_bf16` | `small_m16` | `(16,4096)` | 2.891 | 26.492 | 9.16x | 113.3 | promote |
-| `channel_scale_quantize_fp8_static_bf16` | `small_m16` | `(16,4096)` | 2.825 | 25.250 | 8.94x | 116.0 | promote |
-| `bias_gelu_quantize_fp8_static_bf16` | `prefill_m64` | `(64,4096)` | 4.105 | 29.385 | 7.16x | 319.3 | promote |
-| `channel_scale_quantize_fp8_static_bf16` | `prefill_m64` | `(64,4096)` | 3.305 | 21.547 | 6.52x | 396.5 | promote |
-| `bias_gelu_quantize_fp8_static_bf16` | `prefill_m128` | `(128,4096)` | 4.135 | 25.951 | 6.28x | 634.0 | promote |
-| `channel_scale_quantize_fp8_static_bf16` | `prefill_m128` | `(128,4096)` | 4.122 | 20.484 | 4.97x | 635.9 | promote |
-| `bias_gelu_quantize_fp8_static_bf16` | `wide_n8192_m16` | `(16,8192)` | 2.582 | 24.660 | 9.55x | 253.8 | promote |
-| `channel_scale_quantize_fp8_static_bf16` | `wide_n8192_m16` | `(16,8192)` | 2.576 | 19.043 | 7.39x | 254.4 | promote |
-| `bias_gelu_quantize_fp8_static_bf16` | `wide_n8192_m128` | `(128,8192)` | 6.183 | 29.472 | 4.77x | 848.0 | promote |
-| `channel_scale_quantize_fp8_static_bf16` | `wide_n8192_m128` | `(128,8192)` | 4.149 | 25.826 | 6.22x | 1263.5 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `decode_m1` | `(1,4096)` | 2.601 | 22.552 | 8.67x | 7.9 | promote |
+| `gelu_quantize_fp8_static_bf16` | `decode_m1` | `(1,4096)` | 2.627 | 16.649 | 6.34x | 4.7 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `decode_m1` | `(1,4096)` | 2.587 | 19.353 | 7.48x | 7.9 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `decode_m8` | `(8,4096)` | 2.596 | 22.399 | 8.63x | 63.1 | promote |
+| `gelu_quantize_fp8_static_bf16` | `decode_m8` | `(8,4096)` | 2.507 | 16.533 | 6.59x | 39.2 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `decode_m8` | `(8,4096)` | 2.578 | 19.358 | 7.51x | 63.5 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `small_m16` | `(16,4096)` | 2.549 | 22.147 | 8.69x | 128.6 | promote |
+| `gelu_quantize_fp8_static_bf16` | `small_m16` | `(16,4096)` | 2.522 | 16.645 | 6.60x | 78.0 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `small_m16` | `(16,4096)` | 2.585 | 19.297 | 7.46x | 126.7 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `prefill_m64` | `(64,4096)` | 2.550 | 22.621 | 8.87x | 514.0 | promote |
+| `gelu_quantize_fp8_static_bf16` | `prefill_m64` | `(64,4096)` | 2.442 | 16.748 | 6.86x | 322.0 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `prefill_m64` | `(64,4096)` | 2.516 | 19.551 | 7.77x | 521.0 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `prefill_m128` | `(128,4096)` | 4.120 | 22.879 | 5.55x | 636.3 | promote |
+| `gelu_quantize_fp8_static_bf16` | `prefill_m128` | `(128,4096)` | 4.115 | 16.562 | 4.03x | 382.3 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `prefill_m128` | `(128,4096)` | 4.117 | 20.454 | 4.97x | 636.8 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `wide_n8192_m16` | `(16,8192)` | 2.538 | 22.211 | 8.75x | 258.2 | promote |
+| `gelu_quantize_fp8_static_bf16` | `wide_n8192_m16` | `(16,8192)` | 2.453 | 16.174 | 6.59x | 160.3 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `wide_n8192_m16` | `(16,8192)` | 2.570 | 19.264 | 7.50x | 255.0 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `wide_n8192_m128` | `(128,8192)` | 4.131 | 29.475 | 7.14x | 1269.2 | promote |
+| `gelu_quantize_fp8_static_bf16` | `wide_n8192_m128` | `(128,8192)` | 4.131 | 21.377 | 5.17x | 761.5 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `wide_n8192_m128` | `(128,8192)` | 4.128 | 25.859 | 6.26x | 1270.2 | promote |
 
 First use of a new `(M,N,K,epilogue)` GEMM shape pays an autotune cost. Later
 calls reuse the cached algorithm.
@@ -81,6 +88,8 @@ calls reuse the cached algorithm.
 - Add cuBLASLt/vendor-library baseline reporting for GEMM epilogue shapes.
 - Investigate tile/algo policy for weak GEMM shapes before making broad public
   claims.
+- Continue tile policy tuning to raise the lower-bound throughput for large
+  `M=128,N=4096` FP8 quantization shapes.
 - Add VLA/video-specific projection shape groups once extracted from real
   FlashRT traces.
 - Compare against the uploaded HF kernel artifact once the package is uploaded.

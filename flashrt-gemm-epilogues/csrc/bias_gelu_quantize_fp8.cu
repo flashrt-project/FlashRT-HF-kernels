@@ -6,6 +6,8 @@
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 
+#include <cstdlib>
+
 namespace flash_rt {
 namespace quantize {
 namespace {
@@ -22,25 +24,49 @@ __global__ void bias_gelu_quantize_fp8_static_bf16_kernel(
     const __nv_bfloat16* __restrict__ bias,
     __nv_fp8_e4m3* __restrict__ out,
     const float* __restrict__ act_scale_ptr,
-    long long total,
+    long long tiles_per_row,
     int N,
     int has_bias) {
-  const long long idx =
-      static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
-  if (idx >= total) {
+  const long long tile = static_cast<long long>(blockIdx.x);
+  const long long row = tile / tiles_per_row;
+  const long long col_tile = tile - row * tiles_per_row;
+  const int col = static_cast<int>(col_tile * blockDim.x + threadIdx.x);
+  if (col >= N) {
     return;
   }
 
+  const long long idx = row * static_cast<long long>(N) + col;
   float v = __bfloat162float(in[idx]);
   if (has_bias) {
-    const int n = static_cast<int>(idx % N);
-    v += __bfloat162float(bias[n]);
+    v += __bfloat162float(bias[col]);
   }
 
   const float g = gelu_tanh(v);
   float q = g * (1.0f / *act_scale_ptr);
   q = fminf(fmaxf(q, -kFp8Max), kFp8Max);
   out[idx] = __nv_fp8_e4m3(q);
+}
+
+int quant_block_size(long long M, int N) {
+  const char* value = std::getenv("FLASHRT_QUANT_BLOCK_SIZE");
+  if (value != nullptr) {
+    const int block_size = std::atoi(value);
+    if (block_size == 128 || block_size == 256 || block_size == 512 ||
+        block_size == 1024) {
+      return block_size;
+    }
+  }
+
+  if (N >= 8192) {
+    return M <= 16 ? 128 : 256;
+  }
+  if (M <= 8) {
+    return 128;
+  }
+  if (M <= 64) {
+    return 512;
+  }
+  return 256;
 }
 
 }  // namespace
@@ -58,9 +84,10 @@ void bias_gelu_quantize_fp8_static_bf16(
     return;
   }
 
-  constexpr int block_sz = 256;
-  const unsigned grid =
-      static_cast<unsigned>((total + block_sz - 1) / block_sz);
+  const int block_sz = quant_block_size(M, N);
+  const long long tiles_per_row =
+      (static_cast<long long>(N) + block_sz - 1) / block_sz;
+  const unsigned grid = static_cast<unsigned>(M * tiles_per_row);
   const int has_bias = bias_bf16 != nullptr ? 1 : 0;
 
   bias_gelu_quantize_fp8_static_bf16_kernel<<<grid, block_sz, 0, stream>>>(
@@ -68,7 +95,7 @@ void bias_gelu_quantize_fp8_static_bf16(
       reinterpret_cast<const __nv_bfloat16*>(bias_bf16),
       reinterpret_cast<__nv_fp8_e4m3*>(out_fp8),
       act_scale,
-      total,
+      tiles_per_row,
       N,
       has_bias);
 }

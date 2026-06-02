@@ -30,6 +30,10 @@ Local edits:
   public API.
 - Added Tensor-based Torch op bindings.
 - Added no-bias public wrapper around the same launcher.
+- Reworked FP8 quantize launchers from linear element indexing to row/column
+  tile indexing to remove per-element `% N/%K` broadcast lookup overhead.
+- Added shape-aware FP8 quantize block-size policy with
+  `FLASHRT_QUANT_BLOCK_SIZE` override for local tile sweeps.
 - Added the first full GEMM wrapper:
   `bf16_gemm_bias_gelu(a, b, bias, out=None)`.
 - Added the adjacent no-activation wrapper:
