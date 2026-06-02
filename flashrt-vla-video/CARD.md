@@ -12,15 +12,16 @@ tags:
 
 Reusable VLA, vision, video, and diffusion kernels from FlashRT.
 
-The first implemented slice targets decode-time Q/K post-processing:
+The first implemented slice targets Q/K post-processing:
 
 - `q_norm_rope_bf16`: per-head RMSNorm plus rotate-half RoPE for Q staging.
 - `k_norm_rope_v_cache_bf16`: per-head RMSNorm plus rotate-half RoPE for K,
   plus V cache copy.
+- `qkv_split_norm_rope_bf16`: packed QKV split plus Q/K RMSNorm and
+  interleaved RoPE for video/VLA token blocks.
 
 ## Planned Features
 
-- Generic benchmark tables for Q/K decode post-processing.
 - Patch embedding data movement and bias/position fusion.
 - Video and 3D convolution low-bit helper kernels.
 - DiT/VAE-style normalization and quantization helpers.
@@ -28,4 +29,4 @@ The first implemented slice targets decode-time Q/K post-processing:
 ## Hardware
 
 CUDA GPU with BF16 support. The current implementation is optimized for
-head_dim=128 decode paths.
+head_dim=128 decode and video/VLA token paths.

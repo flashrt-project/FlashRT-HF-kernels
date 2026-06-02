@@ -5,9 +5,13 @@ Reusable VLA, vision, video, and diffusion kernels from FlashRT.
 This package should focus on gaps that are not already covered by common LLM
 attention, MoE, and quantization packages.
 
-The first buildable slice targets decode-time Q/K post-processing:
-per-head RMSNorm, rotate-half RoPE, and staging/cache writes. This is a
-small-batch latency path common in LLM, VLA, and vision-language decoders.
+The first buildable slice targets Q/K post-processing:
+
+- Decode-time per-head RMSNorm, rotate-half RoPE, and staging/cache writes.
+- Video/VLA packed-QKV split, Q/K RMSNorm, and interleaved RoPE.
+
+These are launch-bound paths common in LLM, VLA, vision-language, and video
+decoders.
 
 ## Scope
 
@@ -15,6 +19,7 @@ Implemented APIs:
 
 - `q_norm_rope_bf16`
 - `k_norm_rope_v_cache_bf16`
+- `qkv_split_norm_rope_bf16`
 
 Future candidate APIs:
 
@@ -69,4 +74,14 @@ sin = torch.randn((64,), device="cuda", dtype=torch.bfloat16)
 
 q_stage = ops.q_norm_rope_bf16(q, weight, cos, sin)
 k_cache, v_cache = ops.k_norm_rope_v_cache_bf16(k, v, weight, cos, sin)
+
+packed_qkv = torch.randn((1, 256, 3 * 24 * 128), device="cuda", dtype=torch.bfloat16)
+norm_q = torch.ones((24 * 128,), device="cuda", dtype=torch.bfloat16)
+norm_k = torch.ones((24 * 128,), device="cuda", dtype=torch.bfloat16)
+freqs_re = torch.randn((4096, 64), device="cuda", dtype=torch.float32)
+freqs_im = torch.randn((4096, 64), device="cuda", dtype=torch.float32)
+
+q_video, k_video = ops.qkv_split_norm_rope_bf16(
+    packed_qkv, norm_q, norm_k, freqs_re, freqs_im, heads=24, head_dim=128
+)
 ```

@@ -18,6 +18,9 @@ Environment:
 - `q_norm_rope_bf16` and `k_norm_rope_v_cache_bf16` are the first showcase
   candidates. They show stable 29-34x speedups versus PyTorch eager for
   head_dim=128 decode post-processing.
+- `qkv_split_norm_rope_bf16` is the next package-local showcase candidate. It
+  shows 21-38x speedups versus PyTorch eager for packed video/VLA QKV
+  post-processing.
 - NVFP4 fused quantization epilogues are useful but currently measure in the
   2.5-5.2x range versus PyTorch eager plus FlashRT quantization, so they are
   not the first headline if the bar is a 30x-class kernel.
@@ -57,3 +60,16 @@ The package-local source extension was compiled with
 | heads=1 | 2.639 | 71.105 | 26.95x | 2.564 | 73.607 | 28.71x |
 | heads=8 | 2.464 | 71.944 | 29.20x | 2.555 | 74.246 | 29.06x |
 | heads=48 | 2.454 | 75.614 | 30.81x | 2.667 | 77.466 | 29.05x |
+
+## Package-Local QKV Split + Norm + RoPE Smoke
+
+Compiled with the same package-local source extension. Baseline is PyTorch
+eager split + RMSNorm + interleaved RoPE.
+
+| Tokens | Fused us | PyTorch eager us | Speedup |
+| ---: | ---: | ---: | ---: |
+| 4 | 4.473 | 168.442 | 37.66x |
+| 64 | 4.856 | 162.639 | 33.49x |
+| 256 | 6.209 | 158.634 | 25.55x |
+| 1024 | 10.812 | 229.836 | 21.26x |
+| 2520 | 20.552 | 504.120 | 24.53x |

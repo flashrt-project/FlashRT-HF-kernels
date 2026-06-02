@@ -59,7 +59,58 @@ def k_norm_rope_v_cache_bf16(
     return k_out, v_out
 
 
+def qkv_split_norm_rope_bf16(
+    packed_qkv: torch.Tensor,
+    norm_q_weight: torch.Tensor,
+    norm_k_weight: torch.Tensor,
+    freqs_re: torch.Tensor,
+    freqs_im: torch.Tensor,
+    *,
+    heads: int,
+    head_dim: int,
+    seq_len: Optional[int] = None,
+    q_out: Optional[torch.Tensor] = None,
+    k_out: Optional[torch.Tensor] = None,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Split packed QKV, RMS-normalize Q/K, and apply interleaved RoPE.
+
+    ``packed_qkv`` must be contiguous BF16 with shape
+    ``(batch, tokens, 3 * heads * head_dim)``. ``norm_q_weight`` and
+    ``norm_k_weight`` must have shape ``(heads * head_dim,)``. ``freqs_re`` and
+    ``freqs_im`` must be contiguous FP32 tensors with shape
+    ``(seq_len_table, head_dim // 2)``. Outputs have shape
+    ``(batch, tokens, heads, head_dim)``.
+    """
+
+    if seq_len is None:
+        seq_len = packed_qkv.shape[1]
+    if q_out is None:
+        q_out = torch.empty(
+            (packed_qkv.shape[0], packed_qkv.shape[1], heads, head_dim),
+            device=packed_qkv.device,
+            dtype=packed_qkv.dtype,
+        )
+    if k_out is None:
+        k_out = torch.empty_like(q_out)
+    ops.qkv_split_norm_rope_bf16(
+        packed_qkv,
+        norm_q_weight,
+        norm_k_weight,
+        freqs_re,
+        freqs_im,
+        q_out,
+        k_out,
+        heads,
+        head_dim,
+        seq_len,
+        eps,
+    )
+    return q_out, k_out
+
+
 __all__ = [
     "q_norm_rope_bf16",
     "k_norm_rope_v_cache_bf16",
+    "qkv_split_norm_rope_bf16",
 ]

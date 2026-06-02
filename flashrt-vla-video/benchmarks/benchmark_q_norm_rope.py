@@ -32,6 +32,33 @@ def _reference_norm_rope(x, weight, cos, sin, eps=1e-6):
     return torch.cat([out_lo, out_hi], dim=-1).to(torch.bfloat16)
 
 
+def _reference_qkv_split_norm_rope(
+    packed_qkv, norm_q_weight, norm_k_weight, freqs_re, freqs_im, heads, head_dim, eps=1e-6
+):
+    batch, tokens, _ = packed_qkv.shape
+    dim = heads * head_dim
+    q = packed_qkv[..., :dim].reshape(batch, tokens, heads, head_dim)
+    k = packed_qkv[..., dim : 2 * dim].reshape(batch, tokens, heads, head_dim)
+    qf = q.float()
+    kf = k.float()
+    qn = qf * torch.rsqrt((qf * qf).mean(dim=(-2, -1), keepdim=True) + eps)
+    kn = kf * torch.rsqrt((kf * kf).mean(dim=(-2, -1), keepdim=True) + eps)
+    qn = (qn * norm_q_weight.reshape(1, 1, heads, head_dim).float()).to(torch.bfloat16)
+    kn = (kn * norm_k_weight.reshape(1, 1, heads, head_dim).float()).to(torch.bfloat16)
+
+    def rope(x):
+        xr = x[..., 0::2].float()
+        xi = x[..., 1::2].float()
+        fr = freqs_re[:tokens][None, :, None, :]
+        fi = freqs_im[:tokens][None, :, None, :]
+        out = torch.empty_like(x)
+        out[..., 0::2] = (xr * fr - xi * fi).to(torch.bfloat16)
+        out[..., 1::2] = (xr * fi + xi * fr).to(torch.bfloat16)
+        return out
+
+    return rope(qn), rope(kn)
+
+
 class QNormRopeBenchmark(Benchmark):
     seed = 11
 
@@ -113,6 +140,123 @@ class QNormRopeBenchmark(Benchmark):
         )
 
     def verify_heads48(self):
+        return self._reference()
+
+
+class QKVSplitNormRopeBenchmark(Benchmark):
+    seed = 13
+
+    def _setup_tokens(self, tokens: int) -> None:
+        self.heads = 24
+        self.head_dim = 128
+        dim = self.heads * self.head_dim
+        self.packed_qkv = torch.randn(
+            (1, tokens, 3 * dim), device=self.device, dtype=torch.bfloat16
+        ).contiguous()
+        self.norm_q_weight = torch.randn(
+            (dim,), device=self.device, dtype=torch.bfloat16
+        ).contiguous()
+        self.norm_k_weight = torch.randn(
+            (dim,), device=self.device, dtype=torch.bfloat16
+        ).contiguous()
+        self.freqs_re = torch.randn(
+            (4096, self.head_dim // 2), device=self.device, dtype=torch.float32
+        ).contiguous()
+        self.freqs_im = torch.randn(
+            (4096, self.head_dim // 2), device=self.device, dtype=torch.float32
+        ).contiguous()
+        self.q_out = torch.empty(
+            (1, tokens, self.heads, self.head_dim),
+            device=self.device,
+            dtype=torch.bfloat16,
+        )
+        self.k_out = torch.empty_like(self.q_out)
+
+    def _reference(self):
+        return _reference_qkv_split_norm_rope(
+            self.packed_qkv,
+            self.norm_q_weight,
+            self.norm_k_weight,
+            self.freqs_re,
+            self.freqs_im,
+            self.heads,
+            self.head_dim,
+        )[0]
+
+    def setup_tokens64(self):
+        self._setup_tokens(64)
+
+    def benchmark_tokens64(self):
+        self.kernel.qkv_split_norm_rope_bf16(
+            self.packed_qkv,
+            self.norm_q_weight,
+            self.norm_k_weight,
+            self.freqs_re,
+            self.freqs_im,
+            heads=self.heads,
+            head_dim=self.head_dim,
+            q_out=self.q_out,
+            k_out=self.k_out,
+        )
+
+    def verify_tokens64(self):
+        return self._reference()
+
+    def setup_tokens256(self):
+        self._setup_tokens(256)
+
+    def benchmark_tokens256(self):
+        self.kernel.qkv_split_norm_rope_bf16(
+            self.packed_qkv,
+            self.norm_q_weight,
+            self.norm_k_weight,
+            self.freqs_re,
+            self.freqs_im,
+            heads=self.heads,
+            head_dim=self.head_dim,
+            q_out=self.q_out,
+            k_out=self.k_out,
+        )
+
+    def verify_tokens256(self):
+        return self._reference()
+
+    def setup_tokens1024(self):
+        self._setup_tokens(1024)
+
+    def benchmark_tokens1024(self):
+        self.kernel.qkv_split_norm_rope_bf16(
+            self.packed_qkv,
+            self.norm_q_weight,
+            self.norm_k_weight,
+            self.freqs_re,
+            self.freqs_im,
+            heads=self.heads,
+            head_dim=self.head_dim,
+            q_out=self.q_out,
+            k_out=self.k_out,
+        )
+
+    def verify_tokens1024(self):
+        return self._reference()
+
+    def setup_tokens2520(self):
+        self._setup_tokens(2520)
+
+    def benchmark_tokens2520(self):
+        self.kernel.qkv_split_norm_rope_bf16(
+            self.packed_qkv,
+            self.norm_q_weight,
+            self.norm_k_weight,
+            self.freqs_re,
+            self.freqs_im,
+            heads=self.heads,
+            head_dim=self.head_dim,
+            q_out=self.q_out,
+            k_out=self.k_out,
+        )
+
+    def verify_tokens2520(self):
         return self._reference()
 
 
