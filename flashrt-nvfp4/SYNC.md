@@ -13,7 +13,7 @@ Selected source areas:
 
 ## First Source Slice
 
-Recommended first APIs:
+Implemented first APIs:
 
 ```text
 nvfp4_sf_linear_to_swizzled(scales, rows, cols, is_weight: bool) -> Tensor

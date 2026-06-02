@@ -51,8 +51,8 @@ and at least one downstream HF-style calling example should all be documented.
 
 ## Repository Status
 
-`flashrt-gemm-epilogues` and `flashrt-vla-video` are the first buildable
-packages. The remaining draft package directories now carry concrete first
+`flashrt-gemm-epilogues`, `flashrt-vla-video`, and `flashrt-nvfp4` are the first
+buildable packages. Remaining draft package directories carry concrete first
 kernel selections, but intentionally keep `build.toml.draft` until the selected
 source slice has Tensor-based bindings, tests, benchmarks, and a passing local
 build.

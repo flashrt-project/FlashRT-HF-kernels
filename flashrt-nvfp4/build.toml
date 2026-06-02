@@ -7,12 +7,8 @@ backends = ["cuda"]
 [general.hub]
 repo-id = "flashrt/flashrt-nvfp4"
 
-[general.cuda]
-# NVFP4 paths may require recent CUDA toolkits. Set after selecting the first
-# buildable source slice.
-# minver = "12.8"
-
 [torch]
+include = ["csrc"]
 src = [
   "torch-ext/torch_binding.cpp",
   "torch-ext/torch_binding.h",
@@ -20,9 +16,9 @@ src = [
 
 [kernel.flashrt_nvfp4]
 backend = "cuda"
-depends = ["torch", "cutlass_4_0"]
+depends = ["torch"]
 include = ["csrc"]
-# cuda-capabilities = ["10.0", "12.0"]
 src = [
-  # Add synced source files here before renaming this file to build.toml.
+  "csrc/nvfp4_sf_reshape_sm120.cu",
+  "csrc/nvfp4_sf_reshape_sm120.cuh",
 ]

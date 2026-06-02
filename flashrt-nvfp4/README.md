@@ -1,25 +1,28 @@
 # flashrt-nvfp4
 
-Draft package for FlashRT NVFP4 primitives, layout conversion helpers, and
-selected low-bit GEMM surfaces.
+Package for FlashRT NVFP4 primitives, layout conversion helpers, and selected
+low-bit GEMM surfaces.
 
 This package should expose data format and layout operations that other kernel
 packages can depend on or mirror.
 
 ## Scope
 
-Selected first APIs:
+Current APIs:
 
 - `nvfp4_sf_linear_to_swizzled`
 - `nvfp4_sf_swizzled_bytes`
+
+Planned APIs:
+
 - `nvfp4_linear_bias_gelu_fp4out_sm120`
 - `nvfp4_linear_bias_gelu_bf16out_sm120`
 - `nvfp4_linear_streamk_bias_bf16out_sm120`
 
-The first source slice should start with the scale-factor layout helpers,
-because they are small, reusable, and make the fused GEMM outputs inspectable.
-The GEMM epilogue surfaces should follow once CUTLASS include requirements and
-Tensor binding constraints are isolated.
+The first source slice is the scale-factor layout helper, because it is small,
+reusable, and makes the fused GEMM outputs inspectable. The GEMM epilogue
+surfaces follow once CUTLASS include requirements and Tensor binding
+constraints are isolated.
 
 ## Non-Goals
 
