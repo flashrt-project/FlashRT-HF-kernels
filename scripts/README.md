@@ -4,6 +4,8 @@ Repository-level helper scripts for the v1 batch.
 
 Current scripts:
 
+- `correctness_audit.py`: blocks release builds while known accuracy gaps are
+  still documented.
 - `prebuild_check.py`: checks v1 package structure, `build.toml` source lists,
   tracked internal directories, stale build artifacts, and optionally
   `kernel-builder-docker check-config`.
@@ -14,6 +16,7 @@ Example:
 
 ```bash
 python scripts/prebuild_check.py --check-config
+python scripts/correctness_audit.py
 python scripts/release_build_plan.py
 ```
 

@@ -42,6 +42,8 @@ The first public version has four equal blocks:
 
 Before uploading the v1 batch to the Hub:
 
+- `python scripts/correctness_audit.py` passes. This is the first gate; do not
+  start the full build window while it reports blockers.
 - `internal-docs/` and `internal-tests/` remain ignored and untracked.
 - Every public package has no committed build output, stale `result` symlink, or
   `__pycache__`.
@@ -79,3 +81,5 @@ Before presenting v1 as a strong community update:
 Use source-extension tests, package tests, tile sweeps, and benchmarks as the
 normal loop. Full Nix/kernel-builder builds are release validation jobs and
 should be run after a batch of source and documentation changes has settled.
+Benchmark speedups are recorded only after the corresponding correctness gate
+passes.

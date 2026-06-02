@@ -22,6 +22,7 @@ PACKAGES = [
 
 def command_plan(builder: str) -> list[tuple[str, list[str]]]:
     commands: list[tuple[str, list[str]]] = [
+        (".", ["python", "scripts/correctness_audit.py"]),
         (".", ["python", "scripts/prebuild_check.py", "--check-config"]),
     ]
     for pkg in PACKAGES:

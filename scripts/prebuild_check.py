@@ -25,12 +25,14 @@ V1_PACKAGES = [
 ]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",
+    "docs/correctness-gating.md",
     "docs/release-gating.md",
     "docs/release-runbook.md",
     "docs/tile-and-shape-coverage.md",
     "docs/v1-batch-plan.md",
 ]
 REQUIRED_SCRIPTS = [
+    "scripts/correctness_audit.py",
     "scripts/prebuild_check.py",
     "scripts/release_build_plan.py",
 ]

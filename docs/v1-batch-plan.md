@@ -30,6 +30,7 @@ of v1.
 8. Only then run full `kernel-builder` builds for all promoted packages.
 
 Benchmark baseline rules are defined in `docs/benchmark-baselines.md`.
+Correctness gates are defined in `docs/correctness-gating.md`.
 
 ## Package Checklist
 
@@ -113,11 +114,12 @@ Before v1 build window:
 Run this only after every v1 package has stable source, tests, benchmarks, and
 examples. The detailed procedure is in `docs/release-runbook.md`:
 
-1. Run `python scripts/prebuild_check.py --check-config`.
-2. Clean any stale build outputs, result symlinks, or cache warnings reported by
+1. Run `python scripts/correctness_audit.py`.
+2. Run `python scripts/prebuild_check.py --check-config`.
+3. Clean any stale build outputs, result symlinks, or cache warnings reported by
    the prebuild check.
-3. Run full `kernel-builder build` for all promoted packages.
-4. Run `kernel-builder check-builds`.
-5. Run package tests, benchmark CLIs, and examples against built artifacts.
-6. Update every `VALIDATION.md` with exact variants, hardware, and failures.
-7. Push one final v1-ready commit before upload.
+4. Run full `kernel-builder build` for all promoted packages.
+5. Run `kernel-builder check-builds`.
+6. Run package tests, benchmark CLIs, and examples against built artifacts.
+7. Update every `VALIDATION.md` with exact variants, hardware, and failures.
+8. Push one final v1-ready commit before upload.

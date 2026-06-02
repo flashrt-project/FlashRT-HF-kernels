@@ -8,6 +8,7 @@ cheap prebuild checks from full `kernel-builder` builds.
 Run these during normal development:
 
 ```bash
+python scripts/correctness_audit.py
 python scripts/prebuild_check.py --check-config
 python -m py_compile scripts/prebuild_check.py
 git diff --check
@@ -15,6 +16,7 @@ git diff --check
 
 Expected result:
 
+- `correctness_audit.py` has no blockers;
 - no tracked files under `internal-docs/` or `internal-tests/`;
 - no `result`, `build`, or `dist` artifacts in package directories;
 - every v1 package has `build.toml`, `flake.nix`, `flake.lock`, tests,
@@ -26,6 +28,7 @@ Expected result:
 Run this only after source, tests, benchmark scripts, and docs have settled:
 
 ```bash
+python scripts/correctness_audit.py
 python scripts/prebuild_check.py --check-config
 ```
 
