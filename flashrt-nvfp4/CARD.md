@@ -1,5 +1,6 @@
 ---
 tags:
+- flashrt
 - kernel
 - cuda
 - nvfp4
@@ -19,8 +20,8 @@ The first buildable slice exposes NVFP4 scale-factor layout conversion.
 
 ## Planned Features
 
-- SM120/SM120a NVFP4 GEMM with fused bias+GELU and BF16 output.
-- SM120/SM120a NVFP4 GEMM with fused bias+GELU and FP4 output quantization.
+- CUDA 12.8+ SM120 NVFP4 GEMM with fused bias+GELU and BF16 output.
+- CUDA 12.8+ SM120 NVFP4 GEMM with fused bias+GELU and FP4 output quantization.
 - Stream-K down-projection GEMM with optional bias.
 
 ## Status
@@ -28,6 +29,8 @@ The first buildable slice exposes NVFP4 scale-factor layout conversion.
 The fused GEMM epilogues follow after CUTLASS dependency isolation.
 
 Current validation status is recorded in `VALIDATION.md`.
+
+Current v1 build scope is CUDA 12.8+ SM120.
 
 See `examples/nvfp4_scale_factor_layout.py` for a minimal layout-conversion
 example.

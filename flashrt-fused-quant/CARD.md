@@ -1,5 +1,6 @@
 ---
 tags:
+- flashrt
 - kernel
 - cuda
 - quantization
@@ -27,3 +28,5 @@ This package is not ready for Hub publication yet.
 This package stays draft until the activation+quant path has public benchmark
 grids, memory-bandwidth results, and full HF builder validation. Tensor
 bindings and fake-quant byte-parity tests exist for the first source slice.
+
+Current v1 build scope is CUDA 12.8+ SM120.
