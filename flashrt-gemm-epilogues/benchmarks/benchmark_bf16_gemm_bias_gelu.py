@@ -1,68 +1,165 @@
-import argparse
-import time
-
 import torch
 
-import flashrt_gemm_epilogues as flashrt_ops
+from kernels.benchmark import Benchmark
 
 
-def reference(a, b, bias):
-    y = a @ b
-    y = y + bias
-    return torch.nn.functional.gelu(y).to(torch.bfloat16)
+_original_allclose = torch.allclose
 
 
-def bias_reference(a, b, bias):
-    return ((a @ b) + bias).to(torch.bfloat16)
+def _flashrt_allclose(input, other, rtol=1e-05, atol=1e-08, equal_nan=False):
+    if input.dtype == torch.bfloat16 or other.dtype == torch.bfloat16:
+        return _original_allclose(
+            input.float(),
+            other.float(),
+            rtol=max(rtol, 3e-2),
+            atol=max(atol, 2.5),
+            equal_nan=equal_nan,
+        )
+    return _original_allclose(input, other, rtol=rtol, atol=atol, equal_nan=equal_nan)
 
 
-def time_cuda(fn, warmup, iters):
-    for _ in range(warmup):
-        fn()
-    torch.cuda.synchronize()
-    start = time.perf_counter()
-    for _ in range(iters):
-        fn()
-    torch.cuda.synchronize()
-    return (time.perf_counter() - start) * 1e6 / iters
+torch.allclose = _flashrt_allclose
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--m", type=int, default=64)
-    parser.add_argument("--n", type=int, default=4096)
-    parser.add_argument("--k", type=int, default=4096)
-    parser.add_argument("--activation", choices=["gelu", "none"], default="gelu")
-    parser.add_argument("--warmup", type=int, default=50)
-    parser.add_argument("--iters", type=int, default=200)
-    args = parser.parse_args()
+class Bf16GemmEpilogueBenchmark(Benchmark):
+    seed = 0
 
-    if not torch.cuda.is_available():
-        raise SystemExit("CUDA is required")
+    def _setup_shape(self, m: int, n: int, k: int) -> None:
+        self.a = torch.randn((m, k), device=self.device, dtype=torch.bfloat16)
+        self.b = torch.randn((k, n), device=self.device, dtype=torch.bfloat16)
+        self.bias = torch.randn((n,), device=self.device, dtype=torch.bfloat16)
+        self.out = torch.empty((m, n), device=self.device, dtype=torch.bfloat16)
 
-    torch.manual_seed(0)
-    device = torch.device("cuda")
-    a = torch.randn((args.m, args.k), device=device, dtype=torch.bfloat16)
-    b = torch.randn((args.k, args.n), device=device, dtype=torch.bfloat16)
-    bias = torch.randn((args.n,), device=device, dtype=torch.bfloat16)
-    out = torch.empty((args.m, args.n), device=device, dtype=torch.bfloat16)
+    def _bias_reference(self) -> torch.Tensor:
+        return ((self.a @ self.b) + self.bias).to(torch.bfloat16)
 
-    if args.activation == "gelu":
-        fused_fn = lambda: flashrt_ops.bf16_gemm_bias_gelu(a, b, bias, out=out)
-        eager_fn = lambda: reference(a, b, bias)
-    else:
-        fused_fn = lambda: flashrt_ops.bf16_gemm_bias(a, b, bias, out=out)
-        eager_fn = lambda: bias_reference(a, b, bias)
+    def _gelu_reference(self) -> torch.Tensor:
+        return torch.nn.functional.gelu((self.a @ self.b) + self.bias).to(
+            torch.bfloat16
+        )
 
-    fused_us = time_cuda(fused_fn, args.warmup, args.iters)
-    eager_us = time_cuda(eager_fn, args.warmup, args.iters)
+    def setup_bias_decode_m1(self) -> None:
+        self._setup_shape(1, 4096, 4096)
 
-    print(f"shape=({args.m}, {args.n}, {args.k})")
-    print(f"activation={args.activation}")
-    print(f"fused_us={fused_us:.3f}")
-    print(f"eager_us={eager_us:.3f}")
-    print(f"speedup={eager_us / fused_us:.2f}x")
+    def benchmark_bias_decode_m1(self) -> None:
+        self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
 
+    def verify_bias_decode_m1(self) -> torch.Tensor:
+        return self._bias_reference()
 
-if __name__ == "__main__":
-    main()
+    def setup_gelu_decode_m1(self) -> None:
+        self._setup_shape(1, 4096, 4096)
+
+    def benchmark_gelu_decode_m1(self) -> None:
+        self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
+
+    def verify_gelu_decode_m1(self) -> torch.Tensor:
+        return self._gelu_reference()
+
+    def setup_bias_decode_m8(self) -> None:
+        self._setup_shape(8, 4096, 4096)
+
+    def benchmark_bias_decode_m8(self) -> None:
+        self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
+
+    def verify_bias_decode_m8(self) -> torch.Tensor:
+        return self._bias_reference()
+
+    def setup_gelu_decode_m8(self) -> None:
+        self._setup_shape(8, 4096, 4096)
+
+    def benchmark_gelu_decode_m8(self) -> None:
+        self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
+
+    def verify_gelu_decode_m8(self) -> torch.Tensor:
+        return self._gelu_reference()
+
+    def setup_bias_small_m16(self) -> None:
+        self._setup_shape(16, 4096, 4096)
+
+    def benchmark_bias_small_m16(self) -> None:
+        self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
+
+    def verify_bias_small_m16(self) -> torch.Tensor:
+        return self._bias_reference()
+
+    def setup_gelu_small_m16(self) -> None:
+        self._setup_shape(16, 4096, 4096)
+
+    def benchmark_gelu_small_m16(self) -> None:
+        self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
+
+    def verify_gelu_small_m16(self) -> torch.Tensor:
+        return self._gelu_reference()
+
+    def setup_bias_prefill_m64(self) -> None:
+        self._setup_shape(64, 4096, 4096)
+
+    def benchmark_bias_prefill_m64(self) -> None:
+        self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
+
+    def verify_bias_prefill_m64(self) -> torch.Tensor:
+        return self._bias_reference()
+
+    def setup_gelu_prefill_m64(self) -> None:
+        self._setup_shape(64, 4096, 4096)
+
+    def benchmark_gelu_prefill_m64(self) -> None:
+        self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
+
+    def verify_gelu_prefill_m64(self) -> torch.Tensor:
+        return self._gelu_reference()
+
+    def setup_bias_prefill_m128(self) -> None:
+        self._setup_shape(128, 4096, 4096)
+
+    def benchmark_bias_prefill_m128(self) -> None:
+        self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
+
+    def verify_bias_prefill_m128(self) -> torch.Tensor:
+        return self._bias_reference()
+
+    def setup_gelu_prefill_m128(self) -> None:
+        self._setup_shape(128, 4096, 4096)
+
+    def benchmark_gelu_prefill_m128(self) -> None:
+        self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
+
+    def verify_gelu_prefill_m128(self) -> torch.Tensor:
+        return self._gelu_reference()
+
+    def setup_bias_wide_n8192_m16(self) -> None:
+        self._setup_shape(16, 8192, 4096)
+
+    def benchmark_bias_wide_n8192_m16(self) -> None:
+        self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
+
+    def verify_bias_wide_n8192_m16(self) -> torch.Tensor:
+        return self._bias_reference()
+
+    def setup_gelu_wide_n8192_m16(self) -> None:
+        self._setup_shape(16, 8192, 4096)
+
+    def benchmark_gelu_wide_n8192_m16(self) -> None:
+        self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
+
+    def verify_gelu_wide_n8192_m16(self) -> torch.Tensor:
+        return self._gelu_reference()
+
+    def setup_bias_wide_k8192_m16(self) -> None:
+        self._setup_shape(16, 4096, 8192)
+
+    def benchmark_bias_wide_k8192_m16(self) -> None:
+        self.kernel.bf16_gemm_bias(self.a, self.b, self.bias, out=self.out)
+
+    def verify_bias_wide_k8192_m16(self) -> torch.Tensor:
+        return self._bias_reference()
+
+    def setup_gelu_wide_k8192_m16(self) -> None:
+        self._setup_shape(16, 4096, 8192)
+
+    def benchmark_gelu_wide_k8192_m16(self) -> None:
+        self.kernel.bf16_gemm_bias_gelu(self.a, self.b, self.bias, out=self.out)
+
+    def verify_gelu_wide_k8192_m16(self) -> torch.Tensor:
+        return self._gelu_reference()

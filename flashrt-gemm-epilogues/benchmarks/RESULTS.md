@@ -17,55 +17,70 @@ Environment:
 Timing method:
 
 - CUDA synchronized wall-clock timing
-- 20 warmup iterations
-- 100 iterations for GEMM
-- 200 iterations for quantization kernels
+- 10-20 warmup iterations depending on the sweep
+- 50-100 iterations for GEMM
+- 100-200 iterations for quantization kernels
+- Status threshold used for triage:
+  - GEMM epilogue: `promote` at `>=2.0x`, `watch` at `>=1.5x`
+  - FP8 quantization: `promote` at `>=4.0x`, `watch` at `>=1.5x`
 
-## Results
+## Current Triage
 
-| API | Shape | Fused us | PyTorch eager us | Speedup |
-| --- | ---: | ---: | ---: | ---: |
-| `bf16_gemm_bias_gelu` | `(M,N,K)=(64,4096,4096)` | 30.813 | 42.530 | 1.38x |
-| `bf16_gemm_bias` | `(M,N,K)=(64,4096,4096)` | 18.506 | 40.565 | 2.19x |
-| `bias_gelu_quantize_fp8_static_bf16` | `(64,4096)` | 4.084 | 22.729 | 5.57x |
-| `channel_scale_quantize_fp8_static_bf16` | `(64,4096)` | 2.464 | 19.581 | 7.95x |
+- The FP8 quantization epilogue kernels are consistently strong across the
+  current shape suite.
+- The BF16 GEMM epilogue wrapper is shape-sensitive. `M=1` and `M=64` bias
+  are strong against PyTorch eager, but `M=8`, `M=16`, and `M=128` should not
+  be promoted as headline shapes yet.
+- The GEMM path needs stronger baseline reporting. PyTorch eager is useful for
+  HF benchmark readability, but serious GEMM claims should also compare against
+  cuBLASLt or another vendor-library baseline.
 
-## Interpretation
+## GEMM Shape Suite
 
-- The FP8 quantization epilogue kernels are already strong on the local 5090
-  environment.
-- The BF16 GEMM epilogue path now uses per-shape cuBLASLt algorithm autotuning
-  and caching. The autotuned M=64 path removes the previous `GELU_BIAS`
-  regression.
-- First use of a new `(M,N,K,epilogue)` shape pays a small autotune cost. Later
-  calls reuse the cached algorithm.
+| API | Label | Shape | Fused us | PyTorch eager us | Speedup | TFLOPS | Status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `bf16_gemm_bias` | `decode_m1` | `(1,4096,4096)` | 18.627 | 51.244 | 2.75x | 1.8 | promote |
+| `bf16_gemm_bias_gelu` | `decode_m1` | `(1,4096,4096)` | 18.578 | 53.046 | 2.86x | 1.8 | promote |
+| `bf16_gemm_bias` | `decode_m8` | `(8,4096,4096)` | 18.621 | 24.769 | 1.33x | 14.4 | reject |
+| `bf16_gemm_bias_gelu` | `decode_m8` | `(8,4096,4096)` | 18.579 | 26.803 | 1.44x | 14.4 | reject |
+| `bf16_gemm_bias` | `small_m16` | `(16,4096,4096)` | 22.376 | 24.775 | 1.11x | 24.0 | reject |
+| `bf16_gemm_bias_gelu` | `small_m16` | `(16,4096,4096)` | 22.633 | 27.276 | 1.21x | 23.7 | reject |
+| `bf16_gemm_bias` | `prefill_m64` | `(64,4096,4096)` | 18.570 | 40.937 | 2.20x | 115.6 | promote |
+| `bf16_gemm_bias_gelu` | `prefill_m64` | `(64,4096,4096)` | 30.918 | 42.427 | 1.37x | 69.5 | reject |
+| `bf16_gemm_bias` | `prefill_m128` | `(128,4096,4096)` | 32.880 | 34.962 | 1.06x | 130.6 | reject |
+| `bf16_gemm_bias_gelu` | `prefill_m128` | `(128,4096,4096)` | 30.833 | 37.004 | 1.20x | 139.3 | reject |
+| `bf16_gemm_bias` | `wide_n8192_m16` | `(16,8192,4096)` | 34.925 | 58.506 | 1.68x | 30.7 | watch |
+| `bf16_gemm_bias_gelu` | `wide_n8192_m16` | `(16,8192,4096)` | 34.911 | 60.822 | 1.74x | 30.8 | watch |
+| `bf16_gemm_bias` | `wide_k8192_m16` | `(16,4096,8192)` | 34.566 | 43.203 | 1.25x | 31.1 | reject |
+| `bf16_gemm_bias_gelu` | `wide_k8192_m16` | `(16,4096,8192)` | 34.917 | 45.205 | 1.29x | 30.8 | reject |
 
-## GEMM Shape Sweep
+## FP8 Quantization Shape Suite
 
-Same environment and local source-extension path. This sweep uses
-`N=K=4096` and varies `M`.
+| API | Label | Shape | Fused us | PyTorch eager us | Speedup | GB/s | Status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `bias_gelu_quantize_fp8_static_bf16` | `decode_m1` | `(1,4096)` | 2.520 | 30.416 | 12.07x | 8.1 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `decode_m1` | `(1,4096)` | 3.050 | 25.989 | 8.52x | 6.7 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `decode_m8` | `(8,4096)` | 4.126 | 29.525 | 7.16x | 39.7 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `decode_m8` | `(8,4096)` | 3.238 | 24.806 | 7.66x | 50.6 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `small_m16` | `(16,4096)` | 2.891 | 26.492 | 9.16x | 113.3 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `small_m16` | `(16,4096)` | 2.825 | 25.250 | 8.94x | 116.0 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `prefill_m64` | `(64,4096)` | 4.105 | 29.385 | 7.16x | 319.3 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `prefill_m64` | `(64,4096)` | 3.305 | 21.547 | 6.52x | 396.5 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `prefill_m128` | `(128,4096)` | 4.135 | 25.951 | 6.28x | 634.0 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `prefill_m128` | `(128,4096)` | 4.122 | 20.484 | 4.97x | 635.9 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `wide_n8192_m16` | `(16,8192)` | 2.582 | 24.660 | 9.55x | 253.8 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `wide_n8192_m16` | `(16,8192)` | 2.576 | 19.043 | 7.39x | 254.4 | promote |
+| `bias_gelu_quantize_fp8_static_bf16` | `wide_n8192_m128` | `(128,8192)` | 6.183 | 29.472 | 4.77x | 848.0 | promote |
+| `channel_scale_quantize_fp8_static_bf16` | `wide_n8192_m128` | `(128,8192)` | 4.149 | 25.826 | 6.22x | 1263.5 | promote |
 
-| API | Shape | Fused us | PyTorch eager us | Speedup |
-| --- | ---: | ---: | ---: | ---: |
-| `bf16_gemm_bias` | `(1,4096,4096)` | 18.480 | 50.685 | 2.74x |
-| `bf16_gemm_bias_gelu` | `(1,4096,4096)` | 18.463 | 52.610 | 2.85x |
-| `bf16_gemm_bias` | `(8,4096,4096)` | 18.470 | 24.633 | 1.33x |
-| `bf16_gemm_bias_gelu` | `(8,4096,4096)` | 18.467 | 26.679 | 1.44x |
-| `bf16_gemm_bias` | `(16,4096,4096)` | 22.374 | 24.623 | 1.10x |
-| `bf16_gemm_bias_gelu` | `(16,4096,4096)` | 22.543 | 26.823 | 1.19x |
-| `bf16_gemm_bias` | `(64,4096,4096)` | 18.506 | 40.565 | 2.19x |
-| `bf16_gemm_bias_gelu` | `(64,4096,4096)` | 30.813 | 42.530 | 1.38x |
-| `bf16_gemm_bias` | `(128,4096,4096)` | 32.880 | 34.968 | 1.06x |
-| `bf16_gemm_bias_gelu` | `(128,4096,4096)` | 30.822 | 36.998 | 1.20x |
-
-The previous `M=64` GELU regression was caused by using only the first
-cuBLASLt heuristic result. Benchmarking multiple candidate algorithms and
-caching the fastest candidate fixes the outlier on the local test GPU.
+First use of a new `(M,N,K,epilogue)` GEMM shape pays an autotune cost. Later
+calls reuse the cached algorithm.
 
 ## Next Benchmark Work
 
-- Run a matrix of decode and prefill shapes: small M, medium M, and large M.
-- Separate GEMM time from epilogue time where possible.
-- Compare against the uploaded HF kernel artifact once the package is uploaded
-  to a Hub namespace.
-- Add CI-friendly smoke benchmarks with very small iteration counts.
+- Add cuBLASLt/vendor-library baseline reporting for GEMM epilogue shapes.
+- Investigate tile/algo policy for weak GEMM shapes before making broad public
+  claims.
+- Add VLA/video-specific projection shape groups once extracted from real
+  FlashRT traces.
+- Compare against the uploaded HF kernel artifact once the package is uploaded.
