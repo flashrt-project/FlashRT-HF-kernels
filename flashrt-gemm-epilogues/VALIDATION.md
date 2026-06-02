@@ -12,12 +12,13 @@ Build target:
 
 - `torch211-cxx11-cu128-x86_64-linux`
 - `torch211-cxx11-cu126-x86_64-linux`
+- `torch211-cxx11-cu130-x86_64-linux`
 
 Build environment:
 
 - `kernel-builder` 0.16.0-dev0
 - Docker/Nix build wrapper
-- CUDA 12.8 and CUDA 12.6 variants
+- CUDA 12.8, CUDA 12.6, and CUDA 13.0 variants
 - Python ABI: abi3, manylinux_2_28 check
 
 Runtime smoke environment:
@@ -36,6 +37,7 @@ From this package directory:
 /home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-config .
 /home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build --variant torch211-cxx11-cu128-x86_64-linux --max-jobs 1 --cores 8 -L .
 /home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build --variant torch211-cxx11-cu126-x86_64-linux --max-jobs 1 --cores 8 -L .
+/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build --variant torch211-cxx11-cu130-x86_64-linux --max-jobs 1 --cores 8 -L .
 /home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-builds .
 ```
 
@@ -50,6 +52,7 @@ python internal-tests/flashrt-gemm-epilogues/manual_torch_extension_smoke.py --l
 - `check-config` passed.
 - `build` passed for `torch211-cxx11-cu128-x86_64-linux`.
 - `build` passed for `torch211-cxx11-cu126-x86_64-linux`.
+- `build` passed for `torch211-cxx11-cu130-x86_64-linux`.
 - Native extension linked as `_flashrt_gemm_epilogues_cuda_*.abi3.so`.
 - ABI compatibility check passed for manylinux_2_28 and Python ABI 3.9.
 - `get_kernel` loading check passed for `flashrt_gemm_epilogues`.
@@ -67,6 +70,12 @@ torch211-cxx11-cu128-x86_64-linux/
   flashrt_gemm_epilogues/__init__.py
   metadata.json
 torch211-cxx11-cu126-x86_64-linux/
+  __init__.py
+  _flashrt_gemm_epilogues_cuda_<git>.abi3.so
+  _ops.py
+  flashrt_gemm_epilogues/__init__.py
+  metadata.json
+torch211-cxx11-cu130-x86_64-linux/
   __init__.py
   _flashrt_gemm_epilogues_cuda_<git>.abi3.so
   _ops.py
@@ -98,7 +107,8 @@ Covered shapes:
 
 ## Known Gaps
 
-- Only two HF build variants have been built so far.
+- Three HF build variants have been built so far; torch212 variants are still
+  pending.
 - Docker does not currently expose the NVIDIA runtime, so GPU execution tests
   are run on the host instead of inside the Docker/Nix builder.
 - First use of a new GEMM shape performs local cuBLASLt algorithm autotuning;
