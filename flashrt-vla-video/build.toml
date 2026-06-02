@@ -8,6 +8,7 @@ backends = ["cuda"]
 repo-id = "flashrt/flashrt-vla-video"
 
 [torch]
+include = ["csrc"]
 src = [
   "torch-ext/torch_binding.cpp",
   "torch-ext/torch_binding.h",
@@ -15,8 +16,9 @@ src = [
 
 [kernel.flashrt_vla_video]
 backend = "cuda"
-depends = ["torch", "cutlass_4_0"]
+depends = ["torch"]
 include = ["csrc"]
 src = [
-  # Add synced source files here before renaming this file to build.toml.
+  "csrc/q_norm_rope_bf16.cu",
+  "csrc/q_norm_rope_bf16.cuh",
 ]
