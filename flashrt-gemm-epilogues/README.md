@@ -80,6 +80,9 @@ CUDA 13.0 variants. Host-side CUDA correctness smoke has passed on the local
 RTX 5090 environment. See `VALIDATION.md` for exact variants, commands,
 environment, and known gaps.
 
+See `examples/fp8_quant_epilogue_block.py` for a minimal HF-style module that
+replaces BF16 post-projection epilogue work with the FP8 quantization helpers.
+
 ## Usage
 
 ```python

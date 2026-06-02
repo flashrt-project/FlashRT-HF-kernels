@@ -59,3 +59,6 @@ Validated HF builder targets currently include
 `torch211-cxx11-cu130-x86_64-linux`. Builder ABI checks passed for all three
 variants. Host-side correctness smoke passed on an RTX 5090 with PyTorch
 2.9.1+cu128. See `VALIDATION.md` for the full record and remaining gaps.
+
+See `examples/fp8_quant_epilogue_block.py` for a minimal HF-style module using
+the FP8 quantization epilogue helpers.
