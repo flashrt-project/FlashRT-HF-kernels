@@ -46,12 +46,14 @@ Before v1 build window:
 
 ### `flashrt-vla-video`
 
-Current status: buildable by config, local source-extension and benchmark
-evidence recorded, example added.
+Current status: G2. Buildable by config and example added. Previous QKV
+speedup table is invalidated until Q and K outputs both pass an accuracy-first
+sweep.
 
 Before v1 build window:
 
 - Complete full builder build and `check-builds`.
+- Re-run QKV split + norm + RoPE accuracy sweep before any speedup claim.
 - Run `benchmarks/benchmark_q_norm_rope.py` against a built package artifact.
 - Run `examples/qkv_postprocess_block.py` against a built or Hub package.
 - Refresh `examples/model-block-note.md` with built-artifact benchmark results.

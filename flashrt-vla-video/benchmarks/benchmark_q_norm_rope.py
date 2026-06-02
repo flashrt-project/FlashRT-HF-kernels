@@ -182,8 +182,9 @@ class QKVSplitNormRopeBenchmark(Benchmark):
             dtype=torch.bfloat16,
         )
         self.k_out = torch.empty_like(self.q_out)
+        self.out = self.q_out
 
-    def _reference(self):
+    def _reference_pair(self):
         return _reference_qkv_split_norm_rope(
             self.packed_qkv,
             self.norm_q_weight,
@@ -192,7 +193,10 @@ class QKVSplitNormRopeBenchmark(Benchmark):
             self.freqs_im,
             self.heads,
             self.head_dim,
-        )[0]
+        )
+
+    def _reference(self):
+        return self._reference_pair()[0]
 
     def _benchmark(self):
         self.kernel.qkv_split_norm_rope_bf16(
@@ -280,6 +284,17 @@ class QKVSplitNormRopeBenchmark(Benchmark):
         return self._reference()
 
 
+class QKVSplitNormRopeKBenchmark(QKVSplitNormRopeBenchmark):
+    seed = 14
+
+    def _setup_tokens(self, tokens: int) -> None:
+        super()._setup_tokens(tokens)
+        self.out = self.k_out
+
+    def _reference(self):
+        return self._reference_pair()[1]
+
+
 class KNormRopeVCacheBenchmark(Benchmark):
     seed = 12
 
@@ -297,6 +312,7 @@ class KNormRopeVCacheBenchmark(Benchmark):
         self.sin = torch.randn((64,), device=self.device, dtype=torch.bfloat16)
         self.k_out = torch.empty_like(self.k)
         self.v_out = torch.empty_like(self.v)
+        self.out = self.k_out
 
     def _reference(self):
         return _reference_norm_rope(self.k, self.weight, self.cos, self.sin)

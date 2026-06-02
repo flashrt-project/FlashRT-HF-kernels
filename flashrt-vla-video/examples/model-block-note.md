@@ -49,14 +49,10 @@ post-processing regimes.
 
 ## Current Local Evidence
 
-Local RTX 5090 source-extension benchmarks show:
-
-- about `39x` for token counts `1,4,16,64` with `heads=24`;
-- about `19-29x` for long video-token counts `1024,2520,4096`;
-- about `26-40x` across the `heads=8,16,32,48` sweep at `tokens=64`.
-
-The release table must be refreshed with built-artifact HF benchmark runner
-results before public upload.
+Previous local QKV speedup numbers are invalidated as release evidence because
+the recorded max absolute error reached `0.25` and the public benchmark path
+did not verify both Q and K outputs. Recreate this section only after the
+accuracy-first sweep and built-artifact HF benchmark runner both pass.
 
 ## Claim Boundary
 

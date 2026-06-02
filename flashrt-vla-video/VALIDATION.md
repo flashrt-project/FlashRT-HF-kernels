@@ -41,8 +41,9 @@ Correctness smoke:
 - Shapes: `(1,128)`, `(8,128)`, `(2,4,128)`, `(48,128)`
 - `q_norm_rope_bf16`: max error 0 in the smoke run.
 - `k_norm_rope_v_cache_bf16`: max K error 0 and V copy exact in the smoke run.
-- `qkv_split_norm_rope_bf16`: package-local source extension passed launch and
-  reference comparison for token lengths 4, 64, 256, 1024, and 2520.
+- `qkv_split_norm_rope_bf16`: package-local source extension passed launch, but
+  previous benchmark evidence is invalidated until Q and K outputs both pass an
+  accuracy-first sweep.
 
 Package-local source benchmark:
 
@@ -54,21 +55,18 @@ Package-local source benchmark:
 
 Package-local QKV split + norm + RoPE benchmark:
 
-| Shape | Tile | Fused us | PyTorch eager us | Speedup | Max error |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| B=1,T=1,H=24,D=128 | 512 | 4.155 | 162.573 | 39.13x | 0.06250 |
-| B=1,T=4,H=24,D=128 | 512 | 4.149 | 165.208 | 39.82x | 0.12500 |
-| B=1,T=16,H=24,D=128 | 512 | 4.157 | 164.253 | 39.51x | 0.12500 |
-| B=1,T=64,H=24,D=128 | 512 | 4.158 | 165.057 | 39.69x | 0.12500 |
-| B=1,T=256,H=24,D=128 | 256 | 6.193 | 161.163 | 26.02x | 0.12500 |
-| B=1,T=1024,H=24,D=128 | 256 | 12.131 | 235.017 | 19.37x | 0.25000 |
-| B=1,T=2520,H=24,D=128 | 256 | 20.546 | 506.212 | 24.64x | 0.12500 |
-| B=1,T=4096,H=24,D=128 | 256 | 36.022 | 1043.616 | 28.97x | 0.12500 |
+- Invalidated as release evidence.
+- Previous max absolute error reached `0.25`.
+- The public HF benchmark script verified only one output tensor before this
+  validation update.
+- Re-run only after Q and K outputs both report `max_abs_error`,
+  `max_rel_error`, and a pre-declared pass/fail threshold.
 
 ## Remaining Gaps
 
 - Full `kernel-builder build` has not been run for this package yet.
 - Hub benchmark runner has not been run for `benchmarks/benchmark_q_norm_rope.py`.
+- QKV split + norm + RoPE accuracy gate is not complete.
 - A downstream HF-style model-block example exists under `examples/`, but it
   still needs to be run against a built or uploaded Hub package.
 - Runtime validation is currently RTX 5090 only.
