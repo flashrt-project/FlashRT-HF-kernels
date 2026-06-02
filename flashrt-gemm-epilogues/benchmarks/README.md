@@ -8,7 +8,7 @@ against the equivalent PyTorch eager expression across decode and prefill
 shapes.
 
 `benchmark_bf16_gemm_bias_gelu.py` compares BF16 GEMM plus bias, with or
-without GELU, against the equivalent PyTorch eager expression across decode,
+without GELU, against `torch.addmm` and `gelu(torch.addmm)` across decode,
 small-batch, prefill, and wider projection shapes.
 
 `benchmark_channel_scale.py` compares per-channel scaling plus FP8 quantization

@@ -44,9 +44,16 @@ The first implemented kernels cover the post-GEMM epilogue pattern
 
 Benchmarks should compare against:
 
-- `torch.nn.functional.linear` plus PyTorch elementwise epilogue.
+- `torch.addmm` plus PyTorch elementwise epilogue for GEMM paths.
+- `torch.nn.functional.linear` plus PyTorch elementwise epilogue for model-level
+  checks.
 - Existing FlashRT pybind path for internal regression checks.
 - cuBLASLt/CUTLASS unfused path when available.
+
+The BF16 GEMM epilogue wrapper is shape-sensitive on the current local RTX 5090
+environment. The FP8 quantize epilogue kernels are the strongest first-package
+surface today; GEMM epilogue shapes should be promoted only when they beat the
+stricter `torch.addmm` baseline.
 
 ## Promotion Target
 

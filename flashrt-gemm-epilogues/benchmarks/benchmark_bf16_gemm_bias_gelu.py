@@ -31,10 +31,10 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
         self.out = torch.empty((m, n), device=self.device, dtype=torch.bfloat16)
 
     def _bias_reference(self) -> torch.Tensor:
-        return ((self.a @ self.b) + self.bias).to(torch.bfloat16)
+        return torch.addmm(self.bias, self.a, self.b).to(torch.bfloat16)
 
     def _gelu_reference(self) -> torch.Tensor:
-        return torch.nn.functional.gelu((self.a @ self.b) + self.bias).to(
+        return torch.nn.functional.gelu(torch.addmm(self.bias, self.a, self.b)).to(
             torch.bfloat16
         )
 

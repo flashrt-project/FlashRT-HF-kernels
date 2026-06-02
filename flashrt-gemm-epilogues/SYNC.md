@@ -40,6 +40,8 @@ Local edits:
   `bf16_gemm_bias(a, b, bias, out=None)`.
 - Replaced `GemmRunner` ownership with a package-local per-device cuBLASLt
   runtime and 32 MiB workspace.
+- Added `FLASHRT_GEMM_WORKSPACE_MB` override for local cuBLASLt workspace
+  sweeps. The default remains 32 MiB.
 - Uses the same column-major view trick as FlashRT's FP8 cuBLASLt path:
   public row-major `D(M,N)` is treated as cuBLASLt `D^T(N,M)`, so the call
   computes `B^T @ A^T` internally while preserving the public `(M,K) @ (K,N)`

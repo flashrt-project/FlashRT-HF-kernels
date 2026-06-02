@@ -21,6 +21,19 @@ constexpr int kMaxHeuristicResults = 16;
 constexpr int kAutotuneWarmupIters = 3;
 constexpr int kAutotuneMeasureIters = 10;
 
+size_t gemm_workspace_size() {
+  const char* value = std::getenv("FLASHRT_GEMM_WORKSPACE_MB");
+  if (value == nullptr) {
+    return kWorkspaceSize;
+  }
+  char* end = nullptr;
+  const unsigned long long mb = std::strtoull(value, &end, 10);
+  if (end == value || mb == 0 || mb > 1024) {
+    return kWorkspaceSize;
+  }
+  return static_cast<size_t>(mb) * 1024ULL * 1024ULL;
+}
+
 std::string cublas_error(cublasStatus_t status, const char* expr) {
   return std::string("cuBLASLt error ") + std::to_string(static_cast<int>(status)) +
          " from " + expr;
@@ -49,10 +62,11 @@ std::string cuda_error(cudaError_t status, const char* expr) {
 struct DeviceRuntime {
   cublasLtHandle_t handle = nullptr;
   void* workspace = nullptr;
-  size_t workspace_size = kWorkspaceSize;
+  size_t workspace_size = 0;
   int device = -1;
 
   explicit DeviceRuntime(int device_id) : device(device_id) {
+    workspace_size = gemm_workspace_size();
     FLASHRT_CUDA_CHECK(cudaSetDevice(device));
     FLASHRT_CUBLAS_CHECK(cublasLtCreate(&handle));
     FLASHRT_CUDA_CHECK(cudaMalloc(&workspace, workspace_size));

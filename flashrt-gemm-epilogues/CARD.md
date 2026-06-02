@@ -31,6 +31,13 @@ plus a per-channel BF16 scaling and FP8 quantization primitive.
 - `channel_scale_quantize_fp8_static_bf16(input, channel_scale, scale, out=None)`
 - `gelu_quantize_fp8_static_bf16(input, scale, out=None)`
 
+## Performance Notes
+
+FP8 quantize epilogue helpers are the strongest current surface across the
+local shape suite. BF16 GEMM epilogue wrappers are shape-sensitive and should be
+evaluated against `torch.addmm`/`gelu(torch.addmm)` for target shapes before
+promotion.
+
 ## Hardware
 
 CUDA GPUs with BF16 tensor core support are expected for the GEMM path. FP8

@@ -14,3 +14,12 @@ FLASHRT_QUANT_BLOCK_SIZE=512 python internal-tests/flashrt-gemm-epilogues/local_
 
 Valid override values are `128`, `256`, `512`, and `1024`. The default path uses
 a shape-aware policy.
+
+The BF16 GEMM epilogue wrapper uses a 32 MiB cuBLASLt workspace by default.
+Override it for local sweeps with:
+
+```bash
+FLASHRT_GEMM_WORKSPACE_MB=256 python internal-tests/flashrt-gemm-epilogues/local_benchmark.py --suite --only gemm
+```
+
+Valid override values are positive MiB values up to `1024`.
