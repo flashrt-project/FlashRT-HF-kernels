@@ -6,7 +6,7 @@ Selected source areas:
 
 | Package path | Upstream path | Status |
 | --- | --- | --- |
-| `csrc/nvfp4_sf_reshape_sm120.*` | `official/FlashRT/csrc/quantize/nvfp4_sf_reshape_sm120.*` | First sync target |
+| `csrc/nvfp4_sf_reshape_sm120.*` | `official/FlashRT/csrc/quantize/nvfp4_sf_reshape_sm120.*` | Synced, public comments sanitized |
 | `csrc/cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.*` | `official/FlashRT/csrc/gemm/fp4/cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.*` | Draft target |
 | `csrc/cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.*` | `official/FlashRT/csrc/gemm/fp4/cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.*` | Draft target |
 | `csrc/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.*` | `official/FlashRT/csrc/gemm/fp4/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.*` | Draft target |

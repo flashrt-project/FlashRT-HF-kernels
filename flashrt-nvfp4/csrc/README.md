@@ -1,6 +1,6 @@
 # Source Directory
 
-First source sync should be the NVFP4 scale-factor reshape helper from:
+First source sync is the NVFP4 scale-factor reshape helper from:
 
 ```text
 official/FlashRT/csrc/quantize/nvfp4_sf_reshape_sm120.cu
