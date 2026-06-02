@@ -38,6 +38,11 @@ internal outputs.
 Performance should compare against a strong CUTLASS/cuBLAS path when applicable,
 not only against PyTorch eager.
 
+## Validation
+
+See `VALIDATION.md` for the current tested shapes, RTX 5090 smoke environment,
+and remaining builder/build gaps.
+
 ## Showcase Criteria
 
 - Make NVFP4/SFA/SFB layout constraints explicit.

@@ -26,3 +26,5 @@ The first buildable slice exposes NVFP4 scale-factor layout conversion.
 ## Status
 
 The fused GEMM epilogues follow after CUTLASS dependency isolation.
+
+Current validation status is recorded in `VALIDATION.md`.
