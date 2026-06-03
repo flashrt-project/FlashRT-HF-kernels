@@ -39,14 +39,14 @@ Runtime validation environment:
 Command:
 
 ```bash
-PYTHONPATH=flashrt-gemm-epilogues/build/torch211-cxx11-cu128-x86_64-linux:flashrt-vla-video/build/torch211-cxx11-cu128-x86_64-linux:flashrt-nvfp4/build/torch211-cxx11-cu128-x86_64-linux:flashrt-smallm-gemm/build/torch211-cxx11-cu128-x86_64-linux:flashrt-fused-quant/build/torch211-cxx11-cu128-x86_64-linux \
+PYTHONPATH=flashrt-gemm-epilogues/build/torch211-cxx11-cu128-x86_64-linux:flashrt-fp8-ffn/build/torch211-cxx11-cu128-x86_64-linux:flashrt-vla-video/build/torch211-cxx11-cu128-x86_64-linux:flashrt-nvfp4/build/torch211-cxx11-cu128-x86_64-linux:flashrt-smallm-gemm/build/torch211-cxx11-cu128-x86_64-linux:flashrt-fused-quant/build/torch211-cxx11-cu128-x86_64-linux \
   python scripts/accuracy_sweep.py --backend installed --mode full --package all --smallm-max-ulp 5 --quiet
 ```
 
 Result:
 
 ```text
-accuracy sweep passed: 324 checks
+accuracy sweep passed: 345 checks
 ```
 
 ## Accuracy Notes
@@ -61,9 +61,9 @@ accuracy sweep passed: 324 checks
   at `K=4096,N=12288`: expected `2.953125`, got `3.03125`.
 - `flashrt-fused-quant`: split and merged NVFP4 packed bytes and scale bytes
   passed byte parity over the v1 grid.
-- `flashrt-fp8-ffn`: package correctness test passed against the copied
-  `torch211-cxx11-cu128-x86_64-linux` artifact over PI0.5/GROOT model-shaped
-  FP8 GEMM, fused GELU quant, and full MLP cases.
+- `flashrt-fp8-ffn`: unified installed-artifact sweep and package correctness
+  test passed against the copied `torch211-cxx11-cu128-x86_64-linux` artifact
+  over PI0.5/GROOT model-shaped FP8 GEMM, fused GELU quant, and full MLP cases.
 
 ## Package Tests
 
@@ -110,12 +110,16 @@ the copied built artifacts. It does not replace the official Hub
 
 | Package | Built-artifact benchmark result |
 | --- | --- |
-| `flashrt-gemm-epilogues` | FP8 quant epilogues verified, 2.58x-4.44x vs PyTorch eager references; BF16 GEMM benchmark is latency-only |
+| `flashrt-gemm-epilogues` | FP8 quant epilogues verified, 2.58x-4.44x vs PyTorch eager references; default BF16 GEMM public rows are verified-only |
 | `flashrt-fp8-ffn` | Full FP8 GELU MLP verified over the PI0.5/GROOT shape grid; headline rows are 6.44x-7.01x vs eager and 3.82x-5.44x vs `torch.compile` |
 | `flashrt-vla-video` | Q/K/QKV post-processing verified, 9.79x-29.30x vs PyTorch eager references |
 | `flashrt-nvfp4` | scale-factor layout helper byte-verified, 70.68x-18031.32x vs Python layout reference |
 | `flashrt-smallm-gemm` | W4A4 decode matvec verified, 5.86x-16.12x vs random/dequant PyTorch readability baseline |
 | `flashrt-fused-quant` | split and merged fused quant latency grid completed; multi-output byte parity remains covered by accuracy sweep |
+
+The strict benchmark runner completed 170 rows with `verified=False` count 0
+and `mean_ms=nan` count 0. Diagnostic benchmark failures are no longer recorded
+by default; they require explicit `--allow-diagnostic-failures`.
 
 ## Full Matrix Status
 

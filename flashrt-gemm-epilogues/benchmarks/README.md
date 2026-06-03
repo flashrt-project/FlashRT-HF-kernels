@@ -8,8 +8,12 @@ against the equivalent PyTorch eager expression across decode, small-M,
 prefill, wide hidden, and VLA/video FFN shapes.
 
 `benchmark_bf16_gemm_bias_gelu.py` compares BF16 GEMM plus bias, with or
-without GELU, against `torch.addmm` and `gelu(torch.addmm)` across decode,
-small-batch, prefill, and wider projection shapes.
+without GELU, against `torch.addmm` and `gelu(torch.addmm)`. Its default public
+benchmark surface only exposes release-verified workloads. Additional
+small-batch, prefill, and wider projection diagnostics remain in the script, but
+are intentionally hidden unless `FLASHRT_ENABLE_DIAGNOSTIC_BF16_GEMM=1` is set.
+Those diagnostic rows are not release-gate benchmark rows until their shape
+support and numerical policy are promoted explicitly.
 
 `benchmark_channel_scale.py` compares per-channel scaling plus FP8 quantization
 against the equivalent PyTorch eager expression across the same quantization
@@ -56,6 +60,7 @@ Public results for this package should follow
   `torch.compile`; they can become headline rows when correctness has byte or
   fake-quant parity and the compiled baseline is measured.
 - Channel-scale quantization also reports effective memory bandwidth.
-- BF16 GEMM epilogue wrappers require cuBLASLt/CUTLASS or another strong GEMM
-  baseline before becoming headline rows. Shapes that only beat PyTorch eager
-  stay labeled `support` or `compatibility`.
+- BF16 GEMM epilogue wrappers expose only verified public rows by default.
+  Diagnostic shapes require `FLASHRT_ENABLE_DIAGNOSTIC_BF16_GEMM=1` and the
+  local runner option `--allow-diagnostic-failures` if failures should be
+  recorded instead of failing fast.

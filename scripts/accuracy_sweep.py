@@ -11,11 +11,12 @@ import argparse
 import ctypes
 import ctypes.util
 import importlib
+import json
 import math
 import os
 import struct
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -36,6 +37,16 @@ FP8_QUANT_SHAPES = [
     ("vla_n12288_m64", 64, 12288),
     ("vla_n16384_m16", 16, 16384),
     ("vla_n16384_m64", 64, 16384),
+]
+
+FP8_FFN_SHAPES = [
+    ("small", 16, 128, 256, 128),
+    ("pi05_vision", 512, 1152, 4304, 1152),
+    ("pi05_decoder", 10, 1024, 4096, 1024),
+    ("groot_vit", 128, 1024, 4096, 1024),
+    ("groot_deepstack", 128, 4096, 4096, 2048),
+    ("groot_vl_self_attn_long", 2520, 2048, 8192, 2048),
+    ("groot_action_dit", 41, 1536, 6144, 1536),
 ]
 
 FUSED_QUANT_SHAPES = [
@@ -108,6 +119,7 @@ VLA_QKV_HEADS = [8, 16, 24, 32, 48]
 
 QUICK = {
     "fp8": FP8_QUANT_SHAPES[:3],
+    "fp8_ffn": [FP8_FFN_SHAPES[0], FP8_FFN_SHAPES[2]],
     "fused": FUSED_QUANT_SHAPES[:4],
     "layout": NVFP4_LAYOUT_SHAPES[:4],
     "smallm": [("k4096_n64", 4096, 64), ("k12288_n64", 12288, 64)],
@@ -182,9 +194,15 @@ class Result:
     shape: str
     status: str
     max_abs: float | None = None
+    mean_abs: float | None = None
     p99_abs: float | None = None
     max_rel: float | None = None
+    p99_rel: float | None = None
+    cosine_similarity: float | None = None
     mismatches: int | None = None
+    got_dtype: str | None = None
+    expected_dtype: str | None = None
+    tolerance: str | None = None
     note: str = ""
 
 
@@ -413,17 +431,43 @@ def _require_cuda(results: list[Result], package: str) -> bool:
     return True
 
 
+def _cosine_similarity(got_f, exp_f) -> float:
+    torch = _torch()
+    got_flat = got_f.flatten()
+    exp_flat = exp_f.flatten()
+    if got_flat.numel() == 0:
+        return 1.0
+    got_norm = torch.linalg.vector_norm(got_flat)
+    exp_norm = torch.linalg.vector_norm(exp_flat)
+    if got_norm.item() == 0.0 or exp_norm.item() == 0.0:
+        return 1.0 if bool(torch.equal(got_flat, exp_flat)) else 0.0
+    return float(torch.nn.functional.cosine_similarity(got_flat, exp_flat, dim=0).item())
+
+
 def _result_exact(package: str, op: str, shape: str, got, expected) -> Result:
     torch = _torch()
     got_cpu = got.detach().cpu()
     expected_cpu = expected.detach().cpu()
     mismatches = int((got_cpu != expected_cpu).sum().item())
+    got_f = got.detach().float()
+    exp_f = expected.detach().float()
+    abs_err = (got_f - exp_f).abs().flatten()
+    max_abs = float(abs_err.max().item()) if abs_err.numel() else 0.0
+    mean_abs = float(abs_err.mean().item()) if abs_err.numel() else 0.0
     return Result(
         package,
         op,
         shape,
         "PASS" if mismatches == 0 else "FAIL",
+        max_abs=max_abs,
+        mean_abs=mean_abs,
+        p99_abs=max_abs,
+        max_rel=0.0 if mismatches == 0 else None,
+        cosine_similarity=_cosine_similarity(got_f, exp_f),
         mismatches=mismatches,
+        got_dtype=str(got.dtype),
+        expected_dtype=str(expected.dtype),
+        tolerance="exact byte/value parity",
         note="byte parity" if mismatches == 0 else "exact output mismatch",
     )
 
@@ -446,6 +490,7 @@ def _result_approx(
     abs_err = (got_f - exp_f).abs().flatten()
     rel_err = abs_err / exp_f.abs().clamp_min(rel_floor).flatten()
     max_abs = float(abs_err.max().item()) if abs_err.numel() else 0.0
+    mean_abs = float(abs_err.mean().item()) if abs_err.numel() else 0.0
     if abs_err.numel():
         max_idx = int(abs_err.argmax().item())
         got_at_max = float(got_f.flatten()[max_idx].item())
@@ -480,12 +525,151 @@ def _result_approx(
         shape,
         "PASS" if passed else "FAIL",
         max_abs=max_abs,
+        mean_abs=mean_abs,
         p99_abs=p99_abs,
         max_rel=max_rel,
+        cosine_similarity=_cosine_similarity(got_f, exp_f),
+        got_dtype=str(got.dtype),
+        expected_dtype=str(expected.dtype),
+        tolerance=limit_note,
         note=(
             f"{limit_note}, max_ulp={max_ulp}, max_idx={max_idx}, "
             f"got={got_at_max:.8g}, expected={exp_at_max:.8g}"
         ),
+    )
+
+
+def _result_allclose(
+    package: str,
+    op: str,
+    shape: str,
+    got,
+    expected,
+    *,
+    atol: float,
+    rtol: float,
+    rel_floor: float,
+) -> Result:
+    torch = _torch()
+    got_f = got.detach().float()
+    exp_f = expected.detach().float()
+    abs_err = (got_f - exp_f).abs().flatten()
+    rel_err = abs_err / exp_f.abs().clamp_min(rel_floor).flatten()
+    max_abs = float(abs_err.max().item()) if abs_err.numel() else 0.0
+    mean_abs = float(abs_err.mean().item()) if abs_err.numel() else 0.0
+    max_rel = float(rel_err.max().item()) if rel_err.numel() else 0.0
+    if abs_err.numel():
+        kth = max(1, math.ceil(0.99 * abs_err.numel()))
+        p99_abs = float(abs_err.kthvalue(kth).values.item())
+        p99_rel = float(rel_err.kthvalue(kth).values.item())
+    else:
+        p99_abs = 0.0
+        p99_rel = 0.0
+    passed = bool(torch.allclose(got_f, exp_f, atol=atol, rtol=rtol))
+    tolerance = f"torch.allclose(atol={atol:g}, rtol={rtol:g}), rel_floor={rel_floor:g}"
+    return Result(
+        package,
+        op,
+        shape,
+        "PASS" if passed else "FAIL",
+        max_abs=max_abs,
+        mean_abs=mean_abs,
+        p99_abs=p99_abs,
+        max_rel=max_rel,
+        p99_rel=p99_rel,
+        cosine_similarity=_cosine_similarity(got_f, exp_f),
+        got_dtype=str(got.dtype),
+        expected_dtype=str(expected.dtype),
+        tolerance=tolerance,
+        note=tolerance,
+    )
+
+
+def _result_p99_approx(
+    package: str,
+    op: str,
+    shape: str,
+    got,
+    expected,
+    *,
+    p99_abs_limit: float,
+    p99_rel_limit: float,
+    rel_floor: float,
+) -> Result:
+    got_f = got.detach().float()
+    exp_f = expected.detach().float()
+    abs_err = (got_f - exp_f).abs().flatten()
+    rel_err = abs_err / exp_f.abs().clamp_min(rel_floor).flatten()
+    max_abs = float(abs_err.max().item()) if abs_err.numel() else 0.0
+    mean_abs = float(abs_err.mean().item()) if abs_err.numel() else 0.0
+    max_rel = float(rel_err.max().item()) if rel_err.numel() else 0.0
+    if abs_err.numel():
+        kth = max(1, math.ceil(0.99 * abs_err.numel()))
+        p99_abs = float(abs_err.kthvalue(kth).values.item())
+        p99_rel = float(rel_err.kthvalue(kth).values.item())
+    else:
+        p99_abs = 0.0
+        p99_rel = 0.0
+    passed = p99_abs <= p99_abs_limit and p99_rel <= p99_rel_limit
+    tolerance = (
+        f"p99_abs<={p99_abs_limit:g}, p99_rel_floor{rel_floor:g}<={p99_rel_limit:g}"
+    )
+    return Result(
+        package,
+        op,
+        shape,
+        "PASS" if passed else "FAIL",
+        max_abs=max_abs,
+        mean_abs=mean_abs,
+        p99_abs=p99_abs,
+        max_rel=max_rel,
+        p99_rel=p99_rel,
+        cosine_similarity=_cosine_similarity(got_f, exp_f),
+        got_dtype=str(got.dtype),
+        expected_dtype=str(expected.dtype),
+        tolerance=tolerance,
+        note=tolerance,
+    )
+
+
+def _result_fp8_quant_distribution(
+    package: str,
+    op: str,
+    shape: str,
+    got,
+    expected,
+    *,
+    p99_abs_limit: float,
+    mismatch_rate_limit: float,
+) -> Result:
+    got_f = got.detach().float()
+    exp_f = expected.detach().float()
+    abs_err = (got_f - exp_f).abs().flatten()
+    max_abs = float(abs_err.max().item()) if abs_err.numel() else 0.0
+    mean_abs = float(abs_err.mean().item()) if abs_err.numel() else 0.0
+    if abs_err.numel():
+        kth = max(1, math.ceil(0.99 * abs_err.numel()))
+        p99_abs = float(abs_err.kthvalue(kth).values.item())
+    else:
+        p99_abs = 0.0
+    mismatches = int((got.detach().cpu() != expected.detach().cpu()).sum().item())
+    mismatch_rate = mismatches / max(1, got.numel())
+    passed = p99_abs <= p99_abs_limit and mismatch_rate <= mismatch_rate_limit
+    tolerance = f"p99_abs<={p99_abs_limit:g}, mismatch_rate<={mismatch_rate_limit:g}"
+    return Result(
+        package,
+        op,
+        shape,
+        "PASS" if passed else "FAIL",
+        max_abs=max_abs,
+        mean_abs=mean_abs,
+        p99_abs=p99_abs,
+        cosine_similarity=_cosine_similarity(got_f, exp_f),
+        mismatches=mismatches,
+        got_dtype=str(got.dtype),
+        expected_dtype=str(expected.dtype),
+        tolerance=tolerance,
+        note=f"{tolerance}, mismatch_rate={mismatch_rate:.8g}",
     )
 
 
@@ -659,6 +843,51 @@ def _reference_smallm(a_packed, b_packed, sfa_linear, sfb_linear, K: int, alpha:
     return out
 
 
+def _quantize_fp8(x, scale):
+    torch = _torch()
+    return torch.clamp(x.float() / scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+
+
+def _dequant_fp8(x, scale):
+    return x.float() * scale.float()
+
+
+def _reference_fp8_gemm(x, w, x_scale, w_scale):
+    torch = _torch()
+    return (_dequant_fp8(x, x_scale) @ _dequant_fp8(w, w_scale).T).to(torch.bfloat16)
+
+
+def _reference_fp8_linear_bias_gelu_quant(x, w, bias, x_scale, w_scale, y_scale):
+    torch = _torch()
+    hidden = _reference_fp8_gemm(x, w, x_scale, w_scale)
+    y = torch.nn.functional.gelu(hidden.float() + bias.float(), approximate="tanh")
+    y_fp8 = torch.clamp(y / y_scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+    return hidden, y_fp8
+
+
+def _reference_fp8_mlp(x, up_w, up_b, down_w, down_b, x_scale, up_w_scale, hidden_scale, down_w_scale):
+    torch = _torch()
+    _, hidden_fp8 = _reference_fp8_linear_bias_gelu_quant(
+        x, up_w, up_b, x_scale, up_w_scale, hidden_scale
+    )
+    out = _reference_fp8_gemm(hidden_fp8, down_w, hidden_scale, down_w_scale)
+    return (out.float() + down_b.float()).to(torch.bfloat16)
+
+
+def _make_fp8_ffn_case(m: int, k: int, h: int, n: int):
+    torch = _torch()
+    x_scale = torch.tensor([0.05], device="cuda", dtype=torch.float32)
+    up_w_scale = torch.tensor([0.04], device="cuda", dtype=torch.float32)
+    hidden_scale = torch.tensor([0.25], device="cuda", dtype=torch.float32)
+    down_w_scale = torch.tensor([0.04], device="cuda", dtype=torch.float32)
+    x = _quantize_fp8(torch.randn((m, k), device="cuda", dtype=torch.bfloat16), x_scale)
+    up_w = _quantize_fp8(torch.randn((h, k), device="cuda", dtype=torch.bfloat16), up_w_scale)
+    down_w = _quantize_fp8(torch.randn((n, h), device="cuda", dtype=torch.bfloat16), down_w_scale)
+    up_b = torch.randn((h,), device="cuda", dtype=torch.bfloat16)
+    down_b = torch.randn((n,), device="cuda", dtype=torch.bfloat16)
+    return x, up_w, up_b, down_w, down_b, x_scale, up_w_scale, hidden_scale, down_w_scale
+
+
 def _reference_norm_rope(x, weight, cos, sin, eps=1e-6):
     torch = _torch()
     half = x.shape[-1] // 2
@@ -724,16 +953,47 @@ def sweep_gemm_epilogues(args, results: list[Result]) -> None:
             448.0,
         ).to(torch.float8_e4m3fn)
         got = ops.bias_gelu_quantize_fp8_static_bf16(x, bias, scale)
-        results.append(_result_exact(package, "bias_gelu_quantize_fp8_static_bf16", label, got.float(), expected.float()))
+        results.append(_result_exact(package, "bias_gelu_quantize_fp8_static_bf16", label, got, expected))
 
         expected = torch.clamp(torch.nn.functional.gelu(x.float(), approximate="tanh") / scale, -448.0, 448.0).to(torch.float8_e4m3fn)
         got = ops.gelu_quantize_fp8_static_bf16(x, scale)
-        results.append(_result_exact(package, "gelu_quantize_fp8_static_bf16", label, got.float(), expected.float()))
+        results.append(_result_exact(package, "gelu_quantize_fp8_static_bf16", label, got, expected))
 
         channel_scale = torch.randn((n,), device="cuda", dtype=torch.bfloat16).contiguous()
         expected = torch.clamp((x.float() * channel_scale.float()) / scale, -448.0, 448.0).to(torch.float8_e4m3fn)
         got = ops.channel_scale_quantize_fp8_static_bf16(x, channel_scale, scale)
-        results.append(_result_exact(package, "channel_scale_quantize_fp8_static_bf16", label, got.float(), expected.float()))
+        results.append(_result_exact(package, "channel_scale_quantize_fp8_static_bf16", label, got, expected))
+
+
+def sweep_fp8_ffn(args, results: list[Result]) -> None:
+    package = "flashrt-fp8-ffn"
+    if not _require_cuda(results, package):
+        return
+    torch = _torch()
+    if not hasattr(torch, "float8_e4m3fn"):
+        results.append(Result(package, "*", "*", "BLOCKED", note="torch.float8_e4m3fn is required"))
+        return
+    try:
+        ops = _load_ops(package, "flashrt_fp8_ffn", args.backend)
+    except Exception as exc:
+        results.append(Result(package, "*", "*", "BLOCKED", note=f"import failed: {exc}"))
+        return
+    shapes = QUICK["fp8_ffn"] if args.mode == "quick" else FP8_FFN_SHAPES
+    for label, m, k, h, n in shapes:
+        torch.manual_seed(900 + m + k + h + n)
+        x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s = _make_fp8_ffn_case(m, k, h, n)
+
+        got_gemm = ops.fp8_gemm_bf16(x, up_w, x_s, up_s)
+        exp_gemm = _reference_fp8_gemm(x, up_w, x_s, up_s)
+        results.append(_result_allclose(package, "fp8_gemm_bf16", label, got_gemm, exp_gemm, atol=0.25, rtol=0.03, rel_floor=args.rel_floor))
+
+        _, got_hidden_fp8 = ops.fp8_linear_bias_gelu_quant_bf16(x, up_w, up_b, x_s, up_s, hid_s)
+        _, exp_hidden_fp8 = _reference_fp8_linear_bias_gelu_quant(x, up_w, up_b, x_s, up_s, hid_s)
+        results.append(_result_fp8_quant_distribution(package, "fp8_linear_bias_gelu_quant_bf16", label, got_hidden_fp8, exp_hidden_fp8, p99_abs_limit=0.0, mismatch_rate_limit=1e-4))
+
+        got_mlp = ops.fp8_gelu_mlp_bf16(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s)
+        exp_mlp = _reference_fp8_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s)
+        results.append(_result_p99_approx(package, "fp8_gelu_mlp_bf16", label, got_mlp, exp_mlp, p99_abs_limit=1.0, p99_rel_limit=0.05, rel_floor=args.rel_floor))
 
 
 def sweep_vla(args, results: list[Result]) -> None:
@@ -865,7 +1125,14 @@ def sweep_smallm(args, results: list[Result]) -> None:
 
 def _selected_packages(value: str) -> list[str]:
     if value == "all":
-        return ["flashrt-gemm-epilogues", "flashrt-vla-video", "flashrt-nvfp4", "flashrt-smallm-gemm", "flashrt-fused-quant"]
+        return [
+            "flashrt-gemm-epilogues",
+            "flashrt-fp8-ffn",
+            "flashrt-vla-video",
+            "flashrt-nvfp4",
+            "flashrt-smallm-gemm",
+            "flashrt-fused-quant",
+        ]
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
@@ -878,13 +1145,81 @@ def _print_results(results: Iterable[Result], *, quiet: bool) -> None:
             metrics.append(f"mismatches={r.mismatches}")
         if r.max_abs is not None:
             metrics.append(f"max_abs={r.max_abs:.6g}")
+        if r.mean_abs is not None:
+            metrics.append(f"mean_abs={r.mean_abs:.6g}")
         if r.p99_abs is not None:
             metrics.append(f"p99_abs={r.p99_abs:.6g}")
         if r.max_rel is not None:
             metrics.append(f"max_rel={r.max_rel:.6g}")
+        if r.p99_rel is not None:
+            metrics.append(f"p99_rel={r.p99_rel:.6g}")
+        if r.cosine_similarity is not None:
+            metrics.append(f"cos={r.cosine_similarity:.9g}")
+        if r.got_dtype is not None or r.expected_dtype is not None:
+            metrics.append(f"dtype={r.got_dtype}->{r.expected_dtype}")
+        if r.tolerance:
+            metrics.append(f"tol={r.tolerance}")
         if r.note:
             metrics.append(r.note)
         print(f"{r.status:7s} {r.package:24s} {r.op:48s} {r.shape:24s} {'; '.join(metrics)}")
+
+
+def _write_json(path: Path, results: list[Result], args) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "backend": args.backend,
+        "mode": args.mode,
+        "package": args.package,
+        "result_count": len(results),
+        "pass_count": sum(1 for r in results if r.status == "PASS"),
+        "fail_count": sum(1 for r in results if r.status != "PASS"),
+        "results": [asdict(r) for r in results],
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def _write_markdown(path: Path, results: list[Result], args) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# FlashRT Kernel Correctness Report",
+        "",
+        f"- Backend: `{args.backend}`",
+        f"- Mode: `{args.mode}`",
+        f"- Package selection: `{args.package}`",
+        f"- Checks: `{len(results)}`",
+        f"- Passing: `{sum(1 for r in results if r.status == 'PASS')}`",
+        f"- Non-passing: `{sum(1 for r in results if r.status != 'PASS')}`",
+        "",
+        "| Status | Package | Op | Shape | Got dtype | Expected dtype | Max abs | Mean abs | P99 abs | Max rel | P99 rel | Cosine | Tolerance | Note |",
+        "| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+    ]
+    for r in results:
+        def fmt(value: float | None) -> str:
+            return "" if value is None else f"{value:.6g}"
+
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    r.status,
+                    r.package,
+                    r.op,
+                    r.shape,
+                    r.got_dtype or "",
+                    r.expected_dtype or "",
+                    fmt(r.max_abs),
+                    fmt(r.mean_abs),
+                    fmt(r.p99_abs),
+                    fmt(r.max_rel),
+                    fmt(r.p99_rel),
+                    "" if r.cosine_similarity is None else f"{r.cosine_similarity:.9g}",
+                    (r.tolerance or "").replace("|", "\\|"),
+                    (r.note or "").replace("|", "\\|"),
+                ]
+            )
+            + " |"
+        )
+    path.write_text("\n".join(lines) + "\n")
 
 
 def main() -> int:
@@ -900,12 +1235,15 @@ def main() -> int:
     parser.add_argument("--bf16-max-ulp", type=int, default=1)
     parser.add_argument("--smallm-max-ulp", type=int, default=5)
     parser.add_argument("--smallm-chunk-rows", type=int, default=256)
+    parser.add_argument("--output-json", default=None, help="optional path for a machine-readable correctness report")
+    parser.add_argument("--output-md", default=None, help="optional path for a Markdown correctness report")
     parser.add_argument("--quiet", action="store_true", help="print only non-passing checks and the final summary")
     args = parser.parse_args()
 
     results: list[Result] = []
     sweepers = {
         "flashrt-gemm-epilogues": sweep_gemm_epilogues,
+        "flashrt-fp8-ffn": sweep_fp8_ffn,
         "flashrt-vla-video": sweep_vla,
         "flashrt-nvfp4": sweep_nvfp4,
         "flashrt-smallm-gemm": sweep_smallm,
@@ -919,6 +1257,10 @@ def main() -> int:
         sweeper(args, results)
 
     _print_results(results, quiet=args.quiet)
+    if args.output_json:
+        _write_json(ROOT / args.output_json, results, args)
+    if args.output_md:
+        _write_markdown(ROOT / args.output_md, results, args)
     bad = [r for r in results if r.status != "PASS"]
     if bad:
         print(f"accuracy sweep failed: {len(bad)} non-passing checks")

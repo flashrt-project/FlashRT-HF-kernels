@@ -302,6 +302,7 @@ def run_package(
     iterations: int,
     compile_baseline: bool,
     compile_mode: str,
+    allow_diagnostic_failures: bool,
 ) -> list[WorkloadResult]:
     if backend == "artifact":
         artifact = ROOT / package / "build" / variant
@@ -345,6 +346,11 @@ def run_package(
                     )
                     result.backend = backend
                 except Exception as exc:
+                    if not allow_diagnostic_failures:
+                        workload = method_name.removeprefix("benchmark_")
+                        raise RuntimeError(
+                            f"{package} {cls.__name__}.{workload} failed verification or execution"
+                        ) from exc
                     result = error_result(
                         package=package,
                         backend=backend,
@@ -384,6 +390,11 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=50)
     parser.add_argument("--compile-baseline", action="store_true")
     parser.add_argument("--compile-mode", default="default")
+    parser.add_argument(
+        "--allow-diagnostic-failures",
+        action="store_true",
+        help="record failed diagnostic rows as nan instead of failing the run",
+    )
     parser.add_argument("--output", default="internal-tests/built-artifact-benchmarks/results.json")
     args = parser.parse_args()
 
@@ -400,6 +411,7 @@ def main() -> int:
                 args.iterations,
                 args.compile_baseline,
                 args.compile_mode,
+                args.allow_diagnostic_failures,
             )
         )
 
@@ -412,6 +424,7 @@ def main() -> int:
         "iterations": args.iterations,
         "compile_baseline": args.compile_baseline,
         "compile_mode": args.compile_mode,
+        "allow_diagnostic_failures": args.allow_diagnostic_failures,
         "results": [asdict(item) for item in all_results],
     }
     output.write_text(json.dumps(payload, indent=2) + "\n")

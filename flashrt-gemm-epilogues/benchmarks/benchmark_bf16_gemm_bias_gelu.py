@@ -1,6 +1,15 @@
+import os
+
 import torch
 
 from kernels.benchmark import Benchmark
+
+
+PUBLIC_BF16_GEMM_WORKLOADS = {
+    "bias_decode_m1",
+    "gelu_decode_m1",
+    "gelu_prefill_m64",
+}
 
 
 class Bf16GemmEpilogueBenchmark(Benchmark):
@@ -145,3 +154,18 @@ class Bf16GemmEpilogueBenchmark(Benchmark):
 
     def reference_gelu_wide_k8192_m16(self) -> torch.Tensor:
         return self._gelu_reference()
+
+
+def _hide_diagnostic_workloads() -> None:
+    if os.environ.get("FLASHRT_ENABLE_DIAGNOSTIC_BF16_GEMM") == "1":
+        return
+    for name in list(vars(Bf16GemmEpilogueBenchmark)):
+        for prefix in ("setup_", "benchmark_", "reference_"):
+            if name.startswith(prefix):
+                workload = name.removeprefix(prefix)
+                if workload not in PUBLIC_BF16_GEMM_WORKLOADS:
+                    delattr(Bf16GemmEpilogueBenchmark, name)
+                break
+
+
+_hide_diagnostic_workloads()
