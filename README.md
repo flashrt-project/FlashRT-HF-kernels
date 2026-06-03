@@ -128,13 +128,20 @@ Tensor API for `FP8 up GEMM -> bias/GELU -> FP8 quant -> FP8 down GEMM -> bias`.
 
 | Block | Shape | Layers | vs eager | vs compile | Precision gate |
 | --- | ---: | ---: | ---: | ---: | --- |
-| PI0.5 decoder FFN | `10,1024,4096,1024` | 18 | 6.62x | 3.83x | PASS, p99_abs=0 |
-| GROOT ViT FFN | `512,1024,4096,1024` | 24 | 7.19x | 5.31x | PASS, p99_abs=0 |
-| GROOT VL self-attn FFN | `1024,2048,8192,2048` | 4 | 6.58x | 5.57x | PASS, p99_abs=0 |
+| PI0.5 decoder FFN | `10,1024,4096,1024` | 18 | 6.61x | 3.83x | PASS, p99_abs=0 |
+| PI0.5 vision FFN | `512,1152,4304,1152` | 27 | 6.42x | 4.95x | PASS, p99_abs=0 |
+| GROOT ViT FFN | `512,1024,4096,1024` | 24 | 7.03x | 5.45x | PASS, p99_abs=0 |
+| GROOT VL self-attn FFN | `1024,2048,8192,2048` | 4 | 6.66x | 5.62x | PASS, p99_abs=0 |
 
 This is the stronger first-update story than epilogue-only measurement: a full
 math-equivalent FFN sublayer remains several times faster than both eager and
 `torch.compile` tensor references on RTX 5090.
+
+The expanded source-extension sweep also covers PI0.5 decoder chunk sizes,
+PI0.5 vision 1/2/3-view shapes, GROOT ViT 1/2/4-view shapes, GROOT DeepStack,
+GROOT VL self-attn sequence lengths up to 2520, and the GROOT action DiT GELU
+FFN shape. All rows pass the p99_abs/p99_rel precision gate; built-artifact and
+multi-hardware rows remain pending until the full release build is regenerated.
 
 The full FlashRT serving stack combines multiple math-equivalent kernels across
 attention, FFN, epilogues, quantization/layout, residual paths, and serving

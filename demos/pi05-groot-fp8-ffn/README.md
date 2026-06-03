@@ -17,7 +17,7 @@ and the activation/quantization bridge between them.
 python flashrt-fp8-ffn/tests/test_fp8_ffn.py --backend source
 python flashrt-fp8-ffn/benchmarks/benchmark.py \
   --backend source \
-  --shapes pi05_decoder_ffn,groot_vit_ffn_2view,groot_vl_self_attn_ffn \
+  --shapes headline \
   --compile-baseline \
   --warmup 5 \
   --iters 20 \
@@ -41,16 +41,27 @@ python flashrt-fp8-ffn/benchmarks/benchmark.py \
 
 | Block | Shape | Layers | vs eager | vs compile | Precision |
 | --- | ---: | ---: | ---: | ---: | --- |
-| PI0.5 decoder FFN | `10,1024,4096,1024` | 18 | 6.62x | 3.83x | PASS |
-| GROOT ViT FFN | `512,1024,4096,1024` | 24 | 7.19x | 5.31x | PASS |
-| GROOT VL self-attn FFN | `1024,2048,8192,2048` | 4 | 6.58x | 5.57x | PASS |
+| PI0.5 decoder FFN | `10,1024,4096,1024` | 18 | 6.61x | 3.83x | PASS |
+| PI0.5 vision FFN | `512,1152,4304,1152` | 27 | 6.42x | 4.95x | PASS |
+| GROOT ViT FFN | `512,1024,4096,1024` | 24 | 7.03x | 5.45x | PASS |
+| GROOT VL self-attn FFN | `1024,2048,8192,2048` | 4 | 6.66x | 5.62x | PASS |
+
+Expanded source-extension coverage also passes:
+
+- PI0.5 decoder chunks: `M in {1,8,10,16}`.
+- PI0.5 vision: 1/2/3 views.
+- GROOT ViT: 1/2/4 views.
+- GROOT DeepStack merger.
+- GROOT VL self-attn FFN: `seq in {512,1024,2520}`.
+- GROOT action DiT GELU FFN shape.
 
 ## Interpretation
 
-This is a full FFN sublayer benchmark, not a full PI0.5/GROOT generation
+This is a full FFN model-block benchmark, not a full PI0.5/GROOT generation
 benchmark. It proves that a complete, Hub-loadable FlashRT FP8 FFN block keeps
 a multi-x gap over both PyTorch eager and `torch.compile` on VLA/VLM-shaped
-workloads.
+workloads. Full checkpoint-level throughput should be reported separately once
+the model frontend, calibration, and input pipeline are fixed for the run.
 
 The full serving stack can stack this FFN acceleration with attention kernels,
 QKV postprocess, quant/layout kernels, CUDA Graph orchestration, and community

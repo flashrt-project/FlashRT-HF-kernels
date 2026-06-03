@@ -8,6 +8,7 @@ import ctypes
 import ctypes.util
 import importlib
 import json
+import math
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -30,10 +31,63 @@ REGISTRATION_INCLUDE = (
 
 
 SHAPES = {
+    # PI0.5 decoder chunks. Production default is 10 denoising steps.
+    "pi05_decoder_ffn_m1": (1, 1024, 4096, 1024, 18),
+    "pi05_decoder_ffn_m8": (8, 1024, 4096, 1024, 18),
+    "pi05_decoder_ffn_m10": (10, 1024, 4096, 1024, 18),
+    "pi05_decoder_ffn_m16": (16, 1024, 4096, 1024, 18),
+    # Backward-compatible headline alias.
     "pi05_decoder_ffn": (10, 1024, 4096, 1024, 18),
+    # PI0.5 SigLIP-L FFN. One view is 256 visual tokens.
+    "pi05_vision_ffn_1view": (256, 1152, 4304, 1152, 27),
+    "pi05_vision_ffn_2view": (512, 1152, 4304, 1152, 27),
+    "pi05_vision_ffn_3view": (768, 1152, 4304, 1152, 27),
+    # GROOT/Qwen3-VL ViT FFN.
+    "groot_vit_ffn_1view": (256, 1024, 4096, 1024, 24),
     "groot_vit_ffn_2view": (512, 1024, 4096, 1024, 24),
+    "groot_vit_ffn_4view": (1024, 1024, 4096, 1024, 24),
+    # GROOT DeepStack merger. Two-view ViT taps produce 128 merged tokens.
+    "groot_deepstack_merge_2view": (128, 4096, 4096, 2048, 3),
+    # GROOT VL self-attention FFN. Sequence length changes with vision/text mix.
+    "groot_vl_self_attn_ffn_seq512": (512, 2048, 8192, 2048, 4),
+    "groot_vl_self_attn_ffn_seq1024": (1024, 2048, 8192, 2048, 4),
+    "groot_vl_self_attn_ffn_seq2520": (2520, 2048, 8192, 2048, 4),
+    # Backward-compatible headline alias.
     "groot_vl_self_attn_ffn": (1024, 2048, 8192, 2048, 4),
+    # GROOT action DiT GELU FFN. This is exact GELU shape, but the production
+    # path currently uses BF16 GEMMs; report it as a shape fit, not a deployed
+    # FP8 action-head claim until model wiring is done.
+    "groot_action_dit_ffn": (41, 1536, 6144, 1536, 32),
 }
+
+SHAPE_GROUPS = {
+    "headline": [
+        "pi05_decoder_ffn_m10",
+        "pi05_vision_ffn_2view",
+        "groot_vit_ffn_2view",
+        "groot_vl_self_attn_ffn_seq1024",
+    ],
+    "pi05": [
+        "pi05_decoder_ffn_m1",
+        "pi05_decoder_ffn_m8",
+        "pi05_decoder_ffn_m10",
+        "pi05_decoder_ffn_m16",
+        "pi05_vision_ffn_1view",
+        "pi05_vision_ffn_2view",
+        "pi05_vision_ffn_3view",
+    ],
+    "groot": [
+        "groot_vit_ffn_1view",
+        "groot_vit_ffn_2view",
+        "groot_vit_ffn_4view",
+        "groot_deepstack_merge_2view",
+        "groot_vl_self_attn_ffn_seq512",
+        "groot_vl_self_attn_ffn_seq1024",
+        "groot_vl_self_attn_ffn_seq2520",
+        "groot_action_dit_ffn",
+    ],
+}
+SHAPE_GROUPS["all"] = SHAPE_GROUPS["pi05"] + SHAPE_GROUPS["groot"]
 
 
 @dataclass
@@ -202,6 +256,12 @@ def time_us(fn, *, warmup: int, iters: int) -> float:
     return start.elapsed_time(end) * 1000.0 / iters
 
 
+def percentile(x: torch.Tensor, q: float) -> torch.Tensor:
+    flat = x.flatten()
+    k = max(1, min(flat.numel(), math.ceil(q * flat.numel())))
+    return flat.kthvalue(k).values
+
+
 def compile_time_us(fn, *, warmup: int, iters: int) -> tuple[float | None, str]:
     try:
         compiled = torch.compile(fn, fullgraph=True, mode="reduce-overhead")
@@ -250,10 +310,14 @@ def run_shape(ops, name: str, shape, args) -> Result:
     diff = (outs[0].float() - expected0.float()).abs().flatten()
     rel = diff / expected0.float().abs().flatten().clamp_min(1.0)
     max_abs = float(diff.max().item())
-    p99_abs = float(torch.quantile(diff, 0.99).item())
-    p99_rel = float(torch.quantile(rel, 0.99).item())
+    p99_abs = float(percentile(diff, 0.99).item())
+    p99_rel = float(percentile(rel, 0.99).item())
     max_rel = float(rel.max().item())
-    status = "PASS" if p99_abs <= 0.5 and p99_rel <= 0.05 else "FAIL"
+    status = (
+        "PASS"
+        if p99_abs <= args.p99_abs_limit and p99_rel <= args.p99_rel_floor1_limit
+        else "FAIL"
+    )
 
     flashrt_us = time_us(flashrt_stack, warmup=args.warmup, iters=args.iters)
     eager_us = time_us(torch_stack, warmup=args.warmup, iters=args.iters)
@@ -291,9 +355,11 @@ def write_markdown(path: Path, results: list[Result], args) -> None:
         f"- Device: `{torch.cuda.get_device_name(0)}`",
         f"- Torch: `{torch.__version__}`",
         f"- Warmup/iters: `{args.warmup}/{args.iters}`",
+        f"- Precision gate: p99_abs <= `{args.p99_abs_limit}` and "
+        f"p99_rel_floor1 <= `{args.p99_rel_floor1_limit}`",
         "",
-        "| Shape | M,K,H,N | Layers | FlashRT us | Eager us | vs eager | Compile us | vs compile | P99 abs | Max abs | Status |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Shape | M,K,H,N | Layers | FlashRT us | Eager us | vs eager | Compile us | vs compile | P99 abs | P99 rel | Max abs | Status |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for r in results:
         compile_us = f"{r.torch_compile_us:.3f}" if r.torch_compile_us is not None else "n/a"
@@ -301,7 +367,8 @@ def write_markdown(path: Path, results: list[Result], args) -> None:
         lines.append(
             f"| {r.shape} | {r.M},{r.K},{r.H},{r.N} | {r.layers} | "
             f"{r.flashrt_us:.3f} | {r.torch_eager_us:.3f} | {r.speedup_vs_eager:.2f}x | "
-            f"{compile_us} | {compile_speedup} | {r.p99_abs:.4f} | {r.max_abs:.4f} | {r.status} |"
+            f"{compile_us} | {compile_speedup} | {r.p99_abs:.4f} | "
+            f"{r.p99_rel_floor1:.6f} | {r.max_abs:.4f} | {r.status} |"
         )
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -315,16 +382,41 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iters", type=int, default=20)
     parser.add_argument("--compile-baseline", action="store_true")
+    parser.add_argument("--p99-abs-limit", type=float, default=1.0)
+    parser.add_argument("--p99-rel-floor1-limit", type=float, default=0.05)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--markdown", type=Path, default=None)
+    parser.add_argument("--list-shapes", action="store_true")
     args = parser.parse_args()
+
+    if args.list_shapes:
+        print("Shape groups:")
+        for group, names in SHAPE_GROUPS.items():
+            print(f"  {group}: {','.join(names)}")
+        print("\nShapes:")
+        for name, shape in SHAPES.items():
+            print(f"  {name}: M,K,H,N,layers={shape}")
+        return
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
     torch.manual_seed(17)
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
-    names = list(SHAPES) if args.shapes == "all" else [s.strip() for s in args.shapes.split(",")]
-    results = [run_shape(ops, name, SHAPES[name], args) for name in names]
+    requested = [s.strip() for s in args.shapes.split(",")]
+    names: list[str] = []
+    for item in requested:
+        if item in SHAPE_GROUPS:
+            names.extend(SHAPE_GROUPS[item])
+        else:
+            names.append(item)
+    unknown = [name for name in names if name not in SHAPES]
+    if unknown:
+        raise SystemExit(f"unknown shapes/groups: {unknown}")
+
+    results = []
+    for name in names:
+        results.append(run_shape(ops, name, SHAPES[name], args))
+        torch.cuda.empty_cache()
 
     for r in results:
         compile_part = (

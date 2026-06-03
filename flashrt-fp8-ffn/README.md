@@ -66,10 +66,11 @@ y = ops.fp8_gelu_mlp_bf16(
 Run from the repository root:
 
 ```bash
-python tests/test_fp8_ffn.py
-python benchmarks/benchmark.py
+python flashrt-fp8-ffn/tests/test_fp8_ffn.py --backend source
+python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes headline --compile-baseline
+python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes all
 ```
 
 The package benchmark should be reported against PyTorch eager and
-`torch.compile` references. Model-shaped demos should be reported separately
-from full model generation throughput claims.
+`torch.compile` references for headline rows. Model-block demos should be
+reported separately from full model generation throughput claims.

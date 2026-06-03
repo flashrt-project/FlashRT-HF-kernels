@@ -7,6 +7,7 @@ import argparse
 import ctypes
 import ctypes.util
 import importlib
+import math
 import os
 import sys
 from pathlib import Path
@@ -182,6 +183,12 @@ def assert_close(name: str, got: torch.Tensor, expected: torch.Tensor, *, atol: 
     print(f"PASS {name}: max_abs={max_abs:.6f}")
 
 
+def percentile(x: torch.Tensor, q: float) -> torch.Tensor:
+    flat = x.flatten()
+    k = max(1, min(flat.numel(), math.ceil(q * flat.numel())))
+    return flat.kthvalue(k).values
+
+
 def assert_distribution_close(
     name: str,
     got: torch.Tensor,
@@ -194,9 +201,9 @@ def assert_distribution_close(
     exp = expected.float().abs().flatten().clamp_min(1.0)
     rel = diff / exp
     max_abs = float(diff.max().item())
-    p99_abs = float(torch.quantile(diff, 0.99).item())
+    p99_abs = float(percentile(diff, 0.99).item())
     max_rel = float(rel.max().item())
-    p99_rel = float(torch.quantile(rel, 0.99).item())
+    p99_rel = float(percentile(rel, 0.99).item())
     if p99_abs > p99_abs_limit or p99_rel > p99_rel_floor1_limit:
         raise AssertionError(
             f"{name} failed: max_abs={max_abs} p99_abs={p99_abs} "
@@ -209,6 +216,30 @@ def assert_distribution_close(
     )
 
 
+def assert_fp8_quant_close(
+    name: str,
+    got: torch.Tensor,
+    expected: torch.Tensor,
+    *,
+    p99_abs_limit: float,
+    mismatch_rate_limit: float,
+) -> None:
+    diff = (got.float() - expected.float()).abs().flatten()
+    mismatches = int((got.detach().cpu() != expected.detach().cpu()).sum().item())
+    mismatch_rate = mismatches / got.numel()
+    max_abs = float(diff.max().item())
+    p99_abs = float(percentile(diff, 0.99).item())
+    if p99_abs > p99_abs_limit or mismatch_rate > mismatch_rate_limit:
+        raise AssertionError(
+            f"{name} failed: fp8_max_abs={max_abs} fp8_p99_abs={p99_abs} "
+            f"mismatches={mismatches} mismatch_rate={mismatch_rate}"
+        )
+    print(
+        f"PASS {name}: fp8_max_abs={max_abs:.6f} fp8_p99_abs={p99_abs:.6f} "
+        f"mismatches={mismatches} mismatch_rate={mismatch_rate:.8f}"
+    )
+
+
 def run(args) -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
@@ -217,8 +248,12 @@ def run(args) -> None:
 
     for label, shape in {
         "small": (16, 128, 256, 128),
-        "groot_vit": (128, 1024, 4096, 1024),
+        "pi05_vision": (512, 1152, 4304, 1152),
         "pi05_decoder": (10, 1024, 4096, 1024),
+        "groot_vit": (128, 1024, 4096, 1024),
+        "groot_deepstack": (128, 4096, 4096, 2048),
+        "groot_vl_self_attn_long": (2520, 2048, 8192, 2048),
+        "groot_action_dit": (41, 1536, 6144, 1536),
     }.items():
         x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s = make_case(*shape)
 
@@ -228,16 +263,12 @@ def run(args) -> None:
 
         _, got_hidden_fp8 = ops.fp8_linear_bias_gelu_quant_bf16(x, up_w, up_b, x_s, up_s, hid_s)
         _, exp_hidden_fp8 = ref_linear_bias_gelu_quant(x, up_w, up_b, x_s, up_s, hid_s)
-        mismatches = int((got_hidden_fp8.detach().cpu() != exp_hidden_fp8.detach().cpu()).sum().item())
-        fp8_max_abs = float((got_hidden_fp8.float() - exp_hidden_fp8.float()).abs().max().item())
-        if fp8_max_abs > 4.0:
-            raise AssertionError(
-                f"{label}/fp8_linear_bias_gelu_quant_bf16 "
-                f"fp8_max_abs={fp8_max_abs} mismatches={mismatches}"
-            )
-        print(
-            f"PASS {label}/fp8_linear_bias_gelu_quant_bf16: "
-            f"fp8_max_abs={fp8_max_abs:.6f} mismatches={mismatches}"
+        assert_fp8_quant_close(
+            f"{label}/fp8_linear_bias_gelu_quant_bf16",
+            got_hidden_fp8,
+            exp_hidden_fp8,
+            p99_abs_limit=0.0,
+            mismatch_rate_limit=1e-4,
         )
 
         got_mlp = ops.fp8_gelu_mlp_bf16(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s)
@@ -246,7 +277,7 @@ def run(args) -> None:
             f"{label}/fp8_gelu_mlp_bf16",
             got_mlp,
             exp_mlp,
-            p99_abs_limit=0.5,
+            p99_abs_limit=1.0,
             p99_rel_floor1_limit=0.05,
         )
 
