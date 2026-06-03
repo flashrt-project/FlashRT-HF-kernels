@@ -18,8 +18,10 @@ with public Tensor-based APIs, package tests, examples, and benchmark scripts.
 Current local status:
 
 - All v1 packages pass configuration-level prebuild checks.
-- Release-candidate artifacts have been generated locally and pass ABI
-  compatibility plus `get_kernel` load checks.
+- Release-candidate full-matrix artifacts have been generated locally and pass
+  ABI compatibility plus `get_kernel` load checks.
+- The RTX 5090 installed-artifact correctness gate passes 345/345 checks for
+  `torch211-cxx11-cu128`.
 - Additional hardware validation is in progress.
 - Final public artifacts should be regenerated from a clean upstream
   `kernel-builder` revision before upload.
@@ -39,7 +41,7 @@ After upload, packages are intended to be consumed through the Hugging Face
 from kernels import get_kernel
 
 ops = get_kernel(
-    "LiangSu8899/flashrt-vla-video",
+    "flashrt/flashrt-vla-video",
     version=1,
     trust_remote_code=True,
 )
@@ -54,6 +56,12 @@ q, k = ops.qkv_split_norm_rope_bf16(
     head_dim=128,
 )
 ```
+
+The `flashrt/flashrt-*` namespace is the intended Hub namespace from each
+package's `build.toml`. Users can load these names only after the corresponding
+kernel repositories and artifacts are uploaded to the Hugging Face Hub. Until
+then, this GitHub repository is a source and validation repository, not a live
+Kernel Hub distribution.
 
 ## Goals
 

@@ -18,8 +18,12 @@ Artifact source:
 - Built with `kernel-builder-docker build --variant torch211-cxx11-cu128-x86_64-linux`.
 - Copied from the Docker container Nix store into each package's `build/`
   directory with `scripts/copy_docker_variant_artifacts.py`.
-- Current v1 batch artifacts were rebuilt from clean commit `21417e6`, and all
-  six packages completed `kernel-builder-docker check-builds`.
+- The selected runtime-correctness artifact set was first validated from clean
+  commit `21417e6`.
+- The full v1 matrix was later validated from commit
+  `d0a125d9d6eb88bf55c63712a78eeb7e12ab97e7` using a local
+  `kernel-builder` Triton hash workaround. Those full-matrix artifacts are
+  local validation artifacts and have a `_d0a125d_dirty` suffix.
 
 Runtime validation environment:
 
@@ -123,21 +127,41 @@ by default; they require explicit `--allow-diagnostic-failures`.
 
 ## Full Matrix Status
 
-This is not a full HF matrix build. The package variant lists are:
+The full local `kernel-builder build-and-copy` matrix completed on June 3,
+2026 from commit `d0a125d9d6eb88bf55c63712a78eeb7e12ab97e7` after applying a
+builder-side Triton fixed-output hash workaround. This produced 28 `.so`
+artifacts across the six v1 packages.
 
-- `flashrt-gemm-epilogues`, `flashrt-fp8-ffn`, `flashrt-vla-video`: six CUDA
-  x86_64 variants covering Torch 2.11/2.12 and CUDA 12.6/12.8/13.0/13.2 as
-  applicable.
-- `flashrt-nvfp4`, `flashrt-smallm-gemm`, `flashrt-fused-quant`: four CUDA
-  x86_64 variants because they require CUDA 12.8+ and SM120.
+Every produced artifact passed:
 
-The full `kernel-builder build-and-copy` matrix remains a release-window job.
-An attempted full-matrix build on June 2, 2026 failed before any FlashRT source
-compile in the Torch 2.12/CUDA 13.2 dependency path because the Nix
-fixed-output derivation for `triton-3.7.0` reported a hash mismatch. The v1
-release-candidate artifact above is therefore the selected torch211/cu128
-variant, not a full HF matrix artifact.
+- manylinux/Python ABI compatibility check;
+- kernel layout check;
+- `get_kernel` load check.
 
-After the full matrix passes, run hardware validation on the other target
-machines before widening public hardware claims. SM120 packages should stay
-labeled CUDA 12.8+ SM120 until a non-SM120 source path is added.
+Actual local artifact matrix:
+
+| Package | Variants built |
+| --- | --- |
+| `flashrt-gemm-epilogues` | `torch211-cxx11-cu126`, `torch211-cxx11-cu128`, `torch211-cxx11-cu130`, `torch212-cxx11-cu126`, `torch212-cxx11-cu130`, `torch212-cxx11-cu132` |
+| `flashrt-fp8-ffn` | `torch211-cxx11-cu128`, `torch211-cxx11-cu130`, `torch212-cxx11-cu130`, `torch212-cxx11-cu132` |
+| `flashrt-vla-video` | `torch211-cxx11-cu126`, `torch211-cxx11-cu128`, `torch211-cxx11-cu130`, `torch212-cxx11-cu126`, `torch212-cxx11-cu130`, `torch212-cxx11-cu132` |
+| `flashrt-nvfp4` | `torch211-cxx11-cu128`, `torch211-cxx11-cu130`, `torch212-cxx11-cu130`, `torch212-cxx11-cu132` |
+| `flashrt-smallm-gemm` | `torch211-cxx11-cu128`, `torch211-cxx11-cu130`, `torch212-cxx11-cu130`, `torch212-cxx11-cu132` |
+| `flashrt-fused-quant` | `torch211-cxx11-cu128`, `torch211-cxx11-cu130`, `torch212-cxx11-cu130`, `torch212-cxx11-cu132` |
+
+Installed-artifact correctness was rerun against the full-matrix
+`torch211-cxx11-cu128` artifacts on RTX 5090:
+
+```text
+accuracy sweep passed: 345 checks
+```
+
+The remaining release distinction is cleanliness, not package functionality:
+the local full-matrix artifacts have a `_d0a125d_dirty` suffix because the
+disposable validation clone pointed to a local patched `kernel-builder`.
+Before public upload, regenerate the same matrix from a clean upstream builder
+revision after HF confirms or fixes the Triton hash mismatch.
+
+Hardware validation on other target machines is still required before widening
+public hardware claims. SM120 packages should stay labeled CUDA 12.8+ SM120
+until a non-SM120 source path is added.

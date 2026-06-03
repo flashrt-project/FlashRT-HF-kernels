@@ -21,12 +21,12 @@ builds.
 
 | Package | Current gate | Ready claim | Blocking gaps |
 | --- | --- | --- | --- |
-| `flashrt-gemm-epilogues` | G5 RC | v1 FP8/GEMM epilogue block with torch211/cu128 built-artifact correctness, package tests, examples, and verified public benchmark rows on RTX 5090 | Multi-hardware validation and full HF matrix |
-| `flashrt-fp8-ffn` | G5 RC | FP8 GEMM and full GELU MLP/FFN torch211/cu128 built-artifact correctness passes on RTX 5090; PI0.5/GROOT FFN benchmark shows 3.83-5.57x vs `torch.compile` source references | Multi-hardware validation, full HF matrix, decide whether CUTLASS/megakernel replaces cuBLASLt path for SM120 headline |
-| `flashrt-vla-video` | G5 RC | VLA/video Q/K and QKV post-processing torch211/cu128 built-artifact correctness, package tests, examples, and verified public benchmark rows pass on RTX 5090 | Multi-hardware validation and full HF matrix |
-| `flashrt-nvfp4` | G5 RC | v1 Blackwell layout helper torch211/cu128 built-artifact correctness, package tests, examples, and verified public benchmark rows pass on RTX 5090 | Multi-hardware validation, full HF matrix, broader fused GEMM epilogue surfaces |
-| `flashrt-smallm-gemm` | G5 RC | SM120 NVFP4 W4A4 decode matvec torch211/cu128 built-artifact correctness, package tests, examples, and verified public benchmark rows pass on RTX 5090 | Multi-hardware validation, full HF matrix, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
-| `flashrt-fused-quant` | G5 RC | Split and merged SiLU+NVFP4 quantization torch211/cu128 built-artifact correctness, package tests, examples, and benchmark latency grid complete on RTX 5090 | Multi-hardware validation, full HF matrix, memory-bandwidth benchmark, residual/RMSNorm slices |
+| `flashrt-gemm-epilogues` | G5 RC | v1 FP8/GEMM epilogue block with package tests, examples, RTX 5090 correctness, verified public benchmark rows, and local full-matrix ABI/load checks | Multi-hardware validation and clean upstream-builder rebuild |
+| `flashrt-fp8-ffn` | G5 RC | FP8 GEMM and full GELU MLP/FFN correctness passes on RTX 5090; PI0.5/GROOT FFN benchmark shows 3.83-5.57x vs `torch.compile`; local full-matrix ABI/load checks pass | Multi-hardware validation, clean upstream-builder rebuild, decide whether CUTLASS/megakernel replaces cuBLASLt path for SM120 headline |
+| `flashrt-vla-video` | G5 RC | VLA/video Q/K and QKV post-processing correctness, package tests, examples, verified public benchmark rows, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation and clean upstream-builder rebuild |
+| `flashrt-nvfp4` | G5 RC | v1 Blackwell layout helper correctness, package tests, examples, verified public benchmark rows, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, broader fused GEMM epilogue surfaces |
+| `flashrt-smallm-gemm` | G5 RC | SM120 NVFP4 W4A4 decode matvec correctness, package tests, examples, verified public benchmark rows, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
+| `flashrt-fused-quant` | G5 RC | Split and merged SiLU+NVFP4 quantization correctness, package tests, examples, benchmark latency grid, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, memory-bandwidth benchmark, residual/RMSNorm slices |
 
 ## V1 Batch Blocks
 
@@ -58,8 +58,9 @@ Before uploading the v1 batch to the Hub:
   validation window.
 - The selected release-candidate variant is copied into package `build/`
   directories and passes installed-backend accuracy sweep.
-- The full HF matrix uses `kernel-builder build-and-copy`; it is a separate
-  release-window job from the single-variant release-candidate build.
+- The full HF matrix uses `kernel-builder build-and-copy`; local full-matrix
+  validation has passed with a builder-side Triton hash workaround. Public
+  upload still requires a clean upstream-builder rebuild.
 - The release window follows `docs/release-runbook.md`.
 - Package `README.md`, `CARD.md`, and `VALIDATION.md` state the same hardware
   and API scope.
