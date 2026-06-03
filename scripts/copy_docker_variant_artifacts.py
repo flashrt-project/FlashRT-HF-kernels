@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = [
     "flashrt-gemm-epilogues",
+    "flashrt-fp8-ffn",
     "flashrt-vla-video",
     "flashrt-nvfp4",
     "flashrt-smallm-gemm",

@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VARIANT = "torch211-cxx11-cu128-x86_64-linux"
 PACKAGES = {
     "flashrt-gemm-epilogues": "flashrt_gemm_epilogues",
+    "flashrt-fp8-ffn": "flashrt_fp8_ffn",
     "flashrt-vla-video": "flashrt_vla_video",
     "flashrt-nvfp4": "flashrt_nvfp4",
     "flashrt-smallm-gemm": "flashrt_smallm_gemm",

@@ -3,6 +3,7 @@
 | Package | First public APIs | Upstream FlashRT areas | Main baseline | Showcase role |
 | --- | --- | --- | --- | --- |
 | `flashrt-gemm-epilogues` | `bias_gelu_quantize_fp8_static_bf16`, `gelu_quantize_fp8_static_bf16`, `channel_scale_quantize_fp8_static_bf16`, selected `bf16_gemm_bias*` | `csrc/gemm`, selected quant epilogues | `torch.addmm` plus elementwise/quant ops | First buildable package; FP8 quant epilogue headline |
+| `flashrt-fp8-ffn` | `fp8_gemm_bf16`, `fp8_linear_bias_gelu_quant_bf16`, `fp8_gelu_mlp_bf16` | `csrc/kernels/decoder_fused.cu`, FP8 GEMM descale paths, FP8 quant epilogues | PyTorch eager and `torch.compile` fake-FP8 MLP references | Full VLA/VLM FFN sublayer showcase |
 | `flashrt-vla-video` | `q_norm_rope_bf16`, `k_norm_rope_v_cache_bf16`, `qkv_split_norm_rope_bf16`, then `residual_rmsnorm_quant_nvfp4`, `silu_mul_quant_nvfp4`, `video_conv_lowbit` | `csrc/kernels`, `flash_wm/csrc`, `csrc/conv`, `csrc/quantize` | PyTorch eager, FlashRT internal reference, model-block baseline | First 20-30x+ showcase package |
 | `flashrt-nvfp4` | `nvfp4_sf_linear_to_swizzled`, `nvfp4_sf_swizzled_bytes`; planned `nvfp4_linear_bias_gelu_fp4out_sm120`, `nvfp4_linear_bias_gelu_bf16out_sm120`, `nvfp4_linear_streamk_bias_bf16out_sm120` | `csrc/quantize`, `csrc/gemm/fp4`, `flash_wm/csrc` | CUTLASS/cuBLAS where applicable, PyTorch dequant reference | Buildable NVFP4 layout helper; strong Blackwell low-bit showcase follows |
 | `flashrt-smallm-gemm` | `nvfp4_w4a4_decode_matvec_bf16out`, `nvfp4_w4a4_smallm_warpsplit_bf16out`, `tiny_fp8_smallm_gemm_bf16out` | `csrc/kernels`, `csrc/kernels/megakernel`, small-M matvec/matmul files | cuBLASLt, generic CUTLASS, PyTorch eager | Decode latency showcase for LLM/VLA serving |
@@ -15,7 +16,7 @@ is not a priority order.
 
 | V1 block | Packages | Message |
 | --- | --- | --- |
-| FP8/GEMM epilogues | `flashrt-gemm-epilogues` | FP8 quant epilogues plus conservative BF16 GEMM epilogue wrappers |
+| FP8/GEMM and FFN | `flashrt-gemm-epilogues`, `flashrt-fp8-ffn` | FP8 quant epilogues plus full FP8 GELU MLP/FFN sublayers |
 | VLA/video post-processing | `flashrt-vla-video` | 19-40x local RTX 5090 evidence for fused QKV/norm/RoPE/cache paths |
 | Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | Layout helpers, fused low-bit GEMM epilogues, and small-M/decode kernels |
 | Fused quantization | `flashrt-fused-quant` | Activation, residual, norm, and low-bit quantization fusion |

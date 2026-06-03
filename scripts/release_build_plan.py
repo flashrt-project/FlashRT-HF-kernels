@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER = "/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker"
 PACKAGES = [
     "flashrt-gemm-epilogues",
+    "flashrt-fp8-ffn",
     "flashrt-vla-video",
     "flashrt-nvfp4",
     "flashrt-smallm-gemm",

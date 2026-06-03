@@ -87,6 +87,8 @@ demos:
 - `demos/wan-qkv-postprocess`: Wan/video-diffusion attention postprocess.
 - `demos/pi05-groot-ffn-epilogue`: PI0.5/GROOT-shaped repeated FFN epilogue
   and activation-quant blocks.
+- `flashrt-fp8-ffn/benchmarks`: full FP8 GELU MLP sublayers for PI0.5/GROOT
+  shapes.
 
 These numbers are math-equivalent comparisons against PyTorch eager and
 `torch.compile` tensor code; they do not use cache reuse, sampling-step
@@ -121,6 +123,19 @@ model generation throughput claim. A full end-to-end PI0.5/GROOT demo should
 ship after the FP8 GEMM/FFN or megakernel path is exported as a Hub-loadable
 kernel package.
 
+Full FP8 FFN snapshot uses `flashrt-fp8-ffn`, which exports a Hub-loadable
+Tensor API for `FP8 up GEMM -> bias/GELU -> FP8 quant -> FP8 down GEMM -> bias`.
+
+| Block | Shape | Layers | vs eager | vs compile | Precision gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| PI0.5 decoder FFN | `10,1024,4096,1024` | 18 | 6.62x | 3.83x | PASS, p99_abs=0 |
+| GROOT ViT FFN | `512,1024,4096,1024` | 24 | 7.19x | 5.31x | PASS, p99_abs=0 |
+| GROOT VL self-attn FFN | `1024,2048,8192,2048` | 4 | 6.58x | 5.57x | PASS, p99_abs=0 |
+
+This is the stronger first-update story than epilogue-only measurement: a full
+math-equivalent FFN sublayer remains several times faster than both eager and
+`torch.compile` tensor references on RTX 5090.
+
 The full FlashRT serving stack combines multiple math-equivalent kernels across
 attention, FFN, epilogues, quantization/layout, residual paths, and serving
 orchestration. Those gains are designed to stack with community techniques such
@@ -131,6 +146,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | Package | Stage | Purpose |
 | --- | --- | --- |
 | `flashrt-gemm-epilogues` | V1 block | FP8 quant epilogue helpers plus selected BF16 GEMM epilogues. |
+| `flashrt-fp8-ffn` | V1 block | Hub-loadable FP8 GEMM and full GELU MLP/FFN sublayers for VLA/VLM shapes. |
 | `flashrt-vla-video` | V1 block | VLA, vision, video, and diffusion kernels that are reusable outside the FlashRT serving engine. |
 | `flashrt-nvfp4` | V1 block | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
 | `flashrt-smallm-gemm` | V1 block | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |

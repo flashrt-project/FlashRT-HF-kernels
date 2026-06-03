@@ -22,6 +22,7 @@ builds.
 | Package | Current gate | Ready claim | Blocking gaps |
 | --- | --- | --- | --- |
 | `flashrt-gemm-epilogues` | G5 partial | v1 FP8/GEMM epilogue block with RTX 5090 evidence and an HF-style block example | Run example against built/Hub package, refresh public benchmark runner output, multi-hardware validation |
+| `flashrt-fp8-ffn` | G5 source | FP8 GEMM and full GELU MLP source correctness pass on RTX 5090; PI0.5/GROOT FFN benchmark shows 3.83-5.57x vs `torch.compile` | Built-artifact validation, multi-hardware validation, decide whether CUTLASS/megakernel replaces cuBLASLt path for SM120 headline |
 | `flashrt-vla-video` | G2 | VLA/video Q/K and QKV post-processing source accuracy sweep passes on RTX 5090 | Full builder build, public benchmark runner, run example against built/Hub package, multi-hardware validation |
 | `flashrt-nvfp4` | G2 | v1 Blackwell layout helper with benchmark and example paths | Full builder build, benchmark runner, fused GEMM epilogue surfaces, multi-hardware validation |
 | `flashrt-smallm-gemm` | G2 | SM120 NVFP4 W4A4 decode matvec source accuracy sweep passes constant and random/dequant references | Full builder build, run benchmark grid, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
@@ -33,7 +34,7 @@ The first public version has four equal blocks:
 
 | Block | Packages | Minimum v1 surface |
 | --- | --- | --- |
-| FP8/GEMM epilogues | `flashrt-gemm-epilogues` | FP8 quant epilogues plus conservative BF16 GEMM epilogue wrappers |
+| FP8/GEMM and FFN | `flashrt-gemm-epilogues`, `flashrt-fp8-ffn` | FP8 quant epilogues plus full FP8 GELU MLP/FFN sublayers |
 | VLA/video post-processing | `flashrt-vla-video` | Q/K RMSNorm+RoPE/cache and packed-QKV split+norm+RoPE |
 | Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | NVFP4 scale layout helper plus at least one validated small-M/decode W4A4 path |
 | Fused quantization | `flashrt-fused-quant` | SiLU/gate or norm/residual low-bit quantization with reference tests and bandwidth benchmark |

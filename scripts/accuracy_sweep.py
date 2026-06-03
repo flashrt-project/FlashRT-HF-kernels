@@ -137,6 +137,13 @@ SOURCE_SPECS = {
             "csrc/channel_scale_quantize_fp8.cu",
         ],
     },
+    "flashrt-fp8-ffn": {
+        "module": "flashrt_fp8_ffn",
+        "sources": [
+            "torch-ext/torch_binding.cpp",
+            "csrc/fp8_ffn.cu",
+        ],
+    },
     "flashrt-vla-video": {
         "module": "flashrt_vla_video",
         "sources": [
@@ -240,6 +247,65 @@ class SourceOps:
         if out is None:
             out = torch.empty(input.shape, device=input.device, dtype=torch.float8_e4m3fn)
         self._ops.channel_scale_quantize_fp8_static_bf16(input, channel_scale, scale, out)
+        return out
+
+    def fp8_gemm_bf16(self, input, weight, input_scale, weight_scale, out=None):
+        torch = _torch()
+        if out is None:
+            out = torch.empty((input.shape[0], weight.shape[0]), device=input.device, dtype=torch.bfloat16)
+        self._ops.fp8_gemm_bf16(input, weight, input_scale, weight_scale, out)
+        return out
+
+    def fp8_linear_bias_gelu_quant_bf16(
+        self, input, weight, bias, input_scale, weight_scale, output_scale, hidden_bf16=None, out_fp8=None
+    ):
+        torch = _torch()
+        if hidden_bf16 is None:
+            hidden_bf16 = torch.empty((input.shape[0], weight.shape[0]), device=input.device, dtype=torch.bfloat16)
+        if out_fp8 is None:
+            out_fp8 = torch.empty_like(hidden_bf16, dtype=torch.float8_e4m3fn)
+        self._ops.fp8_linear_bias_gelu_quant_bf16(
+            input, weight, bias, input_scale, weight_scale, output_scale, hidden_bf16, out_fp8
+        )
+        return hidden_bf16, out_fp8
+
+    def fp8_gelu_mlp_bf16(
+        self,
+        input,
+        up_weight,
+        up_bias,
+        down_weight,
+        down_bias,
+        input_scale,
+        up_weight_scale,
+        hidden_scale,
+        down_weight_scale,
+        *,
+        hidden_bf16=None,
+        hidden_fp8=None,
+        out=None,
+    ):
+        torch = _torch()
+        if hidden_bf16 is None:
+            hidden_bf16 = torch.empty((input.shape[0], up_weight.shape[0]), device=input.device, dtype=torch.bfloat16)
+        if hidden_fp8 is None:
+            hidden_fp8 = torch.empty_like(hidden_bf16, dtype=torch.float8_e4m3fn)
+        if out is None:
+            out = torch.empty((input.shape[0], down_weight.shape[0]), device=input.device, dtype=torch.bfloat16)
+        self._ops.fp8_gelu_mlp_bf16(
+            input,
+            up_weight,
+            up_bias,
+            down_weight,
+            down_bias,
+            input_scale,
+            up_weight_scale,
+            hidden_scale,
+            down_weight_scale,
+            hidden_bf16,
+            hidden_fp8,
+            out,
+        )
         return out
 
     def q_norm_rope_bf16(self, q, weight, cos, sin, out=None, *, eps=1e-6):
