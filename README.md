@@ -9,6 +9,10 @@ hardware-specific serving decisions. This repository exposes stable,
 Tensor-based kernel APIs that can be built and loaded by the Hugging Face
 `kernels` package.
 
+For the complete model runtime, serving pipeline, and production FlashRT
+frontends, see the upstream repository:
+[LiangSu8899/FlashRT](https://github.com/LiangSu8899/FlashRT).
+
 ## Current Snapshot
 
 This repository is a release-candidate integration layer for the first FlashRT
