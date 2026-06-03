@@ -90,7 +90,7 @@ tile for every shape.
 - Compute capability: SM120
 - Driver: 580.82.07
 - Variant: `torch211-cxx11-cu128-x86_64-linux`
-- Built from commit: `34f9740`
+- Built from commit: `21417e6`
 - Torch inside HF testshell: 2.11.0+cu128
 - Backend: copied `kernel-builder` artifact
 - Precision gate: same as source-extension results.

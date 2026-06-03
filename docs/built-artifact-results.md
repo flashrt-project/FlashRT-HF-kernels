@@ -18,6 +18,8 @@ Artifact source:
 - Built with `kernel-builder-docker build --variant torch211-cxx11-cu128-x86_64-linux`.
 - Copied from the Docker container Nix store into each package's `build/`
   directory with `scripts/copy_docker_variant_artifacts.py`.
+- Current v1 batch artifacts were rebuilt from clean commit `21417e6`, and all
+  six packages completed `kernel-builder-docker check-builds`.
 
 Runtime validation environment:
 
