@@ -4,11 +4,16 @@ This document defines which benchmark baselines are acceptable for the v1
 FlashRT HF kernel batch. PyTorch eager is useful for readability and HF runner
 compatibility, but it is not always strong enough for headline claims.
 
+Package-level comparison requirements and headline gates are defined in
+`docs/kernel-comparison-matrix.md`. This file defines the baseline classes that
+those package matrices refer to.
+
 ## Baseline Classes
 
 | Class | Meaning | Use |
 | --- | --- | --- |
 | PyTorch eager | Direct tensor ops in PyTorch with synchronization | Readable reference and HF benchmark runner compatibility |
+| `torch.compile` | Compiled PyTorch reference path, compile time excluded | Required general-purpose baseline when the reference function can be compiled |
 | Unfused CUDA chain | Existing FlashRT or package-local CUDA launches without the fused kernel | Launch-count and fusion benefit |
 | Vendor/library | cuBLASLt, CUTLASS, cuDNN, or other strong library path | Headline GEMM, convolution, and low-bit claims |
 | Deterministic reference | Small exact or fake-quant reference | Correctness only, not performance headline |
@@ -19,8 +24,10 @@ compatibility, but it is not always strong enough for headline claims.
 
 - FP8 quant epilogues may use PyTorch eager as a public baseline because the
   operation is a memory-bound elementwise epilogue chain.
+- Also report `torch.compile` for FP8 quant epilogues when supported by the
+  local PyTorch version.
 - BF16 GEMM epilogue headlines require a strong GEMM baseline in addition to
-  `torch.addmm` or `gelu(torch.addmm)`.
+  `torch.addmm`, compiled `torch.addmm`, or `gelu(torch.addmm)`.
 - Weak GEMM shapes stay marked `watch` or `reject` even if they are useful
   compatibility coverage.
 
@@ -28,6 +35,8 @@ compatibility, but it is not always strong enough for headline claims.
 
 - QKV split, RMSNorm, RoPE, and cache/stage helpers may use PyTorch eager as a
   public baseline because they replace many small launch-bound tensor ops.
+- `torch.compile` is the preferred public baseline for this package because it
+  tests whether PyTorch's compiler can recover the same fusion opportunity.
 - If a baseline is already available as separate FlashRT CUDA launches, include
   it as an additional internal comparison before making model-level claims.
 - Report token/head grids, not only one model shape.
@@ -37,6 +46,9 @@ compatibility, but it is not always strong enough for headline claims.
 - The v1 layout helper is declared CUDA 12.8+ SM120-only.
 - Layout-only helpers may use byte-parity correctness and PyTorch/CUDA tensor
   reshapes as readable baselines.
+- Report `torch.compile` for tensor-layout references when compilation is
+  supported. If the exact byte-layout reference uses Python loops or CPU copies,
+  mark the compiled baseline as unsupported rather than forcing it.
 - Fused NVFP4 GEMM epilogues require CUTLASS/cuBLASLt or an unfused strong
   CUDA chain before becoming headline claims.
 - SM120-only paths must be labeled CUDA 12.8+ SM120 until a non-SM120 source
@@ -46,6 +58,8 @@ compatibility, but it is not always strong enough for headline claims.
 
 - The v1 decode matvec source slice is declared CUDA 12.8+ SM120-only.
 - PyTorch dequant plus matmul is acceptable as a readable baseline.
+- Also report compiled PyTorch dequant plus matmul when it is supported. Keep
+  it separate from stronger low-bit library baselines.
 - Headline low-bit GEMM/GEMV claims require cuBLASLt/CUTLASS or a known strong
   FlashRT internal low-bit baseline when available.
 - Dispatch boundaries must be benchmark-backed; do not claim a generic
@@ -56,6 +70,8 @@ compatibility, but it is not always strong enough for headline claims.
 - The v1 SwiGLU quantization source slice is declared CUDA 12.8+ SM120-only.
 - PyTorch eager is acceptable as a readable baseline for
   `SiLU(gate) * up + quant`.
+- `torch.compile` should be reported for the PyTorch fusion chain when it can
+  compile the fake-quant/layout reference.
 - Report effective memory bandwidth because this package is memory-bound.
 - Residual/RMSNorm variants need aliasing correctness and separate unfused
   launch-chain baselines before headline claims.
@@ -69,5 +85,8 @@ Every public `RESULTS.md` table must state:
 - Whether the timing path is HF benchmark runner, package-local source
   extension, FlashRT internal module, or built Hub artifact.
 - Baseline class.
+- Result label from `docs/kernel-comparison-matrix.md`.
+- `torch.compile` status for every row: `ok`, `unsupported`, `failed`, or
+  `no_reference`.
 - Shape grid and tile policy.
 - Hardware scope, especially for SM120-only kernels.

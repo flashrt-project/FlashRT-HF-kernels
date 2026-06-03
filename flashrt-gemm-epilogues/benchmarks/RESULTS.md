@@ -26,10 +26,13 @@ Timing method:
 - The FP8 quantization epilogue kernels are strong across the current shape
   suite on the built artifact: verified speedups range from 2.58x to 4.44x
   against the benchmark script PyTorch eager references.
-- The BF16 GEMM epilogue wrapper is shape-sensitive. `M=1` is strong against
-  the older source-extension `torch.addmm` baseline, but the public benchmark
-  script is now performance-only for BF16 GEMM. Do not use BF16 GEMM as the v1
-  headline claim.
+- The source-extension retest with Torch 2.9.1+cu128 reports FP8 quantization
+  epilogue speedups of 2.47x-3.86x against PyTorch eager and 3.55x-5.16x
+  against `torch.compile`.
+- The BF16 GEMM epilogue wrapper is shape-sensitive and currently has failed
+  public benchmark verification rows in the source-extension runner. Do not use
+  BF16 GEMM as the v1 headline claim until the public wrapper/benchmark path is
+  triaged.
 - The GEMM path needs stronger baseline reporting. PyTorch eager is useful for
   HF benchmark readability, but serious GEMM claims should also compare against
   cuBLASLt or another vendor-library baseline.
@@ -118,6 +121,86 @@ Channel scale + FP8 quantization:
 | `vla_n16384_m16` | 7.64 | 25.66 | 3.36x | yes |
 | `vla_n16384_m64` | 9.34 | 29.91 | 3.20x | yes |
 
+## Source-Extension Eager And torch.compile Baselines
+
+Command:
+
+```bash
+python scripts/run_built_artifact_benchmarks.py \
+  --backend source \
+  --package all \
+  --compile-baseline \
+  --warmup 5 \
+  --iterations 20 \
+  --output internal-tests/source-benchmarks/all-source-eager-compile-2026-06-03-rtx5090.json
+```
+
+Environment:
+
+- GPU: NVIDIA GeForce RTX 5090
+- PyTorch: 2.9.1+cu128
+- Backend: local source extension
+
+Bias + GELU + FP8 quantization:
+
+| Workload | Mean us | Eager us | vs eager | torch.compile us | vs compile | Verified |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `decode_m1` | 7.45 | 28.15 | 3.78x | 33.79 | 4.54x | yes |
+| `decode_m2` | 7.60 | 29.25 | 3.85x | 39.25 | 5.16x | yes |
+| `decode_m4` | 7.48 | 28.87 | 3.86x | 34.80 | 4.65x | yes |
+| `decode_m8` | 7.70 | 28.16 | 3.66x | 34.93 | 4.54x | yes |
+| `small_m16` | 7.37 | 26.96 | 3.66x | 36.27 | 4.92x | yes |
+| `small_m32` | 7.44 | 27.30 | 3.67x | 36.09 | 4.85x | yes |
+| `prefill_m64` | 8.03 | 28.51 | 3.55x | 34.94 | 4.35x | yes |
+| `prefill_m128` | 8.54 | 29.08 | 3.41x | 36.54 | 4.28x | yes |
+| `prefill_m256` | 9.83 | 34.14 | 3.47x | 36.88 | 3.75x | yes |
+| `wide_n8192_m16` | 7.49 | 26.94 | 3.60x | 36.37 | 4.86x | yes |
+| `wide_n8192_m128` | 9.68 | 34.20 | 3.53x | 36.42 | 3.76x | yes |
+| `vla_n12288_m16` | 7.57 | 27.96 | 3.69x | 37.37 | 4.93x | yes |
+| `vla_n12288_m64` | 9.04 | 29.48 | 3.26x | 36.59 | 4.05x | yes |
+| `vla_n16384_m16` | 7.83 | 27.21 | 3.48x | 36.70 | 4.69x | yes |
+| `vla_n16384_m64` | 9.72 | 34.24 | 3.52x | 36.91 | 3.80x | yes |
+
+GELU + FP8 quantization:
+
+| Workload | Mean us | Eager us | vs eager | torch.compile us | vs compile | Verified |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `decode_m1` | 7.27 | 20.92 | 2.88x | 33.76 | 4.64x | yes |
+| `decode_m2` | 7.40 | 20.92 | 2.83x | 34.84 | 4.71x | yes |
+| `decode_m4` | 7.38 | 20.97 | 2.84x | 36.83 | 4.99x | yes |
+| `decode_m8` | 7.40 | 21.68 | 2.93x | 35.60 | 4.81x | yes |
+| `small_m16` | 7.33 | 20.82 | 2.84x | 34.24 | 4.67x | yes |
+| `small_m32` | 7.53 | 21.34 | 2.83x | 35.64 | 4.74x | yes |
+| `prefill_m64` | 7.65 | 21.10 | 2.76x | 35.66 | 4.66x | yes |
+| `prefill_m128` | 8.40 | 22.82 | 2.72x | 35.33 | 4.21x | yes |
+| `prefill_m256` | 9.58 | 26.38 | 2.75x | 33.98 | 3.55x | yes |
+| `wide_n8192_m16` | 7.69 | 21.79 | 2.83x | 37.09 | 4.82x | yes |
+| `wide_n8192_m128` | 9.61 | 26.43 | 2.75x | 37.20 | 3.87x | yes |
+| `vla_n12288_m16` | 7.41 | 21.68 | 2.93x | 36.48 | 4.92x | yes |
+| `vla_n12288_m64` | 8.94 | 22.07 | 2.47x | 37.20 | 4.16x | yes |
+| `vla_n16384_m16` | 7.56 | 21.71 | 2.87x | 37.36 | 4.94x | yes |
+| `vla_n16384_m64` | 9.69 | 26.44 | 2.73x | 37.07 | 3.83x | yes |
+
+Channel scale + FP8 quantization:
+
+| Workload | Mean us | Eager us | vs eager | torch.compile us | vs compile | Verified |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `decode_m1` | 7.65 | 24.07 | 3.15x | 32.85 | 4.29x | yes |
+| `decode_m2` | 7.34 | 25.47 | 3.47x | 35.44 | 4.83x | yes |
+| `decode_m4` | 7.44 | 24.92 | 3.35x | 37.10 | 4.99x | yes |
+| `decode_m8` | 7.41 | 24.71 | 3.34x | 36.34 | 4.90x | yes |
+| `small_m16` | 7.46 | 24.48 | 3.28x | 34.92 | 4.68x | yes |
+| `small_m32` | 7.44 | 24.67 | 3.32x | 33.76 | 4.54x | yes |
+| `prefill_m64` | 7.77 | 25.32 | 3.26x | 34.82 | 4.48x | yes |
+| `prefill_m128` | 8.43 | 25.46 | 3.02x | 35.38 | 4.20x | yes |
+| `prefill_m256` | 9.44 | 30.27 | 3.21x | 34.22 | 3.62x | yes |
+| `wide_n8192_m16` | 7.55 | 25.05 | 3.32x | 37.85 | 5.01x | yes |
+| `wide_n8192_m128` | 9.32 | 30.20 | 3.24x | 36.37 | 3.90x | yes |
+| `vla_n12288_m16` | 7.66 | 24.75 | 3.23x | 39.03 | 5.09x | yes |
+| `vla_n12288_m64` | 8.90 | 26.62 | 2.99x | 37.19 | 4.18x | yes |
+| `vla_n16384_m16` | 7.67 | 24.35 | 3.18x | 36.74 | 4.79x | yes |
+| `vla_n16384_m64` | 9.39 | 30.31 | 3.23x | 39.69 | 4.23x | yes |
+
 BF16 GEMM epilogue latency-only compatibility measurements:
 
 | Workload | Mean us | Notes |
@@ -137,24 +220,18 @@ BF16 GEMM epilogue latency-only compatibility measurements:
 | `bias_wide_k8192_m16` | 39.56 | performance-only |
 | `gelu_wide_k8192_m16` | 39.37 | performance-only |
 
-## GEMM Shape Suite
+Source-extension public benchmark triage on 2026-06-03 found verification
+failures for 11 BF16 GEMM rows. These rows remain compatibility/diagnostic
+only and must not be included in headline claims until the public wrapper and
+benchmark path are fixed.
 
-| API | Label | Shape | Fused us | Addmm ref us | Addmm speedup | TFLOPS | Status |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| `bf16_gemm_bias` | `decode_m1` | `(1,4096,4096)` | 18.540 | 48.677 | 2.63x | 1.8 | promote |
-| `bf16_gemm_bias_gelu` | `decode_m1` | `(1,4096,4096)` | 18.504 | 50.685 | 2.74x | 1.8 | promote |
-| `bf16_gemm_bias` | `decode_m8` | `(8,4096,4096)` | 18.526 | 22.622 | 1.22x | 14.5 | reject |
-| `bf16_gemm_bias_gelu` | `decode_m8` | `(8,4096,4096)` | 18.503 | 24.680 | 1.33x | 14.5 | reject |
-| `bf16_gemm_bias` | `small_m16` | `(16,4096,4096)` | 22.393 | 22.632 | 1.01x | 24.0 | reject |
-| `bf16_gemm_bias_gelu` | `small_m16` | `(16,4096,4096)` | 22.558 | 24.984 | 1.11x | 23.8 | reject |
-| `bf16_gemm_bias` | `prefill_m64` | `(64,4096,4096)` | 18.909 | 36.913 | 1.95x | 113.6 | watch |
-| `bf16_gemm_bias_gelu` | `prefill_m64` | `(64,4096,4096)` | 30.776 | 38.986 | 1.27x | 69.8 | reject |
-| `bf16_gemm_bias` | `prefill_m128` | `(128,4096,4096)` | 32.816 | 38.982 | 1.19x | 130.9 | reject |
-| `bf16_gemm_bias_gelu` | `prefill_m128` | `(128,4096,4096)` | 30.764 | 41.041 | 1.33x | 139.6 | reject |
-| `bf16_gemm_bias` | `wide_n8192_m16` | `(16,8192,4096)` | 34.860 | 32.112 | 0.92x | 30.8 | reject |
-| `bf16_gemm_bias_gelu` | `wide_n8192_m16` | `(16,8192,4096)` | 34.869 | 34.376 | 0.99x | 30.8 | reject |
-| `bf16_gemm_bias` | `wide_k8192_m16` | `(16,4096,8192)` | 34.578 | 41.095 | 1.19x | 31.1 | reject |
-| `bf16_gemm_bias_gelu` | `wide_k8192_m16` | `(16,4096,8192)` | 34.865 | 43.080 | 1.24x | 30.8 | reject |
+## BF16 GEMM Triage
+
+The earlier BF16 GEMM shape table is removed from this public ledger. Those
+rows mixed weak `torch.addmm` comparisons, rejected shapes, and a public
+benchmark path that now needs correctness triage. Keep BF16 GEMM evidence in
+`internal-docs/bf16-gemm-public-benchmark-triage.md` until the wrapper,
+dispatch, tolerance, and vendor-library baseline are settled.
 
 ## FP8 Quantization Shape Suite
 

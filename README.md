@@ -9,6 +9,52 @@ hardware-specific serving decisions. This repository exposes stable,
 Tensor-based kernel APIs that can be built and loaded by the Hugging Face
 `kernels` package.
 
+## Current Snapshot
+
+This repository is a release-candidate integration layer for the first FlashRT
+kernel batch. The packages are structured for Hugging Face `kernel-builder`,
+with public Tensor-based APIs, package tests, examples, and benchmark scripts.
+
+Current local status:
+
+- All v1 packages pass configuration-level prebuild checks.
+- Release-candidate artifacts have been generated locally and pass ABI
+  compatibility plus `get_kernel` load checks.
+- Additional hardware validation is in progress.
+- Final public artifacts should be regenerated from a clean upstream
+  `kernel-builder` revision before upload.
+
+Known builder issue: the current upstream builder path has a
+`triton-3.7.0` fixed-output hash mismatch in the Torch 2.12 dependency path.
+The FlashRT packages build successfully with a local builder-side hash
+correction only; the kernel sources themselves are not involved in that
+failure.
+
+## Hub-Style Usage
+
+After upload, packages are intended to be consumed through the Hugging Face
+`kernels` API:
+
+```python
+from kernels import get_kernel
+
+ops = get_kernel(
+    "LiangSu8899/flashrt-vla-video",
+    version=1,
+    trust_remote_code=True,
+)
+
+q, k = ops.qkv_split_norm_rope_bf16(
+    packed_qkv,
+    norm_q_weight,
+    norm_k_weight,
+    freqs_re,
+    freqs_im,
+    heads=24,
+    head_dim=128,
+)
+```
+
 ## Goals
 
 - Package the most reusable FlashRT kernels in the structure expected by
@@ -32,6 +78,31 @@ The bar for the v1 batch is higher than the bar for one buildable package:
 correctness tests, strong microbenchmarks, shape constraints, hardware scope,
 and downstream HF-style calling examples should all be documented before the
 full builder release window.
+
+## Performance Snapshot
+
+Representative RTX 5090 source-extension results for the Wan/video-diffusion
+demo in `demos/wan-qkv-postprocess`. These numbers are math-equivalent
+comparisons against PyTorch eager and `torch.compile` tensor code; they do not
+use cache reuse, sampling-step reduction, distillation, or quality/performance
+trade-offs. The snapshot uses long-token video/VLA shapes
+`T in {1024,2520,4096}`.
+
+| Scope | Wan2.2 TI2V-5B vs eager | Wan2.2 TI2V-5B vs compile | Wan A14B family vs eager | Wan A14B family vs compile | What is measured |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Q/K postprocess only | 17.12x-33.74x | 4.00x-4.66x | 17.15x-24.32x | 2.23x-5.06x | Packed QKV split, Q/K RMSNorm, RoPE. |
+| Packed-QKV to attention output | 1.96x-2.36x | 1.06x-1.27x | 2.34x-2.83x | 1.09x-1.46x | Postprocess plus the same SDPA attention on both paths. |
+| Self-attention sublayer | 1.41x-1.59x | 1.14x-1.35x | 1.25x-1.45x | 1.06x-1.10x | QKV projection, postprocess, attention, output projection. |
+
+The self-attention sublayer rows are included as an attribution check, not as
+the headline for this single kernel. QKV/O projection and SDPA dominate that
+wider block, so the fused postprocess kernel is only a fraction of the measured
+runtime.
+
+The full FlashRT serving stack combines multiple math-equivalent kernels across
+attention, FFN, epilogues, quantization/layout, residual paths, and serving
+orchestration. Those gains are designed to stack with community techniques such
+as distillation, cache reuse, or fewer denoising steps rather than replace them.
 
 ## Package Plan
 
@@ -71,9 +142,12 @@ The first-batch tuning grid is documented in
 `docs/tile-and-shape-coverage.md`. Packaging gates and release blockers are
 tracked in `docs/release-gating.md`. The four-block v1 release plan is tracked
 in `docs/v1-batch-plan.md`. Benchmark baseline rules are defined in
-`docs/benchmark-baselines.md`. The full build procedure is in
-`docs/release-runbook.md`. Run `python scripts/prebuild_check.py --check-config`
-before starting a full release build window.
+`docs/benchmark-baselines.md`, and package-level comparison requirements are
+defined in `docs/kernel-comparison-matrix.md`. Use
+`docs/benchmark-results-template.md` when refreshing public or hardware-specific
+benchmark reports. The full build procedure is in `docs/release-runbook.md`.
+Run `python scripts/prebuild_check.py --check-config` before starting a full
+release build window.
 
 ## Expected Layout Per Package
 

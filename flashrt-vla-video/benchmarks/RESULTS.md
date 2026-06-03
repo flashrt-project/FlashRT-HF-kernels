@@ -28,6 +28,10 @@ Environment:
 - QKV benchmark verifies Q and K through separate benchmark classes.
 - Current built-artifact speedup range: 9.79x to 29.30x against the PyTorch
   eager references in `benchmark_q_norm_rope.py`.
+- Source-extension retest with Torch 2.9.1+cu128 also reports
+  `torch.compile` baselines for all tensor-only references. The earlier
+  low `KNormRopeVCacheBenchmark.heads1` compile result was a measurement
+  artifact; the retest reports `4.30x`.
 
 ## Source Accuracy Gate
 
@@ -163,3 +167,73 @@ Packed QKV split + K norm + RoPE:
 | `tokens1024` | 17.60 | 211.54 | 12.02x | yes |
 | `tokens2520` | 26.74 | 532.23 | 19.90x | yes |
 | `tokens4096` | 42.55 | 1248.21 | 29.33x | yes |
+
+## Source-Extension Eager And torch.compile Baselines
+
+Command:
+
+```bash
+python scripts/run_built_artifact_benchmarks.py \
+  --backend source \
+  --package flashrt-vla-video \
+  --compile-baseline \
+  --warmup 20 \
+  --iterations 100 \
+  --output internal-tests/source-benchmarks/vla-source-eager-compile-retune-2026-06-03-rtx5090.json
+```
+
+Environment:
+
+- GPU: NVIDIA GeForce RTX 5090
+- PyTorch: 2.9.1+cu128
+- Backend: local source extension
+
+Q norm + RoPE:
+
+| Workload | Mean us | Eager us | vs eager | torch.compile us | vs compile | Verified |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `heads1` | 7.63 | 80.47 | 10.54x | 36.03 | 4.72x | yes |
+| `heads4` | 7.60 | 75.61 | 9.95x | 33.05 | 4.35x | yes |
+| `heads8` | 7.61 | 76.94 | 10.12x | 32.65 | 4.29x | yes |
+| `heads16` | 7.62 | 79.05 | 10.37x | 32.75 | 4.30x | yes |
+| `heads24` | 7.60 | 76.30 | 10.04x | 33.13 | 4.36x | yes |
+| `heads32` | 7.64 | 75.16 | 9.84x | 32.50 | 4.26x | yes |
+| `heads48` | 7.63 | 74.74 | 9.80x | 33.49 | 4.39x | yes |
+
+K norm + RoPE + V cache copy:
+
+| Workload | Mean us | Eager us | vs eager | torch.compile us | vs compile | Verified |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `heads1` | 7.56 | 73.55 | 9.73x | 32.52 | 4.30x | yes |
+| `heads4` | 7.54 | 74.97 | 9.94x | 32.87 | 4.36x | yes |
+| `heads8` | 7.54 | 75.37 | 10.00x | 32.11 | 4.26x | yes |
+| `heads16` | 7.53 | 74.87 | 9.94x | 32.49 | 4.31x | yes |
+| `heads24` | 7.65 | 74.70 | 9.77x | 33.60 | 4.39x | yes |
+| `heads32` | 7.57 | 75.57 | 9.98x | 32.78 | 4.33x | yes |
+| `heads48` | 7.65 | 75.26 | 9.83x | 32.83 | 4.29x | yes |
+
+Packed QKV split + Q norm + RoPE:
+
+| Workload | Mean us | Eager us | vs eager | torch.compile us | vs compile | Verified |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `tokens1` | 9.71 | 138.87 | 14.30x | 36.43 | 3.75x | yes |
+| `tokens4` | 10.06 | 138.92 | 13.81x | 36.61 | 3.64x | yes |
+| `tokens16` | 10.06 | 140.61 | 13.98x | 34.49 | 3.43x | yes |
+| `tokens64` | 10.12 | 141.69 | 14.00x | 34.28 | 3.39x | yes |
+| `tokens256` | 11.50 | 139.31 | 12.11x | 34.84 | 3.03x | yes |
+| `tokens1024` | 16.97 | 211.11 | 12.44x | 38.88 | 2.29x | yes |
+| `tokens2520` | 26.02 | 534.19 | 20.53x | 52.79 | 2.03x | yes |
+| `tokens4096` | 39.63 | 1171.43 | 29.56x | 70.09 | 1.77x | yes |
+
+Packed QKV split + K norm + RoPE:
+
+| Workload | Mean us | Eager us | vs eager | torch.compile us | vs compile | Verified |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| `tokens1` | 9.80 | 138.15 | 14.10x | 35.82 | 3.66x | yes |
+| `tokens4` | 9.94 | 144.56 | 14.55x | 34.19 | 3.44x | yes |
+| `tokens16` | 10.03 | 140.49 | 14.01x | 33.44 | 3.33x | yes |
+| `tokens64` | 10.13 | 139.73 | 13.80x | 34.51 | 3.41x | yes |
+| `tokens256` | 12.29 | 140.27 | 11.41x | 34.96 | 2.84x | yes |
+| `tokens1024` | 17.02 | 215.27 | 12.65x | 37.20 | 2.19x | yes |
+| `tokens2520` | 26.20 | 530.43 | 20.24x | 52.50 | 2.00x | yes |
+| `tokens4096` | 38.94 | 1242.75 | 31.92x | 68.35 | 1.76x | yes |

@@ -53,21 +53,26 @@ python scripts/run_built_artifact_benchmarks.py \
   --package flashrt-nvfp4 --warmup 10 --iterations 50
 ```
 
-| Workload | Mean ms | Ref ms | Speedup | Verified | Notes |
-| --- | ---: | ---: | ---: | --- | --- |
-| `rows1_d4096` | 0.0074 | 0.5229 | 70.68x | yes | Python layout reference |
-| `rows2_d4096` | 0.0073 | 0.9593 | 130.60x | yes | Python layout reference |
-| `rows31_d4096` | 0.0074 | 14.2711 | 1939.87x | yes | Python layout reference |
-| `rows32_d4096` | 0.0073 | 14.8109 | 2032.16x | yes | Python layout reference |
-| `rows33_d4096` | 0.0074 | 15.2548 | 2054.55x | yes | Python layout reference |
-| `rows127_d4096` | 0.0074 | 58.2877 | 7924.57x | yes | Python layout reference |
-| `rows128_d4096` | 0.0075 | 58.1967 | 7763.73x | yes | Python layout reference |
-| `rows129_d4096` | 0.0074 | 70.4571 | 9555.14x | yes | Python layout reference |
-| `rows16_d1024` | 0.0073 | 1.9320 | 265.90x | yes | Python layout reference |
-| `rows16_d2048` | 0.0073 | 3.7716 | 516.47x | yes | Python layout reference |
-| `rows16_d8192` | 0.0074 | 21.1831 | 2847.88x | yes | Python layout reference |
-| `rows16_d12288` | 0.0074 | 31.9058 | 4333.69x | yes | Python layout reference |
-| `rows64_d16384` | 0.0074 | 133.1886 | 18031.32x | yes | Python layout reference |
+The exact swizzle reference is a Python/CPU-loop layout oracle. It is valid for
+byte-parity correctness, but it is not a comparable performance baseline and no
+speedup is claimed from it. `torch.compile` is also marked unsupported for this
+reference path.
+
+| Workload | Mean us | Verified | Reference note |
+| --- | ---: | --- | --- |
+| `rows1_d4096` | 7.31 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows2_d4096` | 7.25 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows31_d4096` | 7.34 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows32_d4096` | 7.28 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows33_d4096` | 7.19 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows127_d4096` | 7.48 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows128_d4096` | 7.36 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows129_d4096` | 7.34 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows16_d1024` | 7.23 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows16_d2048` | 7.16 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows16_d8192` | 7.42 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows16_d12288` | 7.42 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
+| `rows64_d16384` | 7.41 | yes | Python/CPU-loop exact swizzle reference; no speedup claim |
 
 ## Release Blockers
 

@@ -61,6 +61,9 @@ python scripts/run_built_artifact_benchmarks.py \
 The current public benchmark script is latency-only because the APIs return
 both packed data and swizzled scales, while the HF runner verifies one output
 tensor. Multi-output byte parity is covered by `accuracy_sweep.py`.
+`torch.compile` status is `no_reference` for this public benchmark until a
+tensor-only reference path is added. Do not publish eager or compile speedups
+from this table.
 
 | API | Decode 4096 us | Decode 8192 us | Decode 12288 us | Decode 16384 us | Video 2520 x 12288 us |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -86,6 +89,8 @@ Selected full-shape latencies:
 
 - Local release-candidate benchmark runner has been run against the built
   artifact. Official Hub `kernels benchmark` has not been run after upload.
+- Public benchmark needs a `verify_*`/reference path before reporting eager or
+  `torch.compile` speedups.
 - Memory-bandwidth benchmark results are not recorded yet.
 - Residual/RMSNorm and SFA variants are not exposed.
 - Non-SM120 hardware validation is not applicable to the current v1 surface

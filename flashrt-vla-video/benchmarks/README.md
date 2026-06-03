@@ -15,3 +15,18 @@ Planned benchmark groups:
 - Video tensor layout conversion and quantization.
 - DiT/VAE helper kernels.
 - FlashRT-real VLA/video shape families.
+
+## Comparison Stack
+
+Public results for this package should follow
+`../../docs/kernel-comparison-matrix.md`.
+
+- Q/K RMSNorm + RoPE and packed-QKV split + Q/K norm + RoPE compare against
+  PyTorch eager and `torch.compile` on the full token/head grid.
+- If separate FlashRT or CUDA launch-chain baselines exist, report them as the
+  unfused strong path to isolate the value of fusion.
+- Attention and model-block demos must hold the attention backend constant on
+  both paths. The claimed speedup is the postprocess or sublayer delta, not a
+  change of attention algorithm.
+- Wan/VLA/video examples are promoted only after both microkernel and
+  model-block results are reported.

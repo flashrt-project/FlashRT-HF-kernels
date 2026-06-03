@@ -58,18 +58,21 @@ python scripts/run_built_artifact_benchmarks.py \
   --package flashrt-smallm-gemm --warmup 10 --iterations 50
 ```
 
-The benchmark uses random packed W4A4 inputs and a PyTorch readability
-baseline that dequantizes FP4 values/scales and performs the matvec. The older
-constant-input table compared against `torch.full` and is invalidated.
+The benchmark uses random packed W4A4 inputs. Correctness is checked against a
+readability reference that dequantizes FP4 values/scales and performs the
+matvec in Python chunks. That reference is useful for correctness and rough
+debugging, but it is not a comparable low-bit performance baseline; no headline
+speedup is claimed from it. A CUTLASS/cuBLASLt or known strong FlashRT low-bit
+baseline is still required.
 
-| Workload | K | N | Mean ms | Ref ms | Speedup | Verified | Notes |
-| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| `k4096_n1024` | 4096 | 1024 | 0.0331 | 0.4672 | 14.12x | yes | random/dequant baseline |
-| `k4096_n4096` | 4096 | 4096 | 0.1078 | 1.4832 | 13.76x | yes | random/dequant baseline |
-| `k4096_n12288` | 4096 | 12288 | 0.2596 | 4.1848 | 16.12x | yes | random/dequant baseline |
-| `k12288_n1024` | 12288 | 1024 | 0.0844 | 0.5472 | 6.48x | yes | random/dequant baseline |
-| `k12288_n4096` | 12288 | 4096 | 0.3080 | 1.8043 | 5.86x | yes | random/dequant baseline |
-| `k12288_n12288` | 12288 | 12288 | 0.7575 | 5.0800 | 6.71x | yes | random/dequant baseline |
+| Workload | K | N | Mean us | Verified | Reference note |
+| --- | ---: | ---: | ---: | --- | --- |
+| `k4096_n1024` | 4096 | 1024 | 33.34 | yes | Python-loop dequant readability reference; no headline speedup claim |
+| `k4096_n4096` | 4096 | 4096 | 108.24 | yes | Python-loop dequant readability reference; no headline speedup claim |
+| `k4096_n12288` | 4096 | 12288 | 260.12 | yes | Python-loop dequant readability reference; no headline speedup claim |
+| `k12288_n1024` | 12288 | 1024 | 84.39 | yes | Python-loop dequant readability reference; no headline speedup claim |
+| `k12288_n4096` | 12288 | 4096 | 308.01 | yes | Python-loop dequant readability reference; no headline speedup claim |
+| `k12288_n12288` | 12288 | 12288 | 758.58 | yes | Python-loop dequant readability reference; no headline speedup claim |
 
 ## Release Blockers
 

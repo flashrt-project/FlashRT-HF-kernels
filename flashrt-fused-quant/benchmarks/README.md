@@ -26,3 +26,17 @@ scale-factor bytes.
 Queued benchmark groups for later source slices:
 
 - `residual + RMSNorm + quant` against separate PyTorch/CUDA launches.
+
+## Comparison Stack
+
+Public results for this package should follow
+`../../docs/kernel-comparison-matrix.md`.
+
+- SwiGLU quantization compares against PyTorch eager and `torch.compile` on the
+  decode, small-batch, prefill, image-token, and video-token grids.
+- Split and merged gate/up variants are reported separately, then selected per
+  shape family.
+- Every public table reports latency and effective memory bandwidth because the
+  package is memory-bound.
+- Residual/RMSNorm quantization rows require aliasing correctness plus an
+  unfused CUDA or FlashRT launch-chain baseline before headline promotion.

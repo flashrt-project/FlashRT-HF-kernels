@@ -46,3 +46,16 @@ VLA/video FFN dimensions from `docs/tile-and-shape-coverage.md`. During tuning,
 tile policy.
 
 Preliminary local source-extension results are tracked in `RESULTS.md`.
+
+## Comparison Stack
+
+Public results for this package should follow
+`../../docs/kernel-comparison-matrix.md`.
+
+- FP8 quant epilogue chains compare against PyTorch eager and
+  `torch.compile`; they can become headline rows when correctness has byte or
+  fake-quant parity and the compiled baseline is measured.
+- Channel-scale quantization also reports effective memory bandwidth.
+- BF16 GEMM epilogue wrappers require cuBLASLt/CUTLASS or another strong GEMM
+  baseline before becoming headline rows. Shapes that only beat PyTorch eager
+  stay labeled `support` or `compatibility`.

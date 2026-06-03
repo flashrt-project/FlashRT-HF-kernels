@@ -66,6 +66,9 @@ Before uploading the v1 batch to the Hub:
   full build window.
 - Benchmarks include the shape grid from `docs/tile-and-shape-coverage.md`.
 - Benchmark baselines follow `docs/benchmark-baselines.md`.
+- Package-level comparison coverage follows
+  `docs/kernel-comparison-matrix.md`; rows that only beat PyTorch eager are not
+  promoted to headline status unless the matrix explicitly allows it.
 - Headline speedups use a fair baseline and name the GPU, driver, PyTorch, CUDA
   runtime, warmup count, and measured iterations.
 
