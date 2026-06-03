@@ -81,12 +81,18 @@ full builder release window.
 
 ## Performance Snapshot
 
-Representative RTX 5090 source-extension results for the Wan/video-diffusion
-demo in `demos/wan-qkv-postprocess`. These numbers are math-equivalent
-comparisons against PyTorch eager and `torch.compile` tensor code; they do not
-use cache reuse, sampling-step reduction, distillation, or quality/performance
-trade-offs. The snapshot uses long-token video/VLA shapes
-`T in {1024,2520,4096}`.
+Representative RTX 5090 source-extension results for the first two model-block
+demos:
+
+- `demos/wan-qkv-postprocess`: Wan/video-diffusion attention postprocess.
+- `demos/pi05-groot-ffn-epilogue`: PI0.5/GROOT-shaped repeated FFN epilogue
+  and activation-quant blocks.
+
+These numbers are math-equivalent comparisons against PyTorch eager and
+`torch.compile` tensor code; they do not use cache reuse, sampling-step
+reduction, distillation, or quality/performance trade-offs.
+
+Wan/video snapshot uses long-token video/VLA shapes `T in {1024,2520,4096}`.
 
 | Scope | Wan2.2 TI2V-5B vs eager | Wan2.2 TI2V-5B vs compile | Wan A14B family vs eager | Wan A14B family vs compile | What is measured |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -98,6 +104,22 @@ The self-attention sublayer rows are included as an attribution check, not as
 the headline for this single kernel. QKV/O projection and SDPA dominate that
 wider block, so the fused postprocess kernel is only a fraction of the measured
 runtime.
+
+PI0.5/GROOT FFN epilogue snapshot uses repeated model-shaped stacks. Exact
+FP8 output matching is required for every row.
+
+| Block | Shape | Layers | vs eager | vs compile | What is measured |
+| --- | ---: | ---: | ---: | ---: | --- |
+| PI0.5 vision FFN | `512 x 4304` | 27 | 4.16x | 1.33x | SigLIP FFN fc1 bias + GELU + FP8 cast. |
+| PI0.5 encoder activation quant | `560 x 2048` | 18 | 6.49x | 2.09x | Encoder activation scale + FP8 cast. |
+| GROOT ViT FFN | `512 x 4096` | 24 | 4.23x | 1.53x | ViT FFN fc1 bias + GELU + FP8 cast. |
+| GROOT DeepStack merger | `128 x 4096` | 3 | 9.32x | 5.53x | DeepStack merger fc1 bias + GELU + FP8 cast. |
+| GROOT VL self-attn FFN | `1024 x 8192` | 4 | 3.77x | 1.27x | Long-sequence VL self-attn FFN fc1 epilogue. |
+
+This PI0.5/GROOT demo is still a reusable model-block benchmark, not a full
+model generation throughput claim. A full end-to-end PI0.5/GROOT demo should
+ship after the FP8 GEMM/FFN or megakernel path is exported as a Hub-loadable
+kernel package.
 
 The full FlashRT serving stack combines multiple math-equivalent kernels across
 attention, FFN, epilogues, quantization/layout, residual paths, and serving
