@@ -1,6 +1,6 @@
 # Built Artifact Results
 
-Validated on June 2, 2026 on NVIDIA GeForce RTX 5090.
+Validated on June 2-3, 2026 on NVIDIA GeForce RTX 5090.
 
 This document records tests against copied `kernel-builder` artifacts, not
 local source-extension builds.
@@ -27,6 +27,12 @@ Runtime validation environment:
 - CUDA runtime inside Torch: 12.8
 - `LD_LIBRARY_PATH=/usr/lib64:${LD_LIBRARY_PATH:-}` was required inside the
   GPU-enabled Docker container so Torch could find `libcuda.so`.
+- The FP8 FFN validation used a privileged GPU testshell container because the
+  original GPU container exposed `/dev/nvidia*` but CUDA driver init returned
+  no device. The working container was launched with `--privileged --gpus all`.
+- `torch.compile` inside the minimal testshell also required `/sbin/ldconfig`;
+  the validation container provided it via a symlink to the Nix glibc
+  `ldconfig`.
 
 Command:
 
@@ -53,6 +59,9 @@ accuracy sweep passed: 324 checks
   at `K=4096,N=12288`: expected `2.953125`, got `3.03125`.
 - `flashrt-fused-quant`: split and merged NVFP4 packed bytes and scale bytes
   passed byte parity over the v1 grid.
+- `flashrt-fp8-ffn`: package correctness test passed against the copied
+  `torch211-cxx11-cu128-x86_64-linux` artifact over PI0.5/GROOT model-shaped
+  FP8 GEMM, fused GELU quant, and full MLP cases.
 
 ## Package Tests
 
@@ -62,6 +71,7 @@ collisions:
 | Package | Result |
 | --- | --- |
 | `flashrt-gemm-epilogues` | 15 passed |
+| `flashrt-fp8-ffn` | built-artifact package test passed |
 | `flashrt-vla-video` | 8 passed |
 | `flashrt-nvfp4` | 18 passed |
 | `flashrt-smallm-gemm` | 4 passed |
@@ -99,6 +109,7 @@ the copied built artifacts. It does not replace the official Hub
 | Package | Built-artifact benchmark result |
 | --- | --- |
 | `flashrt-gemm-epilogues` | FP8 quant epilogues verified, 2.58x-4.44x vs PyTorch eager references; BF16 GEMM benchmark is latency-only |
+| `flashrt-fp8-ffn` | Full FP8 GELU MLP verified over the PI0.5/GROOT shape grid; headline rows are 6.44x-7.01x vs eager and 3.82x-5.44x vs `torch.compile` |
 | `flashrt-vla-video` | Q/K/QKV post-processing verified, 9.79x-29.30x vs PyTorch eager references |
 | `flashrt-nvfp4` | scale-factor layout helper byte-verified, 70.68x-18031.32x vs Python layout reference |
 | `flashrt-smallm-gemm` | W4A4 decode matvec verified, 5.86x-16.12x vs random/dequant PyTorch readability baseline |
@@ -108,8 +119,9 @@ the copied built artifacts. It does not replace the official Hub
 
 This is not a full HF matrix build. The package variant lists are:
 
-- `flashrt-gemm-epilogues`, `flashrt-vla-video`: six CUDA x86_64 variants
-  covering Torch 2.11/2.12 and CUDA 12.6/12.8/13.0/13.2 as applicable.
+- `flashrt-gemm-epilogues`, `flashrt-fp8-ffn`, `flashrt-vla-video`: six CUDA
+  x86_64 variants covering Torch 2.11/2.12 and CUDA 12.6/12.8/13.0/13.2 as
+  applicable.
 - `flashrt-nvfp4`, `flashrt-smallm-gemm`, `flashrt-fused-quant`: four CUDA
   x86_64 variants because they require CUDA 12.8+ and SM120.
 
