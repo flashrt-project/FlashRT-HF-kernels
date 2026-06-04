@@ -9,7 +9,7 @@ ecosystem gap, and are easy for Hugging Face users to call from Tensor APIs.
 | Package | First public surface | Why it leads |
 | --- | --- | --- |
 | `flashrt-vla-video` | Q/K/QKV split + RMSNorm + RoPE kernels | 20x+ launch-fusion wins on VLA, vision, video, and diffusion-style token post-processing. |
-| `flashrt-fp8-ffn` | FP8 GEMM and complete GELU MLP/FFN sublayer | 3.8-5.6x vs `torch.compile` on PI0.5/GROOT-shaped FFN blocks on RTX 5090. |
+| `flashrt-fp8-ffn` | FP8 GEMM and complete GELU MLP/FFN sublayer | 6.5-7.2x vs eager and 5.9-6.7x vs compile-stable reference on PI0.5/GROOT-shaped full FFN headline rows on RTX 5090, with correctness gates passed. |
 | `flashrt-gemm-epilogues` | FP8 quant epilogues and selected BF16 GEMM epilogues | Simple package format proof with clean PyTorch baselines and user-friendly APIs. |
 | `flashrt-nvfp4` | NVFP4 scale-factor layout helpers | Small, reusable Blackwell low-bit building block that makes fused GEMM outputs inspectable. |
 

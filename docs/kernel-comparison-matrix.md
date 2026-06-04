@@ -11,14 +11,16 @@ claims are allowed from the current evidence.
 | --- | --- | --- |
 | Correctness | Output agrees with a deterministic or PyTorch reference | Required before any timing table |
 | Readable baseline | PyTorch eager tensor expression | Useful for API clarity and HF benchmark compatibility |
-| Compiler baseline | `torch.compile` reference with compile time excluded | Required when the reference can compile |
+| Compiler baseline | `torch.compile` reference with compile time excluded | Required only when the compiled reference is verified equivalent to eager |
 | Unfused strong path | Same operation as separate CUDA or FlashRT launches | Required for fusion-specific headline claims when available |
 | Library baseline | cuBLASLt, CUTLASS, cuDNN, FlashAttention, FlashInfer, or another strong public implementation | Required for GEMM, attention, and low-bit headline claims |
 | Model-block | HF-style model subgraph or demo path | Required for community/showcase claims |
 
-Speedups against PyTorch eager alone are support evidence, not headline evidence,
-unless the operation is purely a launch-bound tensor-op fusion and the
-`torch.compile` baseline is also reported.
+Speedups against PyTorch eager alone are support evidence, not headline
+evidence, unless the operation is purely a launch-bound tensor-op fusion and a
+verified-equivalent `torch.compile` baseline is also reported. A compiled
+reference that changes fake-quant or low-bit rounding behavior is not a valid
+baseline.
 
 ## Result Labels
 
@@ -58,6 +60,31 @@ Good public story:
 - FP8 quant epilogues are the strongest v1 surface.
 - BF16 GEMM epilogue wrappers remain shape-specific unless the cuBLASLt/CUTLASS
   comparison is strong.
+
+### `flashrt-fp8-ffn`
+
+Primary kernels:
+
+- `fp8_gemm_bf16`
+- `fp8_linear_bias_gelu_quant_bf16`
+- `fp8_gelu_mlp_bf16`
+
+Required comparisons:
+
+| Scope | Baselines | Headline gate |
+| --- | --- | --- |
+| Full FP8 GELU MLP | PyTorch eager FP8 reference, segmented compile-stable `torch.compile` reference, cuBLASLt/CUTLASS or FlashRT internal strong path where applicable | Eager correctness passes; compiled-reference output verifies against eager before timing |
+| FP8 GEMM sublayer | cuBLASLt/CUTLASS or existing FlashRT internal GEMM path | Strong library/internal path measured for headline GEMM claims |
+| Model-block FFN shapes | PI0.5/GROOT/VLA shape families with layer counts | Shape family and precision gate reported separately from full-model throughput |
+
+Good public story:
+
+- Full FFN correctness and eager-reference speedups are valid current support
+  evidence.
+- The package uses a segmented compile-stable reference for `torch.compile`
+  timing. It graph-breaks the `GELU -> FP8 requant` and final BF16 bias/cast
+  boundaries because raw default-Inductor fusion is not bit-equivalent to eager
+  at those quantization boundaries.
 
 ### `flashrt-vla-video`
 
@@ -164,7 +191,7 @@ Every public `RESULTS.md` table should include:
 
 1. Run correctness and source-extension sweeps for every package.
 2. Run PyTorch eager and `torch.compile` comparisons for every benchmark whose
-   reference can compile.
+   compiled reference first verifies against eager output.
 3. Add unfused FlashRT/CUDA-chain baselines for fusion kernels where the source
    slices exist.
 4. Add cuBLASLt/CUTLASS/other strong baselines for GEMM, FP4, FP8, and low-bit

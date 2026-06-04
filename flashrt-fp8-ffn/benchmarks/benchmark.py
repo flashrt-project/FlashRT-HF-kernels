@@ -209,12 +209,43 @@ def dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return x.float() * scale.float()
 
 
+def compiler_disable(fn):
+    compiler = getattr(torch, "compiler", None)
+    if compiler is not None and hasattr(compiler, "disable"):
+        return compiler.disable(fn)
+    return torch._dynamo.disable(fn)
+
+
+def gelu_quantize_fp8_boundary(
+    hidden: torch.Tensor, bias: torch.Tensor, scale: torch.Tensor
+) -> torch.Tensor:
+    hidden = torch.nn.functional.gelu(
+        hidden.float() + bias.float(), approximate="tanh"
+    )
+    return quantize_fp8(hidden, scale)
+
+
+def bf16_bias_add_boundary(out: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    return (out.float() + bias.float()).to(torch.bfloat16)
+
+
+stable_gelu_quantize_fp8 = compiler_disable(gelu_quantize_fp8_boundary)
+stable_bf16_bias_add = compiler_disable(bf16_bias_add_boundary)
+
+
 def torch_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s):
     hidden = (dequant_fp8(x, x_s) @ dequant_fp8(up_w, up_s).T).to(torch.bfloat16)
     hidden = torch.nn.functional.gelu(hidden + up_b.float(), approximate="tanh")
     hidden_fp8 = torch.clamp(hidden / hid_s.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
     out = (dequant_fp8(hidden_fp8, hid_s) @ dequant_fp8(down_w, dn_s).T).to(torch.bfloat16)
     return (out + down_b.float()).to(torch.bfloat16)
+
+
+def torch_mlp_compile_stable(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s):
+    hidden = (dequant_fp8(x, x_s) @ dequant_fp8(up_w, up_s).T).to(torch.bfloat16)
+    hidden_fp8 = stable_gelu_quantize_fp8(hidden, up_b, hid_s)
+    out = (dequant_fp8(hidden_fp8, hid_s) @ dequant_fp8(down_w, dn_s).T).to(torch.bfloat16)
+    return stable_bf16_bias_add(out, down_b)
 
 
 def make_inputs(M: int, K: int, H: int, N: int, layers: int):
@@ -262,11 +293,21 @@ def percentile(x: torch.Tensor, q: float) -> torch.Tensor:
     return flat.kthvalue(k).values
 
 
-def compile_time_us(fn, *, warmup: int, iters: int) -> tuple[float | None, str]:
+def _outputs_close(got, expected) -> bool:
+    if isinstance(got, (tuple, list)) and isinstance(expected, (tuple, list)):
+        return len(got) == len(expected) and all(
+            _outputs_close(g, e) for g, e in zip(got, expected)
+        )
+    return bool(torch.allclose(got, expected, rtol=3e-2, atol=1.25e-1))
+
+
+def compile_time_us(fn, expected, *, warmup: int, iters: int) -> tuple[float | None, str]:
     try:
-        compiled = torch.compile(fn, fullgraph=True, mode="reduce-overhead")
-        compiled()
+        compiled = torch.compile(fn, fullgraph=False, mode="reduce-overhead")
+        compiled_out = compiled()
         torch.cuda.synchronize()
+        if not _outputs_close(compiled_out, expected):
+            return None, "unsupported: compiled reference output mismatch"
         return time_us(compiled, warmup=warmup, iters=iters), "ok"
     except Exception as exc:  # noqa: BLE001
         return None, f"unsupported: {type(exc).__name__}: {exc}"
@@ -305,6 +346,14 @@ def run_shape(ops, name: str, shape, args) -> Result:
             for i in range(layers)
         )
 
+    def torch_stack_compile_stable():
+        return tuple(
+            torch_mlp_compile_stable(
+                xs[i], up_ws[i], up_bs[i], down_ws[i], down_bs[i], x_s, up_s, hid_s, dn_s
+            )
+            for i in range(layers)
+        )
+
     flashrt_stack()
     expected0 = torch_mlp(xs[0], up_ws[0], up_bs[0], down_ws[0], down_bs[0], x_s, up_s, hid_s, dn_s)
     diff = (outs[0].float() - expected0.float()).abs().flatten()
@@ -324,7 +373,18 @@ def run_shape(ops, name: str, shape, args) -> Result:
     compile_us = None
     compile_status = "not_requested"
     if args.compile_baseline:
-        compile_us, compile_status = compile_time_us(torch_stack, warmup=args.warmup, iters=args.iters)
+        eager_expected = torch_stack()
+        stable_expected = torch_stack_compile_stable()
+        torch.cuda.synchronize()
+        if not _outputs_close(stable_expected, eager_expected):
+            compile_status = "unsupported: stable compile reference differs from eager"
+        else:
+            compile_us, compile_status = compile_time_us(
+                torch_stack_compile_stable,
+                eager_expected,
+                warmup=args.warmup,
+                iters=args.iters,
+            )
 
     return Result(
         shape=name,
@@ -357,9 +417,11 @@ def write_markdown(path: Path, results: list[Result], args) -> None:
         f"- Warmup/iters: `{args.warmup}/{args.iters}`",
         f"- Precision gate: p99_abs <= `{args.p99_abs_limit}` and "
         f"p99_rel_floor1 <= `{args.p99_rel_floor1_limit}`",
+        "- Compile baseline: reported only when compiled reference output "
+        "matches eager reference output.",
         "",
-        "| Shape | M,K,H,N | Layers | FlashRT us | Eager us | vs eager | Compile us | vs compile | P99 abs | P99 rel | Max abs | Status |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Shape | M,K,H,N | Layers | FlashRT us | Eager us | vs eager | Compile us | vs compile | Compile status | P99 abs | P99 rel | Max abs | Status |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|",
     ]
     for r in results:
         compile_us = f"{r.torch_compile_us:.3f}" if r.torch_compile_us is not None else "n/a"
@@ -367,7 +429,7 @@ def write_markdown(path: Path, results: list[Result], args) -> None:
         lines.append(
             f"| {r.shape} | {r.M},{r.K},{r.H},{r.N} | {r.layers} | "
             f"{r.flashrt_us:.3f} | {r.torch_eager_us:.3f} | {r.speedup_vs_eager:.2f}x | "
-            f"{compile_us} | {compile_speedup} | {r.p99_abs:.4f} | "
+            f"{compile_us} | {compile_speedup} | {r.compile_status} | {r.p99_abs:.4f} | "
             f"{r.p99_rel_floor1:.6f} | {r.max_abs:.4f} | {r.status} |"
         )
     lines.append("")

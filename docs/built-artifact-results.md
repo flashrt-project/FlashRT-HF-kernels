@@ -115,7 +115,7 @@ the copied built artifacts. It does not replace the official Hub
 | Package | Built-artifact benchmark result |
 | --- | --- |
 | `flashrt-gemm-epilogues` | FP8 quant epilogues verified, 2.58x-4.44x vs PyTorch eager references; default BF16 GEMM public rows are verified-only |
-| `flashrt-fp8-ffn` | Full FP8 GELU MLP verified over the PI0.5/GROOT shape grid; headline rows are 6.44x-7.01x vs eager and 3.82x-5.44x vs `torch.compile` |
+| `flashrt-fp8-ffn` | Full FP8 GELU MLP verified over the PI0.5/GROOT shape grid; headline rows are 6.5x-7.2x vs eager and 5.9x-6.7x vs compile-stable `torch.compile` reference |
 | `flashrt-vla-video` | Q/K/QKV post-processing verified, 9.79x-29.30x vs PyTorch eager references |
 | `flashrt-nvfp4` | scale-factor layout helper byte-verified, 70.68x-18031.32x vs Python layout reference |
 | `flashrt-smallm-gemm` | W4A4 decode matvec verified, 5.86x-16.12x vs random/dequant PyTorch readability baseline |

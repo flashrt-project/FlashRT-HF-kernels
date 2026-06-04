@@ -71,6 +71,10 @@ python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes headlin
 python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes all
 ```
 
-The package benchmark should be reported against PyTorch eager and
-`torch.compile` references for headline rows. Model-block demos should be
-reported separately from full model generation throughput claims.
+The package benchmark is reported against the PyTorch eager FP8 reference and a
+segmented compile-stable `torch.compile` reference. The compiled reference is
+timed only after its output is verified against eager output. The compile-stable
+path graph-breaks the numerically sensitive `GELU -> FP8 requant` and final
+BF16 bias/cast boundaries, while keeping the FP8 dequant GEMM regions compiled.
+Model-block demos should be reported separately from full model generation
+throughput claims.

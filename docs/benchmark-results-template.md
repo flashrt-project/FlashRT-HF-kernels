@@ -31,6 +31,10 @@ or hardware-specific reports under `internal-tests/`.
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |
 | `<kernel>` | `<family>` | `<shape>` | `<tile>` | `<ms>` | `<ms>` | `<x>` | `<ms or n/a>` | `<x or n/a>` | `<ms or n/a>` | `<x or n/a>` | `<max error / byte parity>` | `<label>` | `<notes>` |
 
+Only fill `Compile ms` and `vs compile` after the compiled reference output has
+been verified against the eager reference. If the compiled reference is not
+numerically equivalent, use `n/a` and record the unsupported reason in `Notes`.
+
 ## Missing Baselines
 
 | Kernel | Missing baseline | Reason | Next action |

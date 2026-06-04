@@ -13,12 +13,32 @@ those package matrices refer to.
 | Class | Meaning | Use |
 | --- | --- | --- |
 | PyTorch eager | Direct tensor ops in PyTorch with synchronization | Readable reference and HF benchmark runner compatibility |
-| `torch.compile` | Compiled PyTorch reference path, compile time excluded | Required general-purpose baseline when the reference function can be compiled |
+| `torch.compile` | Compiled PyTorch reference path, compile time excluded | Required general-purpose baseline only when the compiled reference is numerically equivalent to the eager reference |
 | Unfused CUDA chain | Existing FlashRT or package-local CUDA launches without the fused kernel | Launch-count and fusion benefit |
 | Vendor/library | cuBLASLt, CUTLASS, cuDNN, or other strong library path | Headline GEMM, convolution, and low-bit claims |
 | Deterministic reference | Small exact or fake-quant reference | Correctness only, not performance headline |
 
 ## Package Policy
+
+### Correctness Before Timing
+
+- Correctness is always checked against the eager PyTorch or deterministic
+  reference first.
+- A `torch.compile` baseline is reportable only after the compiled reference
+  output is verified against the eager reference for the same inputs and
+  tolerance.
+- If `torch.compile` changes a fake-quant or low-bit reference enough to cross
+  quantization boundaries, mark the compiled baseline as unsupported instead of
+  publishing a misleading speedup.
+- For `flashrt-fp8-ffn`, the full
+  `FP8 GEMM -> GELU -> FP8 requant -> FP8 GEMM` PyTorch reference is
+  bit-exact under eager and `torch.compile(..., backend="aot_eager")`, but a
+  raw default-Inductor compile of the whole fake-quant chain is not
+  bit-equivalent on the current RTX 5090 validation stack. The package therefore
+  reports a segmented compile-stable reference that graph-breaks the
+  numerically sensitive FP8 requantization and final BF16 bias/cast boundaries,
+  while still compiling the FP8 dequant GEMM regions. The runner verifies this
+  compiled-reference output against eager output before timing it.
 
 ### `flashrt-gemm-epilogues`
 

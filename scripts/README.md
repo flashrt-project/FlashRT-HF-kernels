@@ -20,9 +20,16 @@ Current scripts:
   public `kernels.benchmark.Benchmark` scripts against either local source
   extensions or copied built artifacts. Add `--compile-baseline` to time
   `torch.compile` versions of benchmark reference functions when they are
-  available. The runner fails fast on verification or execution failures by
-  default. Only use `--allow-diagnostic-failures` for internal triage runs that
-  intentionally record failed rows as `nan`.
+  available and verified equivalent to the eager reference. The runner fails
+  fast on verification or execution failures by default. Only use
+  `--allow-diagnostic-failures` for internal triage runs that intentionally
+  record failed rows as `nan`.
+
+`torch.compile` baselines are not automatically fair just because compilation
+succeeds. For quantized references, especially FP8/FP4 fake-quant chains, the
+compiled reference must first match the eager reference. If Inductor changes
+rounding behavior at a quantization boundary, mark that compiled baseline as
+unsupported and report eager correctness plus other valid baselines instead.
 
 Example:
 

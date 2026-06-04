@@ -11,6 +11,30 @@ def _dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return x.float() * scale.float()
 
 
+def _compiler_disable(fn):
+    compiler = getattr(torch, "compiler", None)
+    if compiler is not None and hasattr(compiler, "disable"):
+        return compiler.disable(fn)
+    return torch._dynamo.disable(fn)
+
+
+def _gelu_quantize_fp8_boundary(
+    hidden: torch.Tensor, bias: torch.Tensor, scale: torch.Tensor
+) -> torch.Tensor:
+    hidden = torch.nn.functional.gelu(
+        hidden.float() + bias.float(), approximate="tanh"
+    )
+    return _quantize_fp8(hidden, scale)
+
+
+def _bf16_bias_add_boundary(out: torch.Tensor, bias: torch.Tensor) -> torch.Tensor:
+    return (out.float() + bias.float()).to(torch.bfloat16)
+
+
+_stable_gelu_quantize_fp8 = _compiler_disable(_gelu_quantize_fp8_boundary)
+_stable_bf16_bias_add = _compiler_disable(_bf16_bias_add_boundary)
+
+
 class FP8GeluMlpBenchmark(Benchmark):
     seed = 17
 
@@ -43,17 +67,14 @@ class FP8GeluMlpBenchmark(Benchmark):
             _dequant_fp8(self.x, self.x_scale)
             @ _dequant_fp8(self.up_w, self.up_scale).T
         ).to(torch.bfloat16)
-        hidden = torch.nn.functional.gelu(
-            hidden.float() + self.up_b.float(), approximate="tanh"
+        hidden_fp8 = _stable_gelu_quantize_fp8(
+            hidden, self.up_b, self.hidden_scale
         )
-        hidden_fp8 = torch.clamp(
-            hidden / self.hidden_scale.float(), -448.0, 448.0
-        ).to(torch.float8_e4m3fn)
         out = (
             _dequant_fp8(hidden_fp8, self.hidden_scale)
             @ _dequant_fp8(self.down_w, self.down_scale).T
         ).to(torch.bfloat16)
-        return (out.float() + self.down_b.float()).to(torch.bfloat16)
+        return _stable_bf16_bias_add(out, self.down_b)
 
     def setup_smoke_mlp(self) -> None:
         self._setup_shape(16, 128, 256, 128)

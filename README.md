@@ -102,8 +102,10 @@ demos:
 - `flashrt-fp8-ffn/benchmarks`: full FP8 GELU MLP sublayers for PI0.5/GROOT
   shapes.
 
-These numbers are math-equivalent comparisons against PyTorch eager and
-`torch.compile` tensor code; they do not use cache reuse, sampling-step
+These numbers are math-equivalent comparisons against validated PyTorch
+references. `torch.compile` speedups are shown only when the compiled reference
+is verified equivalent to the eager reference; otherwise the compiled baseline
+is marked unsupported. The measurements do not use cache reuse, sampling-step
 reduction, distillation, or quality/performance trade-offs.
 
 Wan/video snapshot uses long-token video/VLA shapes `T in {1024,2520,4096}`.
@@ -138,16 +140,23 @@ kernel package.
 Full FP8 FFN snapshot uses `flashrt-fp8-ffn`, which exports a Hub-loadable
 Tensor API for `FP8 up GEMM -> bias/GELU -> FP8 quant -> FP8 down GEMM -> bias`.
 
-| Block | Shape | Layers | vs eager | vs compile | Precision gate |
+| Block | Shape | Layers | vs eager | vs compile-stable reference | Precision gate |
 | --- | ---: | ---: | ---: | ---: | --- |
-| PI0.5 decoder FFN | `10,1024,4096,1024` | 18 | 6.61x | 3.83x | PASS, p99_abs=0 |
-| PI0.5 vision FFN | `512,1152,4304,1152` | 27 | 6.42x | 4.95x | PASS, p99_abs=0 |
-| GROOT ViT FFN | `512,1024,4096,1024` | 24 | 7.03x | 5.45x | PASS, p99_abs=0 |
-| GROOT VL self-attn FFN | `1024,2048,8192,2048` | 4 | 6.66x | 5.62x | PASS, p99_abs=0 |
+| PI0.5 decoder FFN | `10,1024,4096,1024` | 18 | 6.61x | 6.10x | PASS, p99_abs=0 |
+| PI0.5 vision FFN | `512,1152,4304,1152` | 27 | 6.49x | 6.04x | PASS, p99_abs=0 |
+| GROOT ViT FFN | `512,1024,4096,1024` | 24 | 7.19x | 6.66x | PASS, p99_abs=0 |
+| GROOT VL self-attn FFN | `1024,2048,8192,2048` | 4 | 6.51x | 5.89x | PASS, p99_abs=0 |
 
 This is the stronger first-update story than epilogue-only measurement: a full
-math-equivalent FFN sublayer remains several times faster than both eager and
-`torch.compile` tensor references on RTX 5090.
+math-equivalent FFN sublayer remains several times faster than both the eager
+PyTorch reference and the compile-stable `torch.compile` reference on RTX 5090.
+
+The compile-stable reference intentionally graph-breaks the numerically
+sensitive `GELU -> FP8 requant` and final BF16 bias/cast boundaries, while
+leaving the FP8 dequant GEMMs in the compiled graph. This is required because a
+raw default-Inductor compile of the whole FP8 fake-quant chain is not
+bit-equivalent to eager at the FP8 rounding boundary. The benchmark verifies
+compiled-reference output against eager output before reporting `vs compile`.
 
 The expanded source-extension sweep also covers PI0.5 decoder chunk sizes,
 PI0.5 vision 1/2/3-view shapes, GROOT ViT 1/2/4-view shapes, GROOT DeepStack,
