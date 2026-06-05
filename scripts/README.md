@@ -24,6 +24,8 @@ Current scripts:
   fast on verification or execution failures by default. Only use
   `--allow-diagnostic-failures` for internal triage runs that intentionally
   record failed rows as `nan`.
+- `torch_compile_smoke.py`: downloads the published FlashRT Hub kernels and
+  verifies representative wrappers under `torch.compile(fullgraph=True)`.
 
 `torch.compile` baselines are not automatically fair just because compilation
 succeeds. For quantized references, especially FP8/FP4 fake-quant chains, the
@@ -45,6 +47,7 @@ python scripts/correctness_audit.py
 python scripts/release_build_plan.py
 python scripts/run_built_artifact_benchmarks.py --backend source --package all --compile-baseline
 python scripts/run_built_artifact_benchmarks.py --backend artifact --package all --compile-baseline
+python scripts/torch_compile_smoke.py --version 1
 ```
 
 See `docs/release-runbook.md` for the full build-window procedure.
