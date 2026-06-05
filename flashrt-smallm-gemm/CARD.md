@@ -11,19 +11,27 @@ tags:
 
 # FlashRT Small-M GEMM
 
-Draft kernel card for FlashRT decode-oriented small-M GEMM/GEMV kernels.
+FlashRT decode-oriented small-M GEMM/GEMV kernels.
 
-This package is not ready for Hub publication yet.
+The v1 surface is a shape-specialized SM120 NVFP4 W4A4 M=1 matvec with BF16
+output. It is meant for low-batch decode/projection paths where launch latency
+and small-M efficiency dominate.
 
-## Selected First Features
+## Kernels
 
-- NVFP4 W4A4 decode matvec with BF16 output. This draft wrapper currently
-  targets CUDA 12.8+ SM120 and `K in {4096, 12288}`.
-- NVFP4 W4A4 small-M warpsplit MMA with BF16 output.
-- Tiny FP8 fixed-family small-M GEMM kernels.
+- `nvfp4_w4a4_decode_matvec_bf16out`: packed activation row and packed
+  row-major weight matrix to BF16 output. Current supported K values are
+  `{4096, 12288}`.
 
-## Status
+## When To Use
 
-This package stays draft until the shape-specialized APIs have explicit
-supported shape grids, correctness tests, and latency benchmarks against
-cuBLASLt/CUTLASS where applicable.
+Use this package for Blackwell decode shapes after activations and weights
+have already been packed to NVFP4/W4A4 layout and scale-factor buffers are in
+CUTLASS Sm1xx swizzled format.
+
+Unsupported K values should be treated as unsupported shapes, not slow fallback
+paths. Callers should gate shapes before dispatching this kernel.
+
+## Hardware
+
+Current v1 build scope is CUDA 12.8+ SM120.

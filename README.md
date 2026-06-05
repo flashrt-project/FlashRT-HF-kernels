@@ -26,20 +26,30 @@ Current local status:
   ABI compatibility plus `get_kernel` load checks.
 - The RTX 5090 installed-artifact correctness gate passes 345/345 checks for
   `torch211-cxx11-cu128`.
+- Version 1 packages are published under the `flashrt` Kernel Hub namespace.
 - Additional hardware validation is in progress.
-- Final public artifacts should be regenerated from a clean upstream
-  `kernel-builder` revision before upload.
-
-Known builder issue: the current upstream builder path has a
-`triton-3.7.0` fixed-output hash mismatch in the Torch 2.12 dependency path.
-The FlashRT packages build successfully with a local builder-side hash
-correction only; the kernel sources themselves are not involved in that
-failure.
+- Final public hardware claims should wait for the corresponding hardware rows
+  in the validation matrix.
 
 ## Hub-Style Usage
 
 The v1 packages are published under the `flashrt` Hugging Face Kernel Hub
 namespace and can be consumed through the Hugging Face `kernels` API:
+
+Start here:
+
+- `docs/usage.md`: package map, model integration rules, and copy-pasteable
+  usage snippets.
+- Package cards: each `flashrt-*/CARD.md` explains what that Hub package
+  contains and where it should be used.
+- `examples/`: runnable top-level examples for direct Hub loading and FFN
+  replacement.
+
+For the shortest runnable examples:
+
+- `examples/minimal_fp8_ffn.py`: import one Hub kernel and call it directly.
+- `examples/replace_torch_ffn.py`: replace a PyTorch
+  `Linear -> GELU(tanh) -> Linear` FFN with FlashRT FP8 kernels.
 
 ```python
 from kernels import get_kernel
@@ -195,12 +205,9 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 ## Repository Status
 
 All v1 packages have promoted `build.toml`, `flake.nix`, and `flake.lock`
-files and pass configuration-level prebuild checks. Some packages are still
-draft at the source or benchmark-evidence level; package-specific status is
-tracked in `docs/release-gating.md`.
-
-Do not upload a package to the Hub until the validation checklist in
-`docs/release-gating.md` passes for the full v1 batch.
+files and pass configuration-level prebuild checks. Package-specific scope,
+supported shapes, validation records, and benchmark evidence are tracked in
+each package directory and in `docs/release-gating.md`.
 
 ## Public vs Internal Content
 

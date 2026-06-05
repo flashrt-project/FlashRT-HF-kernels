@@ -20,13 +20,6 @@ The package also exposes BF16 GEMM wrappers using cuBLASLt fused bias and GELU
 epilogues. These wrappers are shape-sensitive and should be evaluated for the
 target workload before promotion.
 
-## Planned Features
-
-- FP8 GEMM with fused bias and activation epilogues.
-- NVFP4 GEMM with fused bias and activation epilogues.
-- Quantized output epilogues for low-latency inference pipelines.
-- Generic APIs for Transformer, VLA, and diffusion model linear blocks.
-
 ## Current API
 
 - `bf16_gemm_bias(a, b, bias, out=None)`
@@ -34,6 +27,16 @@ target workload before promotion.
 - `bias_gelu_quantize_fp8_static_bf16(input, bias, scale, out=None)`
 - `channel_scale_quantize_fp8_static_bf16(input, channel_scale, scale, out=None)`
 - `gelu_quantize_fp8_static_bf16(input, scale, out=None)`
+
+## When To Use
+
+Use this package when a model block already has a BF16 hidden tensor and needs
+to fuse activation, bias, channel scaling, and FP8 E4M3 output quantization.
+This is the clean helper package for building static FP8 model paths.
+
+If you need a complete FP8 GELU FFN block, prefer
+`flashrt/flashrt-fp8-ffn`. If you need packed NVFP4 activation quantization,
+prefer `flashrt/flashrt-fused-quant`.
 
 ## Performance Notes
 

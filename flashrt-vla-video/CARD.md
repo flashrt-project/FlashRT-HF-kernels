@@ -21,11 +21,15 @@ The first implemented slice targets Q/K post-processing:
 - `qkv_split_norm_rope_bf16`: packed QKV split plus Q/K RMSNorm and
   interleaved RoPE for video/VLA token blocks.
 
-## Planned Features
+## When To Use
 
-- Patch embedding data movement and bias/position fusion.
-- Video and 3D convolution low-bit helper kernels.
-- DiT/VAE-style normalization and quantization helpers.
+Use this package when a model produces packed BF16 QKV and then performs
+separate QKV split, Q/K RMSNorm, and RoPE before attention. This pattern is
+common in VLA, vision-language, video, and diffusion transformer blocks, and
+is often missing from generic LLM kernel collections.
+
+For fair model-block attribution, keep the same QKV projection and attention
+implementation on both paths and replace only the postprocess island.
 
 ## Hardware
 
