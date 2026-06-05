@@ -2,7 +2,7 @@
   description = "Flake for FlashRT VLA and video kernels";
 
   inputs = {
-    kernel-builder.url = "github:huggingface/kernels";
+    kernel-builder.url = "github:huggingface/kernels/final-triton-hashes";
   };
 
   outputs =
