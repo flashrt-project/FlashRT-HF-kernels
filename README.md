@@ -38,8 +38,8 @@ failure.
 
 ## Hub-Style Usage
 
-After upload, packages are intended to be consumed through the Hugging Face
-`kernels` API:
+The v1 packages are published under the `flashrt` Hugging Face Kernel Hub
+namespace and can be consumed through the Hugging Face `kernels` API:
 
 ```python
 from kernels import get_kernel
@@ -61,11 +61,23 @@ q, k = ops.qkv_split_norm_rope_bf16(
 )
 ```
 
-The `flashrt/flashrt-*` namespace is the intended Hub namespace from each
-package's `build.toml`. Users can load these names only after the corresponding
-kernel repositories and artifacts are uploaded to the Hugging Face Hub. Until
-then, this GitHub repository is a source and validation repository, not a live
-Kernel Hub distribution.
+The same Hub-loaded wrappers are registered with fake/meta ops for
+`torch.compile` tracing:
+
+```python
+from kernels import get_kernel
+import torch
+
+ops = get_kernel("flashrt/flashrt-fp8-ffn", version=1, trust_remote_code=True)
+compiled_mlp = torch.compile(ops.fp8_gelu_mlp_bf16, fullgraph=True)
+y = compiled_mlp(x_fp8, up_w_fp8, up_b, down_w_fp8, down_b, x_s, up_s, h_s, d_s)
+```
+
+Run the smoke check with:
+
+```bash
+python scripts/torch_compile_smoke.py --version 1
+```
 
 ## Goals
 

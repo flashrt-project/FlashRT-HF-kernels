@@ -201,6 +201,12 @@ def load_installed_ops(artifact: str | None):
             sys.path.remove(artifact)
 
 
+def load_hub_ops(repo_id: str, version: int):
+    from kernels import get_kernel
+
+    return get_kernel(repo_id, version=version, trust_remote_code=True)
+
+
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return torch.clamp(x.float() / scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
 
@@ -438,8 +444,10 @@ def write_markdown(path: Path, results: list[Result], args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=["source", "installed"], default="source")
+    parser.add_argument("--backend", choices=["source", "installed", "hub"], default="source")
     parser.add_argument("--artifact", default=None)
+    parser.add_argument("--repo-id", default="flashrt/flashrt-fp8-ffn")
+    parser.add_argument("--version", type=int, default=1)
     parser.add_argument("--shapes", default="all")
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iters", type=int, default=20)
@@ -463,7 +471,12 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
     torch.manual_seed(17)
-    ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
+    if args.backend == "source":
+        ops = load_source_ops()
+    elif args.backend == "installed":
+        ops = load_installed_ops(args.artifact)
+    else:
+        ops = load_hub_ops(args.repo_id, args.version)
     requested = [s.strip() for s in args.shapes.split(",")]
     names: list[str] = []
     for item in requested:

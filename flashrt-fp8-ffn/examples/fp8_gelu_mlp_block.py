@@ -25,6 +25,7 @@ def main() -> None:
     parser.add_argument("--k", type=int, default=1024)
     parser.add_argument("--h", type=int, default=4096)
     parser.add_argument("--n", type=int, default=1024)
+    parser.add_argument("--compile", action="store_true")
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -46,11 +47,14 @@ def main() -> None:
     up_b = torch.randn((args.h,), device="cuda", dtype=torch.bfloat16)
     down_b = torch.randn((args.n,), device="cuda", dtype=torch.bfloat16)
 
-    y = ops.fp8_gelu_mlp_bf16(
-        x, up_w, up_b, down_w, down_b, x_scale, up_scale, hidden_scale, down_scale
-    )
+    fn = ops.fp8_gelu_mlp_bf16
+    if args.compile:
+        fn = torch.compile(fn, fullgraph=True, mode="reduce-overhead")
+
+    y = fn(x, up_w, up_b, down_w, down_b, x_scale, up_scale, hidden_scale, down_scale)
     torch.cuda.synchronize()
-    print(f"fp8_gelu_mlp_bf16 output shape={tuple(y.shape)} dtype={y.dtype}")
+    mode = "torch.compile(fullgraph=True)" if args.compile else "eager"
+    print(f"{mode} fp8_gelu_mlp_bf16 output shape={tuple(y.shape)} dtype={y.dtype}")
 
 
 if __name__ == "__main__":
