@@ -6,7 +6,23 @@ from typing import Optional
 
 import torch
 
-from ._ops import ops
+from ._ops import add_op_namespace_prefix, ops
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_w4a4_decode_matvec_bf16out"))
+def _nvfp4_w4a4_decode_matvec_bf16out_fake(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    out: torch.Tensor,
+    alpha: float = 1.0,
+) -> None:
+    if b_packed.dim() != 2:
+        raise RuntimeError("b_packed must have shape (N, K / 2)")
+    if out.shape != (b_packed.shape[0],):
+        raise RuntimeError("out shape must be (b_packed.shape[0],)")
+    return None
 
 
 def nvfp4_w4a4_decode_matvec_bf16out(

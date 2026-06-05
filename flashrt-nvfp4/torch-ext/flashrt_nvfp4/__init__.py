@@ -6,7 +6,19 @@ from typing import Optional
 
 import torch
 
-from ._ops import ops
+from ._ops import add_op_namespace_prefix, ops
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_sf_linear_to_swizzled"))
+def _nvfp4_sf_linear_to_swizzled_fake(
+    scales: torch.Tensor,
+    out: torch.Tensor,
+    D: int,
+    is_sfb: bool = False,
+) -> None:
+    if scales.dim() != 2:
+        raise RuntimeError("scales must have shape (rows, D / 16)")
+    return None
 
 
 def nvfp4_sf_swizzled_bytes(rows: int, D: int) -> int:

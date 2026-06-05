@@ -6,7 +6,59 @@ from typing import Optional
 
 import torch
 
-from ._ops import ops
+from ._ops import add_op_namespace_prefix, ops
+
+
+@torch.library.register_fake(add_op_namespace_prefix("q_norm_rope_bf16"))
+def _q_norm_rope_bf16_fake(
+    q: torch.Tensor,
+    weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    out: torch.Tensor,
+    eps: float = 1e-6,
+) -> None:
+    if out.shape != q.shape:
+        raise RuntimeError("out shape must match q shape")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("k_norm_rope_v_cache_bf16"))
+def _k_norm_rope_v_cache_bf16_fake(
+    k: torch.Tensor,
+    v: torch.Tensor,
+    weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    k_out: torch.Tensor,
+    v_out: torch.Tensor,
+    eps: float = 1e-6,
+) -> None:
+    if k_out.shape != k.shape or v_out.shape != v.shape:
+        raise RuntimeError("k_out and v_out shapes must match k and v")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("qkv_split_norm_rope_bf16"))
+def _qkv_split_norm_rope_bf16_fake(
+    packed_qkv: torch.Tensor,
+    norm_q_weight: torch.Tensor,
+    norm_k_weight: torch.Tensor,
+    freqs_re: torch.Tensor,
+    freqs_im: torch.Tensor,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+    heads: int,
+    head_dim: int,
+    seq_len: int,
+    eps: float = 1e-6,
+) -> None:
+    expected = (packed_qkv.shape[0], packed_qkv.shape[1], heads, head_dim)
+    if q_out.shape != expected or k_out.shape != expected:
+        raise RuntimeError(
+            "q_out and k_out shapes must be (batch, tokens, heads, head_dim)"
+        )
+    return None
 
 
 def q_norm_rope_bf16(

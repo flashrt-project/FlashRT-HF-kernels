@@ -31,7 +31,70 @@ def _preload_cublaslt() -> None:
 
 _preload_cublaslt()
 
-from ._ops import ops
+from ._ops import add_op_namespace_prefix, ops
+
+
+@torch.library.register_fake(add_op_namespace_prefix("bf16_gemm_bias_gelu"))
+def _bf16_gemm_bias_gelu_fake(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    bias: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if a.dim() != 2 or b.dim() != 2:
+        raise RuntimeError("a and b must be rank-2 tensors")
+    if out.shape != (a.shape[0], b.shape[1]):
+        raise RuntimeError("out shape must be (a.shape[0], b.shape[1])")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("bf16_gemm_bias"))
+def _bf16_gemm_bias_fake(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    bias: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if a.dim() != 2 or b.dim() != 2:
+        raise RuntimeError("a and b must be rank-2 tensors")
+    if out.shape != (a.shape[0], b.shape[1]):
+        raise RuntimeError("out shape must be (a.shape[0], b.shape[1])")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("bias_gelu_quantize_fp8_static_bf16"))
+def _bias_gelu_quantize_fp8_static_bf16_fake(
+    input: torch.Tensor,
+    bias: torch.Tensor,
+    scale: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if out.shape != input.shape:
+        raise RuntimeError("out shape must match input shape")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gelu_quantize_fp8_static_bf16"))
+def _gelu_quantize_fp8_static_bf16_fake(
+    input: torch.Tensor,
+    scale: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if out.shape != input.shape:
+        raise RuntimeError("out shape must match input shape")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("channel_scale_quantize_fp8_static_bf16"))
+def _channel_scale_quantize_fp8_static_bf16_fake(
+    input: torch.Tensor,
+    channel_scale: torch.Tensor,
+    scale: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if out.shape != input.shape:
+        raise RuntimeError("out shape must match input shape")
+    return None
 
 
 def _allocate_fp8_like(input: torch.Tensor) -> torch.Tensor:

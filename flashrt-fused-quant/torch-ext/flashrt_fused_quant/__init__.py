@@ -6,7 +6,31 @@ from typing import Optional
 
 import torch
 
-from ._ops import ops
+from ._ops import add_op_namespace_prefix, ops
+
+
+@torch.library.register_fake(add_op_namespace_prefix("silu_mul_quant_nvfp4_swizzled_bf16"))
+def _silu_mul_quant_nvfp4_swizzled_bf16_fake(
+    gate: torch.Tensor,
+    up: torch.Tensor,
+    packed: torch.Tensor,
+    scales: torch.Tensor,
+) -> None:
+    if packed.shape != (gate.shape[0], gate.shape[1] // 2):
+        raise RuntimeError("packed shape must be (rows, cols / 2)")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("silu_mul_merged_quant_nvfp4_swizzled_bf16"))
+def _silu_mul_merged_quant_nvfp4_swizzled_bf16_fake(
+    merged_gate_up: torch.Tensor,
+    packed: torch.Tensor,
+    scales: torch.Tensor,
+) -> None:
+    rows, merged_cols = merged_gate_up.shape
+    if packed.shape != (rows, merged_cols // 4):
+        raise RuntimeError("packed shape must be (rows, merged_cols / 4)")
+    return None
 
 
 def nvfp4_swizzled_scale_bytes(rows: int, cols: int) -> int:

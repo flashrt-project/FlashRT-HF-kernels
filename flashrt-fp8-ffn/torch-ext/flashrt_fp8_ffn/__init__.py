@@ -31,7 +31,68 @@ def _preload_cublaslt() -> None:
 
 _preload_cublaslt()
 
-from ._ops import ops
+from ._ops import add_op_namespace_prefix, ops
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp8_gemm_bf16"))
+def _fp8_gemm_bf16_fake(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if input.dim() != 2 or weight.dim() != 2:
+        raise RuntimeError("input and weight must be rank-2 tensors")
+    if out.shape != (input.shape[0], weight.shape[0]):
+        raise RuntimeError("out shape must be (input.shape[0], weight.shape[0])")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp8_linear_bias_gelu_quant_bf16"))
+def _fp8_linear_bias_gelu_quant_bf16_fake(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    output_scale: torch.Tensor,
+    hidden_bf16: torch.Tensor,
+    out_fp8: torch.Tensor,
+) -> None:
+    expected = (input.shape[0], weight.shape[0])
+    if hidden_bf16.shape != expected or out_fp8.shape != expected:
+        raise RuntimeError(
+            "hidden_bf16 and out_fp8 shapes must be "
+            "(input.shape[0], weight.shape[0])"
+        )
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp8_gelu_mlp_bf16"))
+def _fp8_gelu_mlp_bf16_fake(
+    input: torch.Tensor,
+    up_weight: torch.Tensor,
+    up_bias: torch.Tensor,
+    down_weight: torch.Tensor,
+    down_bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    up_weight_scale: torch.Tensor,
+    hidden_scale: torch.Tensor,
+    down_weight_scale: torch.Tensor,
+    hidden_bf16: torch.Tensor,
+    hidden_fp8: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    hidden_shape = (input.shape[0], up_weight.shape[0])
+    out_shape = (input.shape[0], down_weight.shape[0])
+    if hidden_bf16.shape != hidden_shape or hidden_fp8.shape != hidden_shape:
+        raise RuntimeError(
+            "hidden buffers must be (input.shape[0], up_weight.shape[0])"
+        )
+    if out.shape != out_shape:
+        raise RuntimeError("out shape must be (input.shape[0], down_weight.shape[0])")
+    return None
 
 
 def _scalar_scale_like(input: torch.Tensor, value: float = 1.0) -> torch.Tensor:
