@@ -32,11 +32,81 @@ class SourceOps:
     def __init__(self, namespace: str) -> None:
         self._ops = getattr(torch.ops, namespace)
 
-    def joint3_bias_gate_residual_bf16(self, *args):
-        self._ops.joint3_bias_gate_residual_bf16(*args)
+    def joint3_bias_gate_residual_bf16(
+        self,
+        v_residual,
+        v_x,
+        v_bias,
+        v_gate,
+        a_residual,
+        a_x,
+        a_bias,
+        a_gate,
+        u_residual,
+        u_x,
+        v_out=None,
+        a_out=None,
+        u_out=None,
+    ):
+        if v_out is None:
+            v_out = torch.empty_like(v_residual)
+        if a_out is None:
+            a_out = torch.empty_like(a_residual)
+        if u_out is None:
+            u_out = torch.empty_like(u_residual)
+        self._ops.joint3_bias_gate_residual_bf16(
+            v_residual,
+            v_x,
+            v_bias,
+            v_gate,
+            v_out,
+            a_residual,
+            a_x,
+            a_bias,
+            a_gate,
+            a_out,
+            u_residual,
+            u_x,
+            u_out,
+        )
+        return v_out, a_out, u_out
 
-    def joint3_bias_gate_residual_action_nobias_bf16(self, *args):
-        self._ops.joint3_bias_gate_residual_action_nobias_bf16(*args)
+    def joint3_bias_gate_residual_action_nobias_bf16(
+        self,
+        v_residual,
+        v_x,
+        v_bias,
+        v_gate,
+        a_residual,
+        a_x,
+        a_gate,
+        u_residual,
+        u_x,
+        v_out=None,
+        a_out=None,
+        u_out=None,
+    ):
+        if v_out is None:
+            v_out = torch.empty_like(v_residual)
+        if a_out is None:
+            a_out = torch.empty_like(a_residual)
+        if u_out is None:
+            u_out = torch.empty_like(u_residual)
+        self._ops.joint3_bias_gate_residual_action_nobias_bf16(
+            v_residual,
+            v_x,
+            v_bias,
+            v_gate,
+            v_out,
+            a_residual,
+            a_x,
+            a_gate,
+            a_out,
+            u_residual,
+            u_x,
+            u_out,
+        )
+        return v_out, a_out, u_out
 
 
 def _preload_cublaslt() -> None:
@@ -137,9 +207,10 @@ def run_case(ops, label: str, rows: tuple[int, int, int], dim: int) -> None:
     u_x = torch.randn_like(u_residual)
     u_out = torch.empty_like(u_residual)
     ops.joint3_bias_gate_residual_bf16(
-        v[0], v[1], v[2], v[3], v[4],
-        a[0], a[1], a[2], a[3], a[4],
-        u_residual, u_x, u_out,
+        v[0], v[1], v[2], v[3],
+        a[0], a[1], a[2], a[3],
+        u_residual, u_x,
+        v_out=v[4], a_out=a[4], u_out=u_out,
     )
     assert_close_distribution(f"{label}/full_v", v[4], ref_bias_gate(v[0], v[1], v[2], v[3]))
     assert_close_distribution(f"{label}/full_a", a[4], ref_bias_gate(a[0], a[1], a[2], a[3]))
@@ -151,9 +222,10 @@ def run_case(ops, label: str, rows: tuple[int, int, int], dim: int) -> None:
     u2_x = torch.randn_like(u2_residual)
     u2_out = torch.empty_like(u2_residual)
     ops.joint3_bias_gate_residual_action_nobias_bf16(
-        v2[0], v2[1], v2[2], v2[3], v2[4],
-        a2[0], a2[1], a2[3], a2[4],
-        u2_residual, u2_x, u2_out,
+        v2[0], v2[1], v2[2], v2[3],
+        a2[0], a2[1], a2[3],
+        u2_residual, u2_x,
+        v_out=v2[4], a_out=a2[4], u_out=u2_out,
     )
     assert_close_distribution(f"{label}/nobias_v", v2[4], ref_bias_gate(v2[0], v2[1], v2[2], v2[3]))
     assert_close_distribution(f"{label}/nobias_a", a2[4], ref_gate(a2[0], a2[1], a2[3]))
