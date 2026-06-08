@@ -58,6 +58,24 @@ For a quicker smoke run:
   --cuda-graph
 ```
 
+For an end-to-end staging report that keeps the baselines separate:
+
+```bash
+python demos/runtime-demo/pi05_e2e_runner.py \
+  --cuda-graph \
+  --output internal-tests/runtime-demo/pi05-e2e-staging.json
+```
+
+That runner records three independent rows:
+
+- `openpi_pytorch_baseline`: official PyTorch/OpenPI baseline readiness. If
+  the environment is missing OpenPI dependencies, this row is marked `skip`.
+- `flashrt_full_fp16_sanity`: checkpoint-backed FlashRT PI0.5 full-FP16 sanity
+  run. This proves the local checkpoint/runtime path works, but it is not the
+  public PyTorch baseline.
+- `hf_kernel_hub_runtime_hotpath`: public HF Kernel Hub hot path using
+  persistent buffers and optional CUDA Graph replay.
+
 ## Interpretation
 
 Use this benchmark to answer runtime engineering questions:
@@ -71,6 +89,11 @@ Use this benchmark to answer runtime engineering questions:
 Do not compare this against the upstream FlashRT serving runtime. For ecosystem
 claims, compare against the official PyTorch/eager model path once checkpoint
 loading and static calibration are wired in.
+
+The staging runner exists to prevent accidental baseline mixing. A complete
+publishable PI0.5 E2E table still needs a Python environment that can run the
+official OpenPI PyTorch policy, plus a checkpoint-backed HF-runtime path with
+real weights and static calibration scales.
 
 ## RTX 5090 Initial Results
 
@@ -87,6 +110,15 @@ Environment:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
 | `small` | 2 | 1067.482 | 73.357 | 31.194 | 33.382 | 14.55x | 34.22x | p99=0.040039, cos=0.997217 |
 | `pi05_hotpath` | 4 | 10520.880 | 988.763 | 974.947 | 991.435 | 10.64x | 10.79x | p99=0.000123, rms=0.000181 |
+
+Latest staging rerun on the same RTX 5090:
+
+- `openpi_pytorch_baseline`: skipped locally because this environment is
+  missing `jax`.
+- `flashrt_full_fp16_sanity`: checkpoint-backed PI0.5 full-FP16, 2 views,
+  10 steps, wall p50 `34.378 ms`.
+- `hf_kernel_hub_runtime_hotpath`: `pi05_hotpath`, 4 layers, CUDA Graph
+  `989.387 us`, graph+input-copy `1007.656 us`, `10.63x` vs synthetic eager.
 
 Reading these rows:
 
