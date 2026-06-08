@@ -58,7 +58,9 @@ jobs:
         uses: huggingface/kernel-builder-job@main
         with:
           token: ${{ secrets.HF_TOKEN }}
-          namespace: flashrt
+          # HF Jobs billing/credits are attached to the runner namespace.
+          # Artifacts are still uploaded to flashrt/<package> via --repo-id below.
+          namespace: liangsu9988
           flavor: cpu-xl
           timeout: "21600"
           script: |
