@@ -125,6 +125,8 @@ demos:
   shapes.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
   preallocated buffers and CUDA Graph replay for PI0.5/GROOT-shaped FFN chains.
+- `demos/runtime-demo`: multi-package PI0.5-shaped runtime prototype using
+  Hub-loaded kernels, persistent buffers, and CUDA Graph replay.
 
 These numbers are math-equivalent comparisons against validated PyTorch
 references. `torch.compile` speedups are shown only when the compiled reference
