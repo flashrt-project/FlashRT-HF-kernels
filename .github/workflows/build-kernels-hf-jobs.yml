@@ -38,7 +38,6 @@ jobs:
   build:
     name: Build ${{ matrix.package }}
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || inputs.package == 'all' || inputs.package == matrix.package
     strategy:
       fail-fast: false
       matrix:
@@ -52,8 +51,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'push' || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
 
       - name: Build and upload ${{ matrix.package }} via HF Jobs
+        if: github.event_name == 'push' || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
         uses: huggingface/kernel-builder-job@main
         with:
           token: ${{ secrets.HF_TOKEN }}
@@ -74,4 +75,5 @@ jobs:
 
             nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
               --max-jobs 4 \
-              --cores 8
+              --cores 8 \
+              --repo-id "flashrt/${{ matrix.package }}"
