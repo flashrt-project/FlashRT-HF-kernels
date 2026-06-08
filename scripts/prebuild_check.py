@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-build checks for the FlashRT HF kernels v1 batch.
+"""Pre-build checks for FlashRT HF kernel packages.
 
 This script intentionally does not run `kernel-builder build`. It verifies the
 repository state before a release build window so small edits can be checked
@@ -23,6 +23,14 @@ V1_PACKAGES = [
     "flashrt-nvfp4",
     "flashrt-smallm-gemm",
     "flashrt-fused-quant",
+]
+V2_CANDIDATE_PACKAGES = [
+    "flashrt-fp8-swiglu-ffn",
+    "flashrt-residual-norm-quant",
+    "flashrt-qkv-cache-rope",
+    "flashrt-vla-residual-gates",
+    "flashrt-adaptive-norms",
+    "flashrt-spatiotemporal-layout",
 ]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",
@@ -175,7 +183,7 @@ def main() -> int:
     errors: list[str] = []
     warnings: list[str] = []
 
-    for pkg in V1_PACKAGES:
+    for pkg in V1_PACKAGES + V2_CANDIDATE_PACKAGES:
         check_package(pkg, errors, warnings)
         if args.check_config:
             check_config(pkg, args.builder, errors)

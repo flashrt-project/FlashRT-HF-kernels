@@ -11,7 +11,12 @@ tags:
 
 # FlashRT VLA and Video Kernels
 
-Reusable VLA, vision, video, and diffusion kernels from FlashRT.
+Reusable VLA, vision, video, and diffusion attention postprocess kernels from
+FlashRT.
+
+This package remains a maintained public FlashRT Kernel Hub surface. More
+specialized QKV/cache and spatiotemporal runtime glue may live in focused
+packages when that makes the API easier to understand.
 
 The first implemented slice targets Q/K post-processing:
 

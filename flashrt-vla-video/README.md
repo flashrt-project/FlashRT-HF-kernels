@@ -1,9 +1,12 @@
 # flashrt-vla-video
 
-Reusable VLA, vision, video, and diffusion kernels from FlashRT.
+Reusable VLA, vision, video, and diffusion attention postprocess kernels from
+FlashRT.
 
-This package should focus on gaps that are not already covered by common LLM
-attention, MoE, and quantization packages.
+This package focuses on gaps that are not already covered by common LLM
+attention, MoE, and quantization packages. It remains a normal maintained
+FlashRT Kernel Hub package. If the public namespace needs to be reorganized in
+the future, that should be handled as an explicit migration plan.
 
 The first buildable slice targets Q/K post-processing:
 
@@ -21,15 +24,9 @@ Implemented APIs:
 - `k_norm_rope_v_cache_bf16`
 - `qkv_split_norm_rope_bf16`
 
-Future candidate APIs:
-
-- `residual_rmsnorm_quant_nvfp4`
-- `silu_mul_quant_nvfp4`
-- `patch_embed_bias_pos`
-- `patch_im2col`
-- `video_conv_lowbit`
-- `dit_norm_quant`
-- `bf16_ncdhw_to_ndhwc_quant`
+Future VLA/world-model APIs should be added here only when they match the
+package scope. More specialized runtime glue can live in focused packages such
+as `flashrt-qkv-cache-rope` or `flashrt-spatiotemporal-layout`.
 
 ## Non-Goals
 
@@ -88,4 +85,10 @@ freqs_im = torch.randn((4096, 64), device="cuda", dtype=torch.float32)
 q_video, k_video = ops.qkv_split_norm_rope_bf16(
     packed_qkv, norm_q, norm_k, freqs_re, freqs_im, heads=24, head_dim=128
 )
+```
+
+For the newer focused QKV/cache package:
+
+```python
+ops = get_kernel("flashrt/flashrt-qkv-cache-rope", version=1, trust_remote_code=True)
 ```

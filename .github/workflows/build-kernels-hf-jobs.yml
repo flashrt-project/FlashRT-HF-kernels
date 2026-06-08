@@ -1,0 +1,77 @@
+name: Build FlashRT Kernels On HF Jobs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-kernels-hf-jobs.yml"
+      - "flashrt-fp8-swiglu-ffn/**"
+      - "flashrt-residual-norm-quant/**"
+      - "flashrt-qkv-cache-rope/**"
+      - "flashrt-vla-residual-gates/**"
+      - "flashrt-adaptive-norms/**"
+      - "flashrt-spatiotemporal-layout/**"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Kernel package to build and upload"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - flashrt-fp8-swiglu-ffn
+          - flashrt-residual-norm-quant
+          - flashrt-qkv-cache-rope
+          - flashrt-vla-residual-gates
+          - flashrt-adaptive-norms
+          - flashrt-spatiotemporal-layout
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flashrt-hf-kernel-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || inputs.package == 'all' || inputs.package == matrix.package
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - flashrt-fp8-swiglu-ffn
+          - flashrt-residual-norm-quant
+          - flashrt-qkv-cache-rope
+          - flashrt-vla-residual-gates
+          - flashrt-adaptive-norms
+          - flashrt-spatiotemporal-layout
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and upload ${{ matrix.package }} via HF Jobs
+        uses: huggingface/kernel-builder-job@main
+        with:
+          token: ${{ secrets.HF_TOKEN }}
+          namespace: flashrt
+          flavor: cpu-xl
+          timeout: "21600"
+          script: |
+            # The HF Jobs container is started with `set -x`, which would echo
+            # secrets into streamed logs. Disable tracing before exporting.
+            set +x
+            export HF_TOKEN="${{ secrets.HF_TOKEN }}"
+            export GIT_LFS_SKIP_SMUDGE=1
+
+            git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
+            cd FlashRT-HF-kernels
+            git checkout "${{ github.sha }}"
+            cd "${{ matrix.package }}"
+
+            nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
+              --max-jobs 4 \
+              --cores 8

@@ -1,0 +1,28 @@
+[general]
+name = "flashrt-adaptive-norms"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/flashrt-adaptive-norms"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.flashrt_adaptive_norms]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+src = [
+  "csrc/adaptive_norms.cu",
+  "csrc/adaptive_norms.cuh",
+]

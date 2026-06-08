@@ -1,15 +1,19 @@
-# Source Sync Plan
+# Source Sync
 
 Upstream source: `../official/FlashRT`
 
-Candidate source areas:
+This package tracks the original v1 VLA/video QKV postprocess slice:
 
-- `csrc/kernels/patch_embed.*`
-- `csrc/kernels/dit_bf16.*`
-- `csrc/conv/`
-- `csrc/quantize/bf16_*ncdhw*`
+- decode Q RMSNorm + rotate-half RoPE staging
+- decode K RMSNorm + rotate-half RoPE + K/V cache slot write
+- packed QKV split + Q/K RMSNorm + interleaved RoPE
 
-## First Source Slice
+Long-term maintenance note:
 
-Start with patch embedding or a BF16 layout/quant helper before moving to
-larger video convolution kernels.
+- Keep this package scoped to reusable VLA/video attention postprocess kernels.
+- Put highly specific QKV/cache runtime APIs in `flashrt-qkv-cache-rope` when a
+  narrower package name makes usage clearer.
+- Put spatiotemporal/world-model layout helpers in
+  `flashrt-spatiotemporal-layout`.
+- If the namespace is reorganized later, do it as an explicit migration plan
+  rather than an accidental in-place rename.
