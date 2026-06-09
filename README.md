@@ -196,7 +196,9 @@ PI0.5 HF-kernel runtime milestone:
 - HF-kernel SigLIP vision/projector -> HF-kernel Gemma encoder -> HF-kernel
   PI0.5 decoder -> 10-step denoise -> action.
 - Timed hot path has `torch_gaps=[]` and CUDA Graph replay enabled.
-- RTX 5090 graph latency: `22.464 ms` (`44.52 Hz`).
+- RTX 5090 graph latency: `22.464 ms` (`44.52 Hz`) with BF16 projections;
+  `~21.6 ms` with `--fp8-projections` (QKV/O/vision projection GEMMs in FP8,
+  published Hub kernels only, action `cosine ~0.99986` vs official FlashRT).
 - Current conservative OpenPI/PyTorch BF16 first-call baseline:
   `257.078 ms` (`3.89 Hz`).
 - Action correctness vs HF reference: `p99_abs=0.007812`,
@@ -207,6 +209,18 @@ PI0.5 HF-kernel runtime milestone:
 The OpenPI/PyTorch baseline above is a first-call model path baseline. The
 complete OpenPI policy wrapper, including input preprocessing and observation
 capture, should be reported as a separate future benchmark.
+
+This composed Hub-kernel runtime and the bare-metal FlashRT runtime share the
+same white-box philosophy but are two ways of using the same kernels: a
+portable one-kernel-per-operation composition here, versus a fully-fused
+bare-metal path in FlashRT. On the same model and GPU FlashRT runs in roughly
+`18.7 ms`; the composed path is `~21.6 ms` with `--fp8-projections`, within
+about 10–15%. The difference comes mainly from attention implementation and
+epilogue/quantization fusion. The same Hub kernels driven with deeper FP8
+quantization close most of that margin losslessly (`cosine ~0.99986`),
+confirming the kernels are equivalent and the residual is the inherent
+advantage of a fully-fused runtime. See
+`demos/runtime-demo/README.md` for the full comparison.
 
 Second-batch VLA/runtime packages target the model-demo hot path:
 

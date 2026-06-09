@@ -45,43 +45,112 @@ Both profiles exercise:
   `flashrt/flashrt-adaptive-norms`;
 - static FP8 GeGLU/SwiGLU FFN stack from `flashrt/flashrt-fp8-swiglu-ffn`.
 
-## Run
+## Quickstart — the full PI0.5 hot path
 
-Use a Python environment matching one of the published Hub variants. The local
-validation environment is:
+The headline demo is the real-input model hot path:
+
+```text
+normalized LIBERO frame
+-> HF-kernel SigLIP vision/projector
+-> HF-kernel Gemma encoder KV
+-> HF-kernel PI0.5 decoder
+-> 10-step denoise
+-> action
+```
+
+captured as one CUDA Graph. Entry point: `pi05_hf_decoder_e2e.py`
+(`run-vision-encoder-decoder`). Earlier island/bridge/synthetic scripts and the
+OpenPI baseline now live under `demos/runtime-demo/test/`.
+
+### Prerequisites
+
+1. **Python env matching a published Hub variant** — `torch 2.11` + `CUDA 12.8`
+   with the `kernels` package installed. The Hub packages download automatically
+   via `kernels.get_kernel("flashrt/...", version=1)`. Local validation env:
+   `/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python` (substitute
+   your own).
+2. **PI0.5 LIBERO checkpoint** — the OpenPI PI0.5-LIBERO model as PyTorch
+   `model.safetensors`. Point `--checkpoint` at the directory holding it
+   (e.g. `checkpoints/pi05_libero_pytorch/`). Obtaining/converting this
+   checkpoint is the only OpenPI touch-point for the default run.
+3. **Input bundle (committed)** —
+   `internal-tests/runtime-demo/pi05-real-images-encoder-x-kv-frame50.pt` plus
+   the two calibration JSONs are checked in. They already contain the
+   normalized LIBERO frame, projected encoder input, reference K/V, initial
+   noise, and reference action, so **the timed hot path runs without invoking
+   OpenPI or FlashRT** (it imports neither at runtime).
+
+### Run — BF16-projection (default)
+
+```bash
+PY=/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python
+$PY demos/runtime-demo/pi05_hf_decoder_e2e.py run-vision-encoder-decoder \
+  --encoder-bundle internal-tests/runtime-demo/pi05-real-images-encoder-x-kv-frame50.pt \
+  --checkpoint /path/to/pi05_libero_pytorch \
+  --calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-decoder-static-scales.json \
+  --encoder-calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-frame50-static-scales.json \
+  --encoder-p99-abs-limit 0.75 --cuda-graph --warmup 8 --iters 30
+```
+
+Expected on RTX 5090: `status=pass`, `graph_us ~= 22500` (≈22.5 ms, ≈44 Hz),
+`torch_gaps=[]`, action `cosine ~= 0.99996` vs the HF reference and `~= 0.99995`
+vs the official FlashRT decoder output.
+
+### Run — FP8-projection (deeper quantization)
+
+Add `--fp8-projections` to also run the QKV / O / vision projection GEMMs in
+FP8 (published Hub kernels only); relax the encoder gate slightly:
+
+```bash
+$PY demos/runtime-demo/pi05_hf_decoder_e2e.py run-vision-encoder-decoder \
+  --encoder-bundle internal-tests/runtime-demo/pi05-real-images-encoder-x-kv-frame50.pt \
+  --checkpoint /path/to/pi05_libero_pytorch \
+  --calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-decoder-static-scales.json \
+  --encoder-calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-frame50-static-scales.json \
+  --encoder-p99-abs-limit 0.9 --fp8-projections --cuda-graph --warmup 8 --iters 30
+```
+
+Expected on RTX 5090: `status=pass`, `graph_us ~= 21600` (≈21.6 ms), action
+`cosine ~= 0.99986` vs the official FlashRT decoder output — lossless within the
+action tolerance, and ≈1.7 ms faster than the BF16-projection path. Result
+artifact:
+`internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-fp8-projections.json`.
+
+### Regenerating the input bundle (optional — needs OpenPI + FlashRT)
+
+The committed bundle is sufficient. To regenerate it from a fresh LIBERO frame
+you need the official OpenPI / FlashRT stack — `export-encoder` is the only
+subcommand that imports `flash_rt`:
+
+```bash
+<openpi-env-python> demos/runtime-demo/pi05_hf_decoder_e2e.py export-encoder \
+  --checkpoint /path/to/pi05_libero_pytorch \
+  --flashrt-root /path/to/official/FlashRT \
+  --frame-index 50 --num-views 2 \
+  --output internal-tests/runtime-demo/pi05-real-images-encoder-x-kv-frame50.pt
+```
+
+This step (and only this step) depends on OpenPI/FlashRT; the timed hot path
+above does not.
+
+## Synthetic-shape microbench (validation, optional)
+
+The synthetic fixed-shape runtime profiles moved to `test/pi05_runtime_demo.py`.
+They are a microbench of the composed Hub path, not the real-input E2E:
 
 ```bash
 /home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
-  demos/runtime-demo/pi05_runtime_demo.py \
-  --profile pi05_hotpath \
-  --layers 4 \
-  --ffn-activation gelu \
-  --attention-backend sdpa \
-  --warmup 10 \
-  --iters 50 \
-  --cuda-graph \
-  --markdown internal-tests/runtime-demo/pi05-hotpath-rtx5090.md \
-  --output internal-tests/runtime-demo/pi05-hotpath-rtx5090.json
+  demos/runtime-demo/test/pi05_runtime_demo.py \
+  --profile pi05_hotpath --layers 4 --ffn-activation gelu \
+  --attention-backend sdpa --warmup 10 --iters 50 --cuda-graph
 ```
 
-For a quicker smoke run:
-
-```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
-  demos/runtime-demo/pi05_runtime_demo.py \
-  --profile small \
-  --layers 2 \
-  --warmup 3 \
-  --iters 10 \
-  --cuda-graph
-```
-
-Before the rebuilt GeGLU artifact is uploaded to the Hub, validate the local
+Before a rebuilt GeGLU artifact is uploaded to the Hub, validate the local
 `build/<variant>` directory explicitly:
 
 ```bash
 /home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
-  demos/runtime-demo/pi05_runtime_demo.py \
+  demos/runtime-demo/test/pi05_runtime_demo.py \
   --profile pi05_hotpath \
   --layers 4 \
   --ffn-activation gelu \
@@ -100,7 +169,7 @@ and switch the decoder QKV path to the PI0.5 GQA cache API:
 
 ```bash
 /home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
-  demos/runtime-demo/pi05_runtime_demo.py \
+  demos/runtime-demo/test/pi05_runtime_demo.py \
   --profile pi05_hotpath \
   --layers 1 \
   --ffn-activation silu \
@@ -118,7 +187,7 @@ On 2026-06-09 this PI0.5-shaped smoke run passed on RTX 5090 with
 For an end-to-end staging report that keeps the baselines separate:
 
 ```bash
-python demos/runtime-demo/pi05_e2e_runner.py \
+python demos/runtime-demo/test/pi05_e2e_runner.py \
   --openpi-baseline-mode docker \
   --container pi0-stablehlo-test \
   --container-repo /workspace/PI/FlashRT-HF-kernels \
@@ -147,7 +216,7 @@ To run only the official OpenPI/PyTorch baseline inside the local container:
 docker exec pi0-stablehlo-test bash -lc '
 cd /workspace/PI/FlashRT-HF-kernels &&
 PYTHONPATH=/workspace/PI/openpi_src/src \
-python3 demos/runtime-demo/pi05_openpi_baseline.py \
+python3 demos/runtime-demo/test/pi05_openpi_baseline.py \
   --openpi-root /workspace/PI/openpi_src/src \
   --checkpoint /workspace/PI/checkpoints/pi05_libero_pytorch \
   --num-views 2 \
@@ -212,7 +281,7 @@ Then run the Hub-kernel FFN island in the HF kernel environment:
 
 ```bash
 /home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
-  demos/runtime-demo/pi05_real_weight_swiglu.py \
+  demos/runtime-demo/test/pi05_real_weight_swiglu.py \
   --checkpoint /home/heima/suliang/PI/checkpoints/pi05_libero_pytorch \
   --family decoder \
   --layer 0 \
@@ -269,7 +338,7 @@ docker exec pi0-stablehlo-test bash -lc '
 cd /workspace/PI/FlashRT-HF-kernels &&
 PYTHONPATH=/workspace/PI/openpi_src/src \
 /workspace/PI/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline/bin/python \
-  demos/runtime-demo/pi05_openpi_hub_ffn_e2e.py \
+  demos/runtime-demo/test/pi05_openpi_hub_ffn_e2e.py \
   --openpi-root /workspace/PI/openpi_src/src \
   --checkpoint /workspace/PI/checkpoints/pi05_libero_pytorch \
   --num-views 2 \
@@ -331,11 +400,13 @@ Real-input PI0.5 HF-kernel runtime path on RTX 5090:
 | Path | Scope | Latency ms | Hz | Notes |
 | --- | --- | ---: | ---: | --- |
 | OpenPI/PyTorch BF16 | First model call after construction | 257.078 | 3.89 | Real checkpoint, official OpenPI model path. This is the current conservative baseline until a full real-LIBERO policy-wrapper benchmark is added. |
-| FlashRT HF kernels | Real-input model runtime hot path, CUDA Graph replay | 22.464 | 44.52 | Normalized LIBERO bundle through HF kernels, persistent buffers, static calibration, CUDA Graph replay. |
+| FlashRT HF kernels (BF16 projections, default) | Real-input model runtime hot path, CUDA Graph replay | 22.464 | 44.52 | Normalized LIBERO bundle through HF kernels, persistent buffers, static calibration, CUDA Graph replay. |
+| FlashRT HF kernels (`--fp8-projections`) | Same hot path, QKV/O/vision projections in FP8 | ~21.6 | ~46.3 | Published Hub kernels only; action `cosine ~= 0.99986` vs official FlashRT output (lossless within tolerance). |
 
-The HF-kernel graph path is `11.44x` faster than the current OpenPI/PyTorch
-first-call baseline. A future policy-wrapper benchmark should report input
-preprocessing and bundle capture separately from the model runtime hot path.
+The default HF-kernel graph path is `11.44x` faster than the current
+OpenPI/PyTorch first-call baseline; `--fp8-projections` is roughly `11.9x`. A
+future policy-wrapper benchmark should report input preprocessing and bundle
+capture separately from the model runtime hot path.
 
 Correctness for
 `internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-static-loaded.json`:
@@ -364,6 +435,35 @@ gate_residual_bf16
 ada_rms_norm_style_bf16
 CUDA Graph replay
 ```
+
+## Relationship to the bare-metal FlashRT runtime
+
+This Hub-kernel runtime and FlashRT's own serving runtime share the same
+philosophy — white-box CUDA kernels with no black-box vendor libraries in the
+hot path — but they are two different ways of *using* those kernels:
+
+- **This demo** composes independent, reusable, framework-portable Hub
+  packages, one kernel per operation, behind clean Tensor APIs. It optimizes
+  for reuse, auditability, and portability.
+- **FlashRT's runtime** is a fully-fused bare-metal white-box path: it folds
+  elementwise, residual, and quantization work into kernel epilogues and uses a
+  hand-tuned attention path, trading modularity for the tightest possible hot
+  path.
+
+On the same PI0.5 model and the same RTX 5090, FlashRT's bare-metal path runs
+the model in roughly `18.7 ms`. The composed Hub path runs in `22.5 ms` by
+default and `~21.6 ms` with `--fp8-projections` — within roughly 10–15% of the
+bare-metal path. Driving the *same* Hub kernels with deeper FP8 quantization on
+the projection GEMMs is what closes most of that margin, and it stays lossless
+(action `cosine ~0.99986`), which confirms the underlying kernels are
+equivalent. The residual comes mainly from the attention implementation and
+from epilogue/quantization fusion — work that a fully-fused runtime can absorb
+but a deliberately one-kernel-per-operation composition does not. That residual
+is the structural, inherent advantage of a bare-metal fused white-box runtime.
+
+In short: same kernels, same white-box philosophy, two deployment paths — a
+portable composed path for the ecosystem, and a fully-fused bare-metal path for
+maximum throughput. Neither replaces the other.
 
 HF Kernel Hub runtime prototype, run from the published Hub packages:
 

@@ -654,6 +654,130 @@ class HubDecoderLoop:
         return self.noise
 
 
+def _quant_proj_weight(w_kn: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize a stored (K, N) projection weight to FP8 (N, K) + per-tensor scale.
+
+    Stored decoder/encoder projection weights are ``x @ w`` layout ``(K, N)``;
+    ``fp8_gemm_bf16`` expects ``(N, K)``.
+    """
+    nk = w_kn.t().contiguous()
+    scale = _scale_from_amax(nk, safety=1.0)
+    return _quantize_fp8(nk, scale), scale
+
+
+def calibrate_decoder_proj(
+    weights: "DecoderWeights",
+    state: "DecoderState",
+    *,
+    scale_safety: float,
+    calibration_input,
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Static amax calibration of decoder QKV/O projection input scales.
+
+    Mirrors ``TorchDecoderReference`` so the FP8-projection runtime uses scales
+    consistent with the BF16-projection reference. Returns ``(qkv_in, o_in)``.
+    """
+    dev = weights.device
+    ref = TorchDecoderReference(
+        weights, state, scale_safety=scale_safety, calibration_input=calibration_input
+    )
+    qa = torch.zeros((weights.layers,), device=dev)
+    oa = torch.zeros((weights.layers,), device=dev)
+    noise = state.noise0.clone()
+    for step in range(weights.steps):
+        x = (noise @ weights.action_in_w + weights.action_in_b.view(1, -1)).to(torch.bfloat16)
+        for i in range(weights.layers):
+            nm, gate = _rms_norm_style_ref(x, weights.style_attn[step, i], weights.ones)
+            qa[i] = torch.maximum(qa[i], nm.float().abs().max())
+            q, kd, vd = _qkv_split_rope_ref((nm @ weights.qkv_w[i]).to(torch.bfloat16), state.rope)
+            k = torch.cat([_layer_kv(state.encoder_k, i, name="encoder_k"), kd], dim=1)
+            v = torch.cat([_layer_kv(state.encoder_v, i, name="encoder_v"), vd], dim=1)
+            attn = _sdpa_gqa(q, k, v)
+            oa[i] = torch.maximum(oa[i], attn.float().abs().max())
+            x = (x.float() + (attn @ weights.o_w[i]).float() * gate.float()).to(torch.bfloat16)
+            fn, fg = _rms_norm_style_ref(x, weights.style_ffn[step, i], weights.ones)
+            xf = _quantize_fp8(fn, ref.input_scale[i])
+            gu = _dequant_fp8(xf, ref.input_scale[i]) @ _dequant_fp8(
+                weights.gate_up_w_fp8[i], weights.gate_up_w_scale[i]
+            ).t()
+            gp, up = gu.chunk(2, dim=1)
+            hidden = F.gelu(gp, approximate="tanh") * up
+            hf = _quantize_fp8(hidden.to(torch.bfloat16), ref.hidden_scale[i])
+            fo = (_dequant_fp8(hf, ref.hidden_scale[i]) @ _dequant_fp8(
+                weights.down_w_fp8[i], weights.down_w_scale[i]
+            ).t()).to(torch.bfloat16)
+            x = (x.float() + fo.float() * fg.float()).to(torch.bfloat16)
+        fnl, _ = _rms_norm_style_ref(x, weights.style_final[step], weights.ones)
+        noise = (noise.float() + (fnl @ weights.action_out_w + weights.action_out_b.view(1, -1)).float()).to(torch.bfloat16)
+
+    def mk(a):
+        return torch.clamp(a / FP8_MAX * scale_safety, min=1e-12).reshape(1).to(dev, torch.float32).contiguous()
+
+    return [mk(qa[i]) for i in range(weights.layers)], [mk(oa[i]) for i in range(weights.layers)]
+
+
+class Fp8HubDecoderLoop(HubDecoderLoop):
+    """Decoder loop with QKV/O projections run in FP8 (published Hub kernels only).
+
+    Replaces the BF16 QKV/O ``bf16_linear`` calls with
+    ``channel_scale_quantize_fp8_static_bf16`` (per-tensor activation quant) plus
+    ``fp8_gemm_bf16``. FFN already runs in FP8 in the base class.
+    """
+
+    def enable_fp8_projections(self, qkv_in_scale, o_in_scale) -> None:
+        self._qi = qkv_in_scale
+        self._oi = o_in_scale
+        self._qkv_w_fp8, self._qkv_w_scale, self._o_w_fp8, self._o_w_scale = [], [], [], []
+        for i in range(self.w.layers):
+            a, b = _quant_proj_weight(self.w.qkv_w[i])
+            self._qkv_w_fp8.append(a)
+            self._qkv_w_scale.append(b)
+            a, b = _quant_proj_weight(self.w.o_w[i])
+            self._o_w_fp8.append(a)
+            self._o_w_scale.append(b)
+        cs = self.x.shape[0]
+        self._nf = torch.empty((cs, DEC_D), device=self.w.device, dtype=torch.float8_e4m3fn)
+        self._af = torch.empty((cs, DEC_NH * DEC_HD), device=self.w.device, dtype=torch.float8_e4m3fn)
+        self._ones_d = torch.ones((DEC_D,), device=self.w.device, dtype=torch.bfloat16)
+        self._ones_a = torch.ones((DEC_NH * DEC_HD,), device=self.w.device, dtype=torch.bfloat16)
+
+    def __call__(self) -> torch.Tensor:
+        w = self.w
+        s = self.s
+        self.noise.copy_(s.noise0)
+        for step in range(w.steps):
+            self.gemm.bf16_linear_bias_bf16(self.noise, w.action_in_w, w.action_in_b, out=self.x)
+            for i in range(w.layers):
+                self.adapt.ada_rms_norm_style_bf16(
+                    self.x, w.ones, w.style_attn[step, i], out=self.normed, gate_out=self.gate
+                )
+                self.gemm.channel_scale_quantize_fp8_static_bf16(self.normed, self._ones_d, self._qi[i], out=self._nf)
+                self.ffn.fp8_gemm_bf16(self._nf, self._qkv_w_fp8[i], self._qi[i], self._qkv_w_scale[i], out=self.qkv_buf)
+                self.k_cache[:, : s.encoder_seq_len].copy_(_layer_kv(s.encoder_k, i, name="encoder_k"))
+                self.v_cache[:, : s.encoder_seq_len].copy_(_layer_kv(s.encoder_v, i, name="encoder_v"))
+                self.qkv.qkv_split_rope_kvcache_bf16(
+                    self.qkv_buf.view(1, s.chunk_size, -1), s.rope, DEC_NH, DEC_NKV, DEC_HD,
+                    s.encoder_seq_len, self.q, self.k_cache, self.v_cache,
+                )
+                self.attn_kernel.fwd(self.q, self.k_cache, self.v_cache, out=self.attn_bthd, p_dropout=0.0, is_causal=False)
+                self.gemm.channel_scale_quantize_fp8_static_bf16(self.attn, self._ones_a, self._oi[i], out=self._af)
+                self.ffn.fp8_gemm_bf16(self._af, self._o_w_fp8[i], self._oi[i], self._o_w_scale[i], out=self.attn_o)
+                self.residual.gate_residual_bf16(self.x, self.attn_o, self.gate, out=self.x)
+                _, ffn_fp8, ffn_gate = self.adapt.gate_residual_ada_norm_fp8_static_bf16(
+                    self.x, self.zero_x, self.zero_gate, w.ones, w.style_ffn[step, i], self.ref.input_scale[i],
+                    out=self.ffn_fp8, gate_out=self.ffn_gate,
+                )
+                self.ffn.fp8_geglu_mlp_bf16(
+                    ffn_fp8, w.gate_up_w_fp8[i], w.down_w_fp8[i], self.ref.input_scale[i], w.gate_up_w_scale[i],
+                    self.ref.hidden_scale[i], w.down_w_scale[i], self.gate_up[i], self.hidden_fp8[i], self.ffn_out[i],
+                )
+                self.residual.gate_residual_bf16(self.x, self.ffn_out[i], ffn_gate, out=self.x)
+            self.adapt.ada_rms_norm_style_bf16(self.x, w.ones, w.style_final[step], out=self.final_normed, gate_out=self.final_gate)
+            self.gemm.bf16_linear_bias_bf16(self.final_normed, w.action_out_w, w.action_out_b, out=self.action)
+            self.residual.gate_residual_bf16(self.noise, self.action, self.noise_gate, out=self.noise)
+        return self.noise
+
+
 class Captured:
     def __init__(self, runtime: HubDecoderLoop) -> None:
         self.runtime = runtime

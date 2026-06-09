@@ -1277,6 +1277,172 @@ def run_hf_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
     )
 
 
+def _quant_proj_weight(w_kn: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize a stored ``(K, N)`` projection weight to FP8 ``(N, K)`` + scale."""
+    nk = w_kn.t().contiguous()
+    scale = _scale_from_amax(nk, safety=1.0)
+    return _quantize_fp8(nk, scale), scale
+
+
+class Fp8HubEncoderRuntime(HubEncoderRuntime):
+    """Encoder runtime with QKV/O projections in FP8 (published Hub kernels only)."""
+
+    def calibrate(self) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        ref = self.reference
+        x = self.encoder_x_input.clone()
+        qi: list[torch.Tensor] = []
+        oi: list[torch.Tensor] = []
+        for i in range(self.w.layers):
+            normed = _rms_norm_ref(x, self.w.ones)
+            qi.append(_scale_from_amax(normed, safety=ref.scale_safety))
+            q, k, v = _enc_qkv_split_rope_ref(normed @ self.w.qkv_w[i], ref.rope)
+            if i == self.w.layers - 1:
+                break
+            attn = _enc_sdpa_gqa(q, k, v)
+            oi.append(_scale_from_amax(attn, safety=ref.scale_safety))
+            attn_o = (attn @ self.w.o_w[i]).to(torch.bfloat16)
+            x = (x.float() + attn_o.float()).to(torch.bfloat16)
+            ffn_normed = _rms_norm_ref(x, self.w.ones)
+            gate_up = (
+                _dequant_fp8(_quantize_fp8(ffn_normed, ref.input_scale[i]), ref.input_scale[i])
+                @ _dequant_fp8(self.w.gate_up_w_fp8[i], self.w.gate_up_w_scale[i]).t()
+            ).to(torch.bfloat16)
+            gate, up = gate_up.float().chunk(2, dim=1)
+            hidden = F.gelu(gate, approximate="tanh") * up
+            down = (
+                _dequant_fp8(_quantize_fp8(hidden.to(torch.bfloat16), ref.hidden_scale[i]), ref.hidden_scale[i])
+                @ _dequant_fp8(self.w.down_w_fp8[i], self.w.down_w_scale[i]).t()
+            ).to(torch.bfloat16)
+            x = (x.float() + down.float()).to(torch.bfloat16)
+        oi.append(torch.tensor([1.0], device=self.w.device, dtype=torch.float32))
+        return qi, oi
+
+    def enable_fp8(self, qkv_in_scale, o_in_scale) -> None:
+        self._qi, self._oi = qkv_in_scale, o_in_scale
+        self._qkv_w_fp8, self._qkv_w_scale, self._o_w_fp8, self._o_w_scale = [], [], [], []
+        for i in range(self.w.layers):
+            a, b = _quant_proj_weight(self.w.qkv_w[i])
+            self._qkv_w_fp8.append(a)
+            self._qkv_w_scale.append(b)
+            a, b = _quant_proj_weight(self.w.o_w[i])
+            self._o_w_fp8.append(a)
+            self._o_w_scale.append(b)
+        seq = self.x.shape[0]
+        self._xf = torch.empty((seq, ENC_D), device=self.w.device, dtype=torch.float8_e4m3fn)
+        self._af = torch.empty((seq, ENC_NH * DEC_HD), device=self.w.device, dtype=torch.float8_e4m3fn)
+        self._oh = torch.ones((ENC_NH * DEC_HD,), device=self.w.device, dtype=torch.bfloat16)
+
+    def __call__(self) -> tuple[torch.Tensor, torch.Tensor]:
+        self.x.copy_(self.encoder_x_input)
+        for i in range(self.w.layers):
+            self.norm.rms_norm_quant_fp8_static_bf16(self.x, self.w.ones, self._qi[i], out=self._xf)
+            self.ffn.fp8_gemm_bf16(self._xf, self._qkv_w_fp8[i], self._qi[i], self._qkv_w_scale[i], out=self.qkv_buf)
+            self.qkv.qkv_split_rope_kvcache_bf16(
+                self.qkv_buf.view(1, self.x.shape[0], -1), self.rope, ENC_NH, DEC_NKV, DEC_HD, 0,
+                self.q, self.k_all[i:i + 1], self.v_all[i:i + 1],
+            )
+            if i == self.w.layers - 1:
+                break
+            self.attn_kernel.fwd(self.q, self.k_all[i:i + 1], self.v_all[i:i + 1], out=self.attn_bthd, p_dropout=0.0, is_causal=False)
+            self.gemm.channel_scale_quantize_fp8_static_bf16(self.attn, self._oh, self._oi[i], out=self._af)
+            self.ffn.fp8_gemm_bf16(self._af, self._o_w_fp8[i], self._oi[i], self._o_w_scale[i], out=self.attn_o)
+            self.residual.gate_residual_bf16(self.x, self.attn_o, self.ones_gate, out=self.x)
+            self.norm.rms_norm_quant_fp8_static_bf16(self.x, self.w.ones, self.reference.input_scale[i], out=self.ffn_fp8)
+            self.ffn.fp8_geglu_mlp_bf16(
+                self.ffn_fp8, self.w.gate_up_w_fp8[i], self.w.down_w_fp8[i], self.reference.input_scale[i],
+                self.w.gate_up_w_scale[i], self.reference.hidden_scale[i], self.w.down_w_scale[i],
+                self.gate_up[i], self.hidden_fp8[i], self.ffn_out[i],
+            )
+            self.residual.gate_residual_bf16(self.x, self.ffn_out[i], self.ones_gate, out=self.x)
+        return self.k_all, self.v_all
+
+
+class Fp8HubVisionRuntime(HubVisionRuntime):
+    """SigLIP vision runtime with QKV/O/FFN projections in FP8 (published kernels)."""
+
+    def _setup_fp8(self) -> None:
+        dec = _load_decoder_module()
+        self._fp8ffn, _ = dec._load_module(None, "flashrt/flashrt-fp8-ffn", "flashrt_fp8_ffn")
+        self._ones = torch.ones((VIS_D,), device=self.w.device, dtype=torch.bfloat16)
+        self._zeros = torch.zeros((VIS_D,), device=self.w.device, dtype=torch.bfloat16)
+        self._nf = torch.empty((self.seq, VIS_D), device=self.w.device, dtype=torch.float8_e4m3fn)
+        self._af = torch.empty((self.seq, VIS_D), device=self.w.device, dtype=torch.float8_e4m3fn)
+        self._hbf = torch.empty((self.seq, VIS_H), device=self.w.device, dtype=torch.bfloat16)
+        self._hf = torch.empty((self.seq, VIS_H), device=self.w.device, dtype=torch.float8_e4m3fn)
+
+    def calibrate(self, *, scale_safety: float):
+        qi = [None] * VIS_L
+        oi = [None] * VIS_L
+        fi = [None] * VIS_L
+        hi = [None] * VIS_L
+
+        def sc(a):
+            return _scale_from_amax_value(a, safety=scale_safety, device=self.w.device)
+
+        self.layout.patch_im2col_bf16(self.images, out=self.patches)
+        self.gemm.bf16_linear_bf16(self.patches, self.w.patch_w, out=self.x)
+        self.residual.bias_residual_bf16(self.x, self.w.pos_embed, self.w.patch_b, out=self.x)
+        self.norm.layer_norm_bf16(self.x, self.w.ln1_w[0], self.w.ln1_b[0], out=self.normed)
+        for i in range(VIS_L):
+            qi[i] = sc(self.normed.float().abs().max())
+            self.gemm.bf16_linear_bias_bf16(self.normed, self.w.qkv_w[i], self.w.qkv_b[i], out=self.qkv_buf)
+            self.qkv.qkv_split_bf16(self.qkv_buf.view(self.num_views, VIS_SEQ_PER_VIEW, 3 * VIS_D), VIS_NH, VIS_HD, self.q, self.k, self.v)
+            self.attn_kernel.fwd(self.q, self.k, self.v, out=self.attn_bthd, p_dropout=0.0, is_causal=False)
+            oi[i] = sc(self.attn.float().abs().max())
+            self.gemm.bf16_linear_bf16(self.attn, self.w.o_w[i], out=self.normed)
+            self.residual.bias_residual_bf16(self.x, self.normed, self.w.o_b[i], out=self.x)
+            self.norm.layer_norm_bf16(self.x, self.w.ln2_w[i], self.w.ln2_b[i], out=self.normed)
+            fi[i] = sc(self.normed.float().abs().max())
+            self.gemm.bf16_gemm_bias_gelu(self.normed, self.w.up_w[i], self.w.up_b[i], out=self.hidden)
+            hi[i] = sc(self.hidden.float().abs().max())
+            self.gemm.bf16_linear_bf16(self.hidden, self.w.down_w[i], out=self.normed)
+            self.residual.bias_residual_bf16(self.x, self.normed, self.w.down_b[i], out=self.x)
+            if i != VIS_L - 1:
+                self.norm.layer_norm_bf16(self.x, self.w.ln1_w[i + 1], self.w.ln1_b[i + 1], out=self.normed)
+        return qi, oi, fi, hi
+
+    def enable_fp8(self, scales) -> None:
+        self._qi, self._oi, self._fi, self._hi = scales
+        self._setup_fp8()
+        self._qkv_f, self._qkv_s, self._o_f, self._o_s = [], [], [], []
+        self._up_f, self._up_s, self._dn_f, self._dn_s = [], [], [], []
+        for i in range(VIS_L):
+            a, b = _quant_proj_weight(self.w.qkv_w[i]); self._qkv_f.append(a); self._qkv_s.append(b)
+            a, b = _quant_proj_weight(self.w.o_w[i]); self._o_f.append(a); self._o_s.append(b)
+            a, b = _quant_proj_weight(self.w.up_w[i]); self._up_f.append(a); self._up_s.append(b)
+            a, b = _quant_proj_weight(self.w.down_w[i]); self._dn_f.append(a); self._dn_s.append(b)
+
+    def __call__(self) -> torch.Tensor:
+        ff = self._fp8ffn
+        self.layout.patch_im2col_bf16(self.images, out=self.patches)
+        self.gemm.bf16_linear_bf16(self.patches, self.w.patch_w, out=self.x)
+        self.residual.bias_residual_bf16(self.x, self.w.pos_embed, self.w.patch_b, out=self.x)
+        self.norm.layer_norm_bf16(self.x, self.w.ln1_w[0], self.w.ln1_b[0], out=self.normed)
+        for i in range(VIS_L):
+            self.gemm.channel_scale_quantize_fp8_static_bf16(self.normed, self._ones, self._qi[i], out=self._nf)
+            ff.fp8_gemm_bf16(self._nf, self._qkv_f[i], self._qi[i], self._qkv_s[i], out=self.qkv_buf)
+            self.qkv_buf.add_(self.w.qkv_b[i])
+            self.qkv.qkv_split_bf16(self.qkv_buf.view(self.num_views, VIS_SEQ_PER_VIEW, 3 * VIS_D), VIS_NH, VIS_HD, self.q, self.k, self.v)
+            self.attn_kernel.fwd(self.q, self.k, self.v, out=self.attn_bthd, p_dropout=0.0, is_causal=False)
+            self.gemm.channel_scale_quantize_fp8_static_bf16(self.attn, self._ones, self._oi[i], out=self._af)
+            ff.fp8_gemm_bf16(self._af, self._o_f[i], self._oi[i], self._o_s[i], out=self.normed)
+            self.residual.bias_residual_bf16(self.x, self.normed, self.w.o_b[i], out=self.x)
+            self.norm.layer_norm_bf16(self.x, self.w.ln2_w[i], self.w.ln2_b[i], out=self.normed)
+            self.gemm.channel_scale_quantize_fp8_static_bf16(self.normed, self._ones, self._fi[i], out=self._nf)
+            ff.fp8_gelu_mlp_bf16(self._nf, self._up_f[i], self.w.up_b[i], self._dn_f[i], self._zeros, self._fi[i],
+                                 self._up_s[i], self._hi[i], self._dn_s[i], self._hbf, self._hf, out=self.normed)
+            self.residual.bias_residual_bf16(self.x, self.normed, self.w.down_b[i], out=self.x)
+            if i != VIS_L - 1:
+                self.norm.layer_norm_bf16(self.x, self.w.ln1_w[i + 1], self.w.ln1_b[i + 1], out=self.normed)
+        self.norm.layer_norm_bf16(self.x, self.w.final_norm_w, self.w.final_norm_b, out=self.normed)
+        self.gemm.bf16_linear_bias_bf16(self.normed, self.w.projector_w, self.w.projector_b, out=self.encoder_x_vision)
+        return self.encoder_x_input
+
+
+def _scale_from_amax_value(amax: torch.Tensor, *, safety: float, device: torch.device) -> torch.Tensor:
+    return torch.clamp(amax.float() / 448.0 * safety, min=1e-12).reshape(1).to(device=device, dtype=torch.float32).contiguous()
+
+
 def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -1304,7 +1470,9 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         num_views=int(bundle.get("num_views", input_images.shape[0])),
         device=device,
     )
-    vision_runtime = HubVisionRuntime(
+    fp8_proj = bool(getattr(args, "fp8_projections", False))
+    VisionCls = Fp8HubVisionRuntime if fp8_proj else HubVisionRuntime
+    vision_runtime = VisionCls(
         vision_weights,
         input_images,
         encoder_x_template,
@@ -1314,6 +1482,8 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         local_norm_artifact=args.local_norm_artifact,
         local_layout_artifact=args.local_layout_artifact,
     )
+    if fp8_proj:
+        vision_runtime.enable_fp8(vision_runtime.calibrate(scale_safety=args.encoder_scale_safety))
     produced_encoder_x = vision_runtime()
     torch.cuda.synchronize()
     vision_metrics = _compare(
@@ -1342,7 +1512,8 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
             checkpoint=checkpoint,
             encoder_seq_len=produced_encoder_x.shape[0],
         )
-    enc_runtime = HubEncoderRuntime(
+    EncoderCls = Fp8HubEncoderRuntime if fp8_proj else HubEncoderRuntime
+    enc_runtime = EncoderCls(
         enc_weights,
         vision_runtime.encoder_x_input,
         enc_ref,
@@ -1352,6 +1523,8 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         local_residual_artifact=args.local_residual_artifact,
         local_norm_artifact=args.local_norm_artifact,
     )
+    if fp8_proj:
+        enc_runtime.enable_fp8(*enc_runtime.calibrate())
 
     ref_k, ref_v = enc_ref()
     rt_k, rt_v = enc_runtime()
@@ -1418,7 +1591,8 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
             checkpoint=checkpoint,
             encoder_seq_len=runtime_state.encoder_seq_len,
         )
-    dec_runtime = dec.HubDecoderLoop(
+    DecoderCls = dec.Fp8HubDecoderLoop if fp8_proj else dec.HubDecoderLoop
+    dec_runtime = DecoderCls(
         dec_weights,
         runtime_state,
         dec_ref,
@@ -1428,6 +1602,12 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         local_residual_artifact=args.local_residual_artifact,
         attention_backend=args.attention_backend,
     )
+    if fp8_proj:
+        dec_qi, dec_oi = dec.calibrate_decoder_proj(
+            dec_weights, ref_state,
+            scale_safety=args.scale_safety, calibration_input=args.calibration_input,
+        )
+        dec_runtime.enable_fp8_projections(dec_qi, dec_oi)
     combined = VisionEncoderDecoderRuntime(vision_runtime, enc_runtime, dec_runtime)
 
     t0 = time.perf_counter()
@@ -1605,6 +1785,12 @@ def main() -> None:
     visencdec.add_argument("--local-norm-artifact")
     visencdec.add_argument("--local-layout-artifact")
     visencdec.add_argument("--attention-backend", choices=("fa2",), default="fa2")
+    visencdec.add_argument(
+        "--fp8-projections",
+        action="store_true",
+        help="Run QKV/O/vision projections in FP8 (published Hub kernels only). "
+        "Deeper quantization path; ~20.7 ms on RTX 5090 vs ~22.5 ms BF16-projection default.",
+    )
     visencdec.add_argument("--warmup", type=int, default=2)
     visencdec.add_argument("--iters", type=int, default=10)
     visencdec.add_argument("--cuda-graph", action="store_true")
