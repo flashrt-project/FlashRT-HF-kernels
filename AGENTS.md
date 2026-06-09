@@ -61,7 +61,13 @@ Before pushing a package change that should rebuild Hub artifacts:
 6. Use `.github/workflows/build-kernels-hf-jobs.yml` for release packaging and
    upload. Add any newly changed package to the workflow path filters and
    matrix before relying on push-triggered builds.
-7. After HF Jobs uploads artifacts, verify by loading through
+7. HF Jobs must run under the `liangsu9988` HF account/namespace. Before
+   pushing release-triggering package changes, confirm the repository secret
+   `HF_TOKEN` is a valid token for `liangsu9988` or another token with both HF
+   Jobs access and `flashrt/<package>` kernel publishing rights. If the token is
+   missing, expired, or belongs to the wrong account, the workflow fails before
+   compilation with `HTTP 401: {"error":"Invalid username or password."}`.
+8. After HF Jobs uploads artifacts, verify by loading through
    `get_kernel("flashrt/<package>", version=1, trust_remote_code=True)` in a
    matching PyTorch/CUDA environment and rerun installed-artifact correctness.
 
