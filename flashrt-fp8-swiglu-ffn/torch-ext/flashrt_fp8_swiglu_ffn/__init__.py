@@ -69,6 +69,20 @@ def _silu_mul_merged_quantize_fp8_static_bf16_fake(
     return None
 
 
+@torch.library.register_fake(
+    add_op_namespace_prefix("gelu_mul_merged_quantize_fp8_static_bf16")
+)
+def _gelu_mul_merged_quantize_fp8_static_bf16_fake(
+    gate_up_bf16: torch.Tensor,
+    output_scale: torch.Tensor,
+    out_fp8: torch.Tensor,
+) -> None:
+    _silu_mul_merged_quantize_fp8_static_bf16_fake(
+        gate_up_bf16, output_scale, out_fp8
+    )
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp8_swiglu_mlp_bf16"))
 def _fp8_swiglu_mlp_bf16_fake(
     input: torch.Tensor,
@@ -97,6 +111,34 @@ def _fp8_swiglu_mlp_bf16_fake(
         )
     if out.shape != (input.shape[0], down_weight.shape[0]):
         raise RuntimeError("out shape must be (input.shape[0], down_weight.shape[0])")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp8_geglu_mlp_bf16"))
+def _fp8_geglu_mlp_bf16_fake(
+    input: torch.Tensor,
+    gate_up_weight: torch.Tensor,
+    down_weight: torch.Tensor,
+    input_scale: torch.Tensor,
+    gate_up_weight_scale: torch.Tensor,
+    hidden_scale: torch.Tensor,
+    down_weight_scale: torch.Tensor,
+    gate_up_bf16: torch.Tensor,
+    hidden_fp8: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    _fp8_swiglu_mlp_bf16_fake(
+        input,
+        gate_up_weight,
+        down_weight,
+        input_scale,
+        gate_up_weight_scale,
+        hidden_scale,
+        down_weight_scale,
+        gate_up_bf16,
+        hidden_fp8,
+        out,
+    )
     return None
 
 
@@ -141,6 +183,27 @@ def silu_mul_merged_quantize_fp8_static_bf16(
             dtype=torch.float8_e4m3fn,
         )
     ops.silu_mul_merged_quantize_fp8_static_bf16(
+        gate_up_bf16,
+        output_scale,
+        out_fp8,
+    )
+    return out_fp8
+
+
+def gelu_mul_merged_quantize_fp8_static_bf16(
+    gate_up_bf16: torch.Tensor,
+    output_scale: torch.Tensor,
+    out_fp8: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute ``GELU_tanh(gate) * up / output_scale`` into FP8 E4M3."""
+
+    if out_fp8 is None:
+        out_fp8 = torch.empty(
+            (gate_up_bf16.shape[0], gate_up_bf16.shape[1] // 2),
+            device=gate_up_bf16.device,
+            dtype=torch.float8_e4m3fn,
+        )
+    ops.gelu_mul_merged_quantize_fp8_static_bf16(
         gate_up_bf16,
         output_scale,
         out_fp8,
@@ -203,8 +266,61 @@ def fp8_swiglu_mlp_bf16(
     return out
 
 
+def fp8_geglu_mlp_bf16(
+    input: torch.Tensor,
+    gate_up_weight: torch.Tensor,
+    down_weight: torch.Tensor,
+    input_scale: torch.Tensor,
+    gate_up_weight_scale: torch.Tensor,
+    hidden_scale: torch.Tensor,
+    down_weight_scale: torch.Tensor,
+    gate_up_bf16: torch.Tensor | None = None,
+    hidden_fp8: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """FP8 GeGLU MLP block with BF16 output.
+
+    Computes ``GELU_tanh(gate) * up`` between the two FP8 GEMMs.
+    """
+
+    hidden = gate_up_weight.shape[0] // 2
+    if gate_up_bf16 is None:
+        gate_up_bf16 = torch.empty(
+            (input.shape[0], gate_up_weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    if hidden_fp8 is None:
+        hidden_fp8 = torch.empty(
+            (input.shape[0], hidden),
+            device=input.device,
+            dtype=torch.float8_e4m3fn,
+        )
+    if out is None:
+        out = torch.empty(
+            (input.shape[0], down_weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    ops.fp8_geglu_mlp_bf16(
+        input,
+        gate_up_weight,
+        down_weight,
+        input_scale,
+        gate_up_weight_scale,
+        hidden_scale,
+        down_weight_scale,
+        gate_up_bf16,
+        hidden_fp8,
+        out,
+    )
+    return out
+
+
 __all__ = [
     "fp8_gemm_bf16",
+    "fp8_geglu_mlp_bf16",
     "fp8_swiglu_mlp_bf16",
+    "gelu_mul_merged_quantize_fp8_static_bf16",
     "silu_mul_merged_quantize_fp8_static_bf16",
 ]

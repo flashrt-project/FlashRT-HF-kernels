@@ -43,6 +43,20 @@ def _rms_norm_quant_fp8_static_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_bf16"))
+def _layer_norm_bf16_fake(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    eps: float,
+    out: torch.Tensor,
+) -> None:
+    _check_rank2_same_shape(x, out, "out")
+    if weight.shape != (x.shape[1],) or bias.shape != (x.shape[1],):
+        raise RuntimeError("weight and bias must have shape (x.shape[1],)")
+    return None
+
+
 @torch.library.register_fake(
     add_op_namespace_prefix("residual_add_rms_norm_quant_fp8_static_bf16")
 )
@@ -93,6 +107,21 @@ def rms_norm_quant_fp8_static_bf16(
     return out
 
 
+def layer_norm_bf16(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    eps: float = 1e-5,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """BF16 LayerNorm with affine weight and bias."""
+
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.bfloat16)
+    ops.layer_norm_bf16(x, weight, bias, float(eps), out)
+    return out
+
+
 def residual_add_rms_norm_quant_fp8_static_bf16(
     residual: torch.Tensor,
     x: torch.Tensor,
@@ -117,6 +146,7 @@ def residual_add_rms_norm_quant_fp8_static_bf16(
 
 
 __all__ = [
+    "layer_norm_bf16",
     "residual_add_rms_norm_quant_fp8_static_bf16",
     "rms_norm_bf16",
     "rms_norm_quant_fp8_static_bf16",

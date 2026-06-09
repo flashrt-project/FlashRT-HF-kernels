@@ -128,7 +128,115 @@ void check_bf16_gemm_bias_gelu_tensors(
               "a and out must be on the same CUDA device");
 }
 
+void check_bf16_linear_tensors(
+    torch::Tensor const& x,
+    torch::Tensor const& w,
+    torch::Tensor const& out) {
+  TORCH_CHECK(x.is_cuda(), "x must be a CUDA tensor");
+  TORCH_CHECK(w.is_cuda(), "w must be a CUDA tensor");
+  TORCH_CHECK(out.is_cuda(), "out must be a CUDA tensor");
+  TORCH_CHECK(x.scalar_type() == torch::kBFloat16,
+              "x must have dtype torch.bfloat16");
+  TORCH_CHECK(w.scalar_type() == torch::kBFloat16,
+              "w must have dtype torch.bfloat16");
+  TORCH_CHECK(out.scalar_type() == torch::kBFloat16,
+              "out must have dtype torch.bfloat16");
+  TORCH_CHECK(x.is_contiguous(), "x must be contiguous");
+  TORCH_CHECK(w.is_contiguous(), "w must be contiguous");
+  TORCH_CHECK(out.is_contiguous(), "out must be contiguous");
+  TORCH_CHECK(x.dim() == 2, "x must be a 2D tensor");
+  TORCH_CHECK(w.dim() == 2, "w must be a 2D tensor");
+  TORCH_CHECK(out.dim() == 2, "out must be a 2D tensor");
+  TORCH_CHECK(x.size(0) > 0 && x.size(1) > 0,
+              "x dimensions must be non-zero");
+  TORCH_CHECK(w.size(0) > 0 && w.size(1) > 0,
+              "w dimensions must be non-zero");
+  TORCH_CHECK(x.size(1) == w.size(0),
+              "x.shape[1] must match w.shape[0]");
+  TORCH_CHECK(out.size(0) == x.size(0) && out.size(1) == w.size(1),
+              "out must have shape (x.shape[0], w.shape[1])");
+  TORCH_CHECK(x.size(0) <= std::numeric_limits<int>::max(),
+              "x.shape[0] must fit in int");
+  TORCH_CHECK(w.size(1) <= std::numeric_limits<int>::max(),
+              "w.shape[1] must fit in int");
+  TORCH_CHECK(x.size(1) <= std::numeric_limits<int>::max(),
+              "x.shape[1] must fit in int");
+  TORCH_CHECK(x.get_device() == w.get_device(),
+              "x and w must be on the same CUDA device");
+  TORCH_CHECK(x.get_device() == out.get_device(),
+              "x and out must be on the same CUDA device");
+}
+
+void check_bf16_linear_bias_tensors(
+    torch::Tensor const& x,
+    torch::Tensor const& w,
+    torch::Tensor const& bias,
+    torch::Tensor const& out) {
+  check_bf16_linear_tensors(x, w, out);
+  TORCH_CHECK(bias.is_cuda(), "bias must be a CUDA tensor");
+  TORCH_CHECK(bias.scalar_type() == torch::kBFloat16,
+              "bias must have dtype torch.bfloat16");
+  TORCH_CHECK(bias.is_contiguous(), "bias must be contiguous");
+  TORCH_CHECK(bias.dim() == 1, "bias must be a 1D tensor");
+  TORCH_CHECK(bias.size(0) == w.size(1),
+              "bias length must match w.shape[1]");
+  TORCH_CHECK(x.get_device() == bias.get_device(),
+              "x and bias must be on the same CUDA device");
+}
+
 }  // namespace
+
+void bf16_linear_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& w,
+    torch::Tensor& out) {
+  check_bf16_linear_tensors(x, w, out);
+  const int M = static_cast<int>(x.size(0));
+  const int K = static_cast<int>(x.size(1));
+  const int N = static_cast<int>(w.size(1));
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::gemm::bf16_gemm(
+      x.data_ptr(),
+      w.data_ptr(),
+      out.data_ptr(),
+      M,
+      N,
+      K,
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+#endif
+}
+
+void bf16_linear_bias_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& w,
+    torch::Tensor const& bias,
+    torch::Tensor& out) {
+  check_bf16_linear_bias_tensors(x, w, bias, out);
+  const int M = static_cast<int>(x.size(0));
+  const int K = static_cast<int>(x.size(1));
+  const int N = static_cast<int>(w.size(1));
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::gemm::bf16_gemm_bias(
+      x.data_ptr(),
+      w.data_ptr(),
+      bias.data_ptr(),
+      out.data_ptr(),
+      M,
+      N,
+      K,
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+#endif
+}
 
 void bf16_gemm_bias_gelu(
     torch::Tensor const& a,
@@ -249,6 +357,10 @@ void channel_scale_quantize_fp8_static_bf16(
 }
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+  ops.def("bf16_linear_bf16("
+          "Tensor x, Tensor w, Tensor! out) -> ()");
+  ops.def("bf16_linear_bias_bf16("
+          "Tensor x, Tensor w, Tensor bias, Tensor! out) -> ()");
   ops.def("bf16_gemm_bias_gelu("
           "Tensor a, Tensor b, Tensor bias, Tensor! out) -> ()");
   ops.def("bf16_gemm_bias("
@@ -260,6 +372,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("channel_scale_quantize_fp8_static_bf16("
           "Tensor input, Tensor channel_scale, Tensor scale, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
+  ops.impl("bf16_linear_bf16",
+           torch::kCUDA,
+           &bf16_linear_bf16);
+  ops.impl("bf16_linear_bias_bf16",
+           torch::kCUDA,
+           &bf16_linear_bias_bf16);
   ops.impl("bf16_gemm_bias_gelu",
            torch::kCUDA,
            &bf16_gemm_bias_gelu);

@@ -190,8 +190,25 @@ GROOT VL self-attn sequence lengths up to 2520, and the GROOT action DiT GELU
 FFN shape. All rows pass the p99_abs/p99_rel precision gate; built-artifact and
 multi-hardware rows remain pending until the full release build is regenerated.
 
-Second-batch VLA/runtime work has started with source-validated packages that
-target the model-demo hot path:
+PI0.5 HF-kernel runtime milestone:
+
+- Real LIBERO rollout frame -> normalized image/prompt/state/noise bundle.
+- HF-kernel SigLIP vision/projector -> HF-kernel Gemma encoder -> HF-kernel
+  PI0.5 decoder -> 10-step denoise -> action.
+- Timed hot path has `torch_gaps=[]` and CUDA Graph replay enabled.
+- RTX 5090 graph latency: `22.464 ms` (`44.52 Hz`).
+- Current conservative OpenPI/PyTorch BF16 first-call baseline:
+  `257.078 ms` (`3.89 Hz`).
+- Action correctness vs HF reference: `p99_abs=0.007812`,
+  `cosine=0.999965`.
+- Action correctness vs official FlashRT decoder output:
+  `p99_abs=0.011719`, `cosine=0.999947`.
+
+The OpenPI/PyTorch baseline above is a first-call model path baseline. The
+complete OpenPI policy wrapper, including input preprocessing and observation
+capture, should be reported as a separate future benchmark.
+
+Second-batch VLA/runtime packages target the model-demo hot path:
 
 - `flashrt-fp8-swiglu-ffn`: true SwiGLU package for Gemma-style FFN islands.
 - `flashrt-residual-norm-quant`: residual/RMSNorm/static-FP8 runtime glue for
@@ -217,18 +234,11 @@ NCDHW latent -> BLC tokens / temporal unshuffle / channel-bias / cache update
 
 Current RTX 5090 source-extension results cover PI0.5 decoder/vision,
 GROOT/VL, action/DiT-shaped FFN rows, and video prefill rows. The strict
-SwiGLU package gate compares the fused API against staged FlashRT primitives
-and passes with `staged_p99=0` for all rows; the residual/norm package passes
-FP8 `p99_abs=0` on the initial grid; the QKV/RoPE package shows roughly
-`24x-38x` vs PyTorch eager QKV postprocess on long VLA/video shapes, `36x-86x`
-for joint workspace rows, and `29x-30x` for decode Q/KV-write rows; the
-VLA residual-gates package is bit-level exact and shows roughly `17x-19x` vs
-PyTorch eager on the source-extension VLA grid; the adaptive-norms package
-shows roughly `7x-20x` vs PyTorch eager on the source-extension VLA grid with
-zero p99 error; the spatiotemporal-layout package is bit-level exact and shows
-roughly `1.2x-6.4x` on small layout/cache glue operations. These packages are
-not yet published until kernel-builder artifacts and installed-artifact
-validation are completed.
+SwiGLU/GeGLU package gate compares the fused API against staged FlashRT
+primitives and passes with `staged_p99=0` for all rows; the residual/norm,
+QKV/RoPE, residual-gates, adaptive-norms, and spatiotemporal-layout packages
+have source correctness and config checks in place. Final public package
+claims should use the corresponding built-artifact and multi-hardware rows.
 
 The full FlashRT serving stack combines multiple math-equivalent kernels across
 attention, FFN, epilogues, quantization/layout, residual paths, and serving
@@ -241,12 +251,12 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | --- | --- | --- |
 | `flashrt-gemm-epilogues` | V1 block | FP8 quant epilogue helpers plus selected BF16 GEMM epilogues. |
 | `flashrt-fp8-ffn` | V1 block | Hub-loadable FP8 GEMM and full GELU MLP/FFN sublayers for VLA/VLM shapes. |
-| `flashrt-fp8-swiglu-ffn` | V2 candidate | True SwiGLU FP8 FFN block for Gemma-style VLA/VLM language paths; source-validated, artifact pending. |
-| `flashrt-residual-norm-quant` | V2 candidate | Residual add, RMSNorm, and static FP8 activation producer kernels; source-validated, artifact pending. |
-| `flashrt-qkv-cache-rope` | V2 candidate | Packed-QKV split, Q/K RMSNorm, RoPE staging, decode Q staging, and KV cache-write for VLA/VLM/video attention inputs; source-validated, artifact pending. |
-| `flashrt-vla-residual-gates` | V2 candidate | Video/action/und joint gated residual updates for VLA block glue; source-validated, artifact pending. |
-| `flashrt-adaptive-norms` | V2 candidate | AdaRMSNorm/style modulation and fused residual/AdaRMSNorm/static-FP8 activation output for DiT/VLA/world-model blocks; source-validated, artifact pending. |
-| `flashrt-spatiotemporal-layout` | V2 candidate | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers for VLA/video/world-model pipelines; source-validated, artifact pending. |
+| `flashrt-fp8-swiglu-ffn` | Runtime package | True SwiGLU/GeGLU FP8 FFN block for Gemma-style VLA/VLM language paths. |
+| `flashrt-residual-norm-quant` | Runtime package | Residual add, RMSNorm, and static FP8 activation producer kernels. |
+| `flashrt-qkv-cache-rope` | Runtime package | Packed-QKV split, Q/K RMSNorm, RoPE staging, decode Q staging, and KV cache-write for VLA/VLM/video attention inputs. |
+| `flashrt-vla-residual-gates` | Runtime package | Video/action/und joint gated residual updates for VLA block glue. |
+| `flashrt-adaptive-norms` | Runtime package | AdaRMSNorm/style modulation and fused residual/AdaRMSNorm/static-FP8 activation output for DiT/VLA/world-model blocks. |
+| `flashrt-spatiotemporal-layout` | Runtime package | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers for VLA/video/world-model pipelines. |
 | `flashrt-vla-video` | V1 block | VLA, vision, video, and diffusion attention postprocess kernels that are reusable outside the FlashRT serving engine. |
 | `flashrt-nvfp4` | V1 block | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
 | `flashrt-smallm-gemm` | V1 block | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |

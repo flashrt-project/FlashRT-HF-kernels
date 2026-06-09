@@ -56,6 +56,34 @@ def _joint3_bias_gate_residual_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("gate_residual_bf16"))
+def _gate_residual_bf16_fake(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    gate: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    _check_matrix(residual, "residual")
+    _check_like(x, residual, "x", "residual")
+    _check_like(gate, residual, "gate", "residual")
+    _check_like(out, residual, "out", "residual")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("bias_residual_bf16"))
+def _bias_residual_bf16_fake(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    bias: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    _check_matrix(residual, "residual")
+    _check_like(x, residual, "x", "residual")
+    _check_like(out, residual, "out", "residual")
+    _check_bias(bias, residual.shape[1], "bias")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("joint3_bias_gate_residual_action_nobias_bf16"))
 def _joint3_bias_gate_residual_action_nobias_bf16_fake(
     v_residual: torch.Tensor,
@@ -84,6 +112,39 @@ def _joint3_bias_gate_residual_action_nobias_bf16_fake(
     _check_like(u_x, u_residual, "u_x", "u_residual")
     _check_like(u_out, u_residual, "u_out", "u_residual")
     return None
+
+
+def gate_residual_bf16(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    gate: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute ``residual + x * gate`` and store BF16 output.
+
+    ``residual``, ``x``, and ``gate`` must be contiguous BF16 tensors with
+    shape ``(rows, dim)``. ``out`` may alias ``residual`` for in-place residual
+    stream updates.
+    """
+
+    if out is None:
+        out = torch.empty_like(residual)
+    ops.gate_residual_bf16(residual, x, gate, out)
+    return out
+
+
+def bias_residual_bf16(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    bias: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute ``residual + x + bias`` and store BF16 output."""
+
+    if out is None:
+        out = torch.empty_like(residual)
+    ops.bias_residual_bf16(residual, x, bias, out)
+    return out
 
 
 def joint3_bias_gate_residual_bf16(
@@ -167,6 +228,8 @@ def joint3_bias_gate_residual_action_nobias_bf16(
 
 
 __all__ = [
+    "bias_residual_bf16",
+    "gate_residual_bf16",
     "joint3_bias_gate_residual_bf16",
     "joint3_bias_gate_residual_action_nobias_bf16",
 ]

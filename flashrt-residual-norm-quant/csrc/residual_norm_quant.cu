@@ -90,6 +90,50 @@ __global__ void rms_norm_bf16_kernel(
   }
 }
 
+__global__ void layer_norm_bf16_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ weight,
+    const __nv_bfloat16* __restrict__ bias,
+    __nv_bfloat16* __restrict__ out,
+    int dim,
+    float eps) {
+  const int row = blockIdx.x;
+  const __nv_bfloat162* x2 =
+      reinterpret_cast<const __nv_bfloat162*>(x + row * dim);
+  const __nv_bfloat162* w2 =
+      reinterpret_cast<const __nv_bfloat162*>(weight);
+  const __nv_bfloat162* b2 =
+      reinterpret_cast<const __nv_bfloat162*>(bias);
+  __nv_bfloat162* out2 = reinterpret_cast<__nv_bfloat162*>(out + row * dim);
+  const int dim2 = dim >> 1;
+
+  extern __shared__ float shared[];
+  float local_sum = 0.0f;
+  for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+    const __nv_bfloat162 val = x2[i];
+    local_sum += to_f32(val.x) + to_f32(val.y);
+  }
+  const float mean = block_reduce_sum(local_sum, shared) / dim;
+
+  float local_var = 0.0f;
+  for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+    const __nv_bfloat162 val = x2[i];
+    const float d0 = to_f32(val.x) - mean;
+    const float d1 = to_f32(val.y) - mean;
+    local_var += d0 * d0 + d1 * d1;
+  }
+  const float inv_std = rsqrtf(block_reduce_sum(local_var, shared) / dim + eps);
+
+  for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+    const __nv_bfloat162 xv = x2[i];
+    const __nv_bfloat162 wv = w2[i];
+    const __nv_bfloat162 bv = b2[i];
+    const float v0 = (to_f32(xv.x) - mean) * inv_std * to_f32(wv.x) + to_f32(bv.x);
+    const float v1 = (to_f32(xv.y) - mean) * inv_std * to_f32(wv.y) + to_f32(bv.y);
+    out2[i] = __halves2bfloat162(from_f32(v0), from_f32(v1));
+  }
+}
+
 __global__ void rms_norm_quant_fp8_static_bf16_kernel(
     const __nv_bfloat16* __restrict__ x,
     const __nv_bfloat16* __restrict__ weight,
@@ -180,6 +224,24 @@ void rms_norm_bf16(
   rms_norm_bf16_kernel<<<rows, 256, 256 * sizeof(float), stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(x_bf16),
       reinterpret_cast<const __nv_bfloat16*>(weight_bf16),
+      reinterpret_cast<__nv_bfloat16*>(out_bf16),
+      dim,
+      eps);
+}
+
+void layer_norm_bf16(
+    const void* x_bf16,
+    const void* weight_bf16,
+    const void* bias_bf16,
+    void* out_bf16,
+    int rows,
+    int dim,
+    float eps,
+    cudaStream_t stream) {
+  layer_norm_bf16_kernel<<<rows, 256, 256 * sizeof(float), stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(x_bf16),
+      reinterpret_cast<const __nv_bfloat16*>(weight_bf16),
+      reinterpret_cast<const __nv_bfloat16*>(bias_bf16),
       reinterpret_cast<__nv_bfloat16*>(out_bf16),
       dim,
       eps);

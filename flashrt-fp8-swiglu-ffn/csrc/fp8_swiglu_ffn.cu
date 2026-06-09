@@ -120,6 +120,12 @@ __device__ __forceinline__ float silu(float x) {
   return x / (1.0f + expf(-x));
 }
 
+__device__ __forceinline__ float gelu_tanh(float x) {
+  return 0.5f * x *
+         (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x)));
+}
+
+template <bool UseGelu>
 __global__ void silu_mul_merged_quantize_fp8_static_bf16_kernel(
     const __nv_bfloat16* __restrict__ gate_up,
     __nv_fp8_e4m3* __restrict__ out,
@@ -138,7 +144,8 @@ __global__ void silu_mul_merged_quantize_fp8_static_bf16_kernel(
   const long long out_idx = row * static_cast<long long>(H) + col;
   const float gate = __bfloat162float(gate_up[in_base + col]);
   const float up = __bfloat162float(gate_up[in_base + H + col]);
-  float q = silu(gate) * up * (1.0f / *scale);
+  const float act = UseGelu ? gelu_tanh(gate) : silu(gate);
+  float q = act * up * (1.0f / *scale);
   q = fminf(fmaxf(q, -kFp8Max), kFp8Max);
   out[out_idx] = __nv_fp8_e4m3(q);
 }
@@ -298,7 +305,34 @@ void silu_mul_merged_quantize_fp8_static_bf16(
       (static_cast<long long>(H) + block_sz - 1) / block_sz;
   const unsigned grid = static_cast<unsigned>(M * tiles_per_row);
 
-  silu_mul_merged_quantize_fp8_static_bf16_kernel<<<grid, block_sz, 0, stream>>>(
+  silu_mul_merged_quantize_fp8_static_bf16_kernel<false>
+      <<<grid, block_sz, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(gate_up_bf16),
+      reinterpret_cast<__nv_fp8_e4m3*>(out_fp8),
+      scale,
+      tiles_per_row,
+      H);
+}
+
+void gelu_mul_merged_quantize_fp8_static_bf16(
+    const void* gate_up_bf16,
+    void* out_fp8,
+    const float* scale,
+    long long M,
+    int H,
+    cudaStream_t stream) {
+  const long long total = M * static_cast<long long>(H);
+  if (total <= 0) {
+    return;
+  }
+
+  const int block_sz = quant_block_size(M, H, false);
+  const long long tiles_per_row =
+      (static_cast<long long>(H) + block_sz - 1) / block_sz;
+  const unsigned grid = static_cast<unsigned>(M * tiles_per_row);
+
+  silu_mul_merged_quantize_fp8_static_bf16_kernel<true>
+      <<<grid, block_sz, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(gate_up_bf16),
       reinterpret_cast<__nv_fp8_e4m3*>(out_fp8),
       scale,

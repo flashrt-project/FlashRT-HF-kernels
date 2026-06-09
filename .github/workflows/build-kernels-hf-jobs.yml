@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/build-kernels-hf-jobs.yml"
+      - "flashrt-gemm-epilogues/**"
+      - "flashrt-fp8-ffn/**"
       - "flashrt-fp8-swiglu-ffn/**"
       - "flashrt-residual-norm-quant/**"
       - "flashrt-qkv-cache-rope/**"
@@ -20,6 +22,8 @@ on:
         type: choice
         options:
           - all
+          - flashrt-gemm-epilogues
+          - flashrt-fp8-ffn
           - flashrt-fp8-swiglu-ffn
           - flashrt-residual-norm-quant
           - flashrt-qkv-cache-rope
@@ -42,6 +46,8 @@ jobs:
       fail-fast: false
       matrix:
         package:
+          - flashrt-gemm-epilogues
+          - flashrt-fp8-ffn
           - flashrt-fp8-swiglu-ffn
           - flashrt-residual-norm-quant
           - flashrt-qkv-cache-rope

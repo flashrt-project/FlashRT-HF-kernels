@@ -16,6 +16,12 @@ void ncdhw_to_blc_bf16(
     int width,
     cudaStream_t stream);
 
+void patch_im2col_bf16(
+    const void* input,
+    void* output,
+    int num_views,
+    cudaStream_t stream);
+
 void time_unshuffle2_bf16(
     const void* x,
     void* out,

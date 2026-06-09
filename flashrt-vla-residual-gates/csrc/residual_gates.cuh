@@ -6,6 +6,23 @@
 namespace flash_rt {
 namespace vla_residual_gates {
 
+void gate_residual_bf16(
+    const void* residual,
+    const void* x,
+    const void* gate,
+    void* out,
+    int n,
+    cudaStream_t stream);
+
+void bias_residual_bf16(
+    const void* residual,
+    const void* x,
+    const void* bias,
+    void* out,
+    int rows,
+    int dim,
+    cudaStream_t stream);
+
 void joint3_bias_gate_residual_bf16(
     const void* v_residual,
     const void* v_x,

@@ -62,6 +62,30 @@ void ncdhw_to_blc_bf16(torch::Tensor const& x, torch::Tensor& out) {
 #endif
 }
 
+void patch_im2col_bf16(torch::Tensor const& x, torch::Tensor& out) {
+  check_bf16(x, "x");
+  check_bf16(out, "out");
+  TORCH_CHECK(x.dim() == 4, "x must have shape (num_views, 224, 224, 3)");
+  const int64_t nv = x.size(0);
+  TORCH_CHECK(nv > 0, "num_views must be positive");
+  TORCH_CHECK(x.sizes() == torch::IntArrayRef({nv, 224, 224, 3}),
+              "x must have shape (num_views, 224, 224, 3)");
+  TORCH_CHECK(out.sizes() == torch::IntArrayRef({nv * 256, 588}),
+              "out must have shape (num_views * 256, 588)");
+  check_same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::spatiotemporal_layout::patch_im2col_bf16(
+      x.data_ptr(),
+      out.data_ptr(),
+      static_cast<int>(nv),
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-spatiotemporal-layout was not built with CUDA support");
+#endif
+}
+
 void time_unshuffle2_bf16(torch::Tensor const& x, torch::Tensor& out) {
   check_ncdhw(x, "x");
   check_bf16(out, "out");
@@ -139,11 +163,13 @@ void update_cache2_ncdhw_bf16(torch::Tensor const& cur, torch::Tensor const& pre
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("ncdhw_to_blc_bf16(Tensor x, Tensor! out) -> ()");
+  ops.def("patch_im2col_bf16(Tensor x, Tensor! out) -> ()");
   ops.def("time_unshuffle2_bf16(Tensor x, Tensor! out) -> ()");
   ops.def("add_bias_ncdhw_bf16(Tensor! x, Tensor bias) -> ()");
   ops.def("update_cache2_ncdhw_bf16(Tensor cur, Tensor prev, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("ncdhw_to_blc_bf16", torch::kCUDA, &ncdhw_to_blc_bf16);
+  ops.impl("patch_im2col_bf16", torch::kCUDA, &patch_im2col_bf16);
   ops.impl("time_unshuffle2_bf16", torch::kCUDA, &time_unshuffle2_bf16);
   ops.impl("add_bias_ncdhw_bf16", torch::kCUDA, &add_bias_ncdhw_bf16);
   ops.impl("update_cache2_ncdhw_bf16", torch::kCUDA, &update_cache2_ncdhw_bf16);

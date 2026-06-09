@@ -37,6 +37,12 @@ class SourceOps:
         self._ops.ncdhw_to_blc_bf16(x, out)
         return out
 
+    def patch_im2col_bf16(self, x, out=None):
+        if out is None:
+            out = torch.empty((x.shape[0] * 256, 588), device=x.device, dtype=x.dtype)
+        self._ops.patch_im2col_bf16(x, out)
+        return out
+
     def time_unshuffle2_bf16(self, x, out=None):
         if out is None:
             out = torch.empty((x.shape[0], x.shape[1] // 2, 2 * x.shape[2], x.shape[3], x.shape[4]), device=x.device, dtype=x.dtype)
@@ -120,6 +126,15 @@ def ref_cache2(cur: torch.Tensor, prev: torch.Tensor) -> torch.Tensor:
     return out
 
 
+def ref_patch_im2col(x: torch.Tensor) -> torch.Tensor:
+    return (
+        x.reshape(x.shape[0], 16, 14, 16, 14, 3)
+        .permute(0, 1, 3, 2, 4, 5)
+        .contiguous()
+        .view(x.shape[0] * 256, 588)
+    )
+
+
 def run_shape(ops, label: str, shape: tuple[int, int, int, int, int]) -> None:
     b, c, t, h, w = shape
     x = torch.randn(shape, device="cuda", dtype=torch.bfloat16)
@@ -149,6 +164,12 @@ def run_shape(ops, label: str, shape: tuple[int, int, int, int, int]) -> None:
     assert_exact(f"{label}/update_cache2_t1", got_cache_t1, ref_cache2(x_t1, prev))
 
 
+def run_patch_shape(ops, num_views: int) -> None:
+    x = torch.randn((num_views, 224, 224, 3), device="cuda", dtype=torch.bfloat16)
+    got = ops.patch_im2col_bf16(x)
+    assert_exact(f"patch_nv{num_views}/patch_im2col", got, ref_patch_im2col(x))
+
+
 def run(args) -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
@@ -163,6 +184,7 @@ def run(args) -> None:
         shapes = {"small": shapes["small"]}
     for label, shape in shapes.items():
         run_shape(ops, label, shape)
+    run_patch_shape(ops, 2)
 
 
 def main() -> None:

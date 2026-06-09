@@ -39,6 +39,25 @@ FP8_QUANT_SHAPES = [
     ("vla_n16384_m64", 64, 16384),
 ]
 
+BF16_LINEAR_SHAPES = [
+    ("pi05_action_in", 10, 32, 1024),
+    ("pi05_qkv", 10, 1024, 2560),
+    ("pi05_o_proj", 10, 2048, 1024),
+    ("pi05_action_out", 10, 1024, 32),
+    ("decode_m1_1024", 1, 1024, 1024),
+    ("decode_m1_qkv", 1, 1024, 2560),
+    ("decode_m8_1024", 8, 1024, 1024),
+    ("decode_m8_qkv", 8, 1024, 2560),
+    ("decode_m10_1024", 10, 1024, 1024),
+    ("decode_m10_qkv", 10, 1024, 2560),
+    ("decode_m16_1024", 16, 1024, 1024),
+    ("decode_m16_qkv", 16, 1024, 2560),
+    ("vlm_m512_square", 512, 1152, 1152),
+    ("vlm_m512_wide", 512, 1152, 4304),
+    ("vla_m1024_square", 1024, 2048, 2048),
+    ("vla_m1024_wide", 1024, 2048, 8192),
+]
+
 FP8_FFN_SHAPES = [
     ("small", 16, 128, 256, 128),
     ("pi05_vision", 512, 1152, 4304, 1152),
@@ -119,6 +138,7 @@ VLA_QKV_HEADS = [8, 16, 24, 32, 48]
 
 QUICK = {
     "fp8": FP8_QUANT_SHAPES[:3],
+    "bf16_linear": BF16_LINEAR_SHAPES[:4],
     "fp8_ffn": [FP8_FFN_SHAPES[0], FP8_FFN_SHAPES[2]],
     "fused": FUSED_QUANT_SHAPES[:4],
     "layout": NVFP4_LAYOUT_SHAPES[:4],
@@ -231,6 +251,20 @@ def _preload_cublaslt() -> None:
 class SourceOps:
     def __init__(self, namespace: str):
         self._ops = getattr(_torch().ops, namespace)
+
+    def bf16_linear_bf16(self, x, w, out=None):
+        torch = _torch()
+        if out is None:
+            out = torch.empty((x.shape[0], w.shape[1]), device=x.device, dtype=torch.bfloat16)
+        self._ops.bf16_linear_bf16(x, w, out)
+        return out
+
+    def bf16_linear_bias_bf16(self, x, w, bias, out=None):
+        torch = _torch()
+        if out is None:
+            out = torch.empty((x.shape[0], w.shape[1]), device=x.device, dtype=torch.bfloat16)
+        self._ops.bf16_linear_bias_bf16(x, w, bias, out)
+        return out
 
     def bf16_gemm_bias_gelu(self, a, b, bias, out=None):
         torch = _torch()
@@ -632,6 +666,45 @@ def _result_p99_approx(
     )
 
 
+def _result_p99_cosine(
+    package: str,
+    op: str,
+    shape: str,
+    got,
+    expected,
+    *,
+    p99_abs_limit: float,
+    cosine_limit: float,
+) -> Result:
+    got_f = got.detach().float()
+    exp_f = expected.detach().float()
+    abs_err = (got_f - exp_f).abs().flatten()
+    max_abs = float(abs_err.max().item()) if abs_err.numel() else 0.0
+    mean_abs = float(abs_err.mean().item()) if abs_err.numel() else 0.0
+    if abs_err.numel():
+        kth = max(1, math.ceil(0.99 * abs_err.numel()))
+        p99_abs = float(abs_err.kthvalue(kth).values.item())
+    else:
+        p99_abs = 0.0
+    cosine = _cosine_similarity(got_f, exp_f)
+    passed = p99_abs <= p99_abs_limit and cosine >= cosine_limit
+    tolerance = f"p99_abs<={p99_abs_limit:g}, cosine>={cosine_limit:g}"
+    return Result(
+        package,
+        op,
+        shape,
+        "PASS" if passed else "FAIL",
+        max_abs=max_abs,
+        mean_abs=mean_abs,
+        p99_abs=p99_abs,
+        cosine_similarity=cosine,
+        got_dtype=str(got.dtype),
+        expected_dtype=str(expected.dtype),
+        tolerance=tolerance,
+        note=tolerance,
+    )
+
+
 def _result_fp8_quant_distribution(
     package: str,
     op: str,
@@ -963,6 +1036,38 @@ def sweep_gemm_epilogues(args, results: list[Result]) -> None:
         expected = torch.clamp((x.float() * channel_scale.float()) / scale, -448.0, 448.0).to(torch.float8_e4m3fn)
         got = ops.channel_scale_quantize_fp8_static_bf16(x, channel_scale, scale)
         results.append(_result_exact(package, "channel_scale_quantize_fp8_static_bf16", label, got, expected))
+
+    linear_shapes = QUICK["bf16_linear"] if args.mode == "quick" else BF16_LINEAR_SHAPES
+    for label, m, k, n in linear_shapes:
+        torch.manual_seed(11000 + m + k + n)
+        x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16).contiguous()
+        w = torch.randn((k, n), device="cuda", dtype=torch.bfloat16).contiguous()
+        bias = torch.randn((n,), device="cuda", dtype=torch.bfloat16).contiguous()
+        out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+
+        expected = (x @ w).to(torch.bfloat16)
+        got = ops.bf16_linear_bf16(x, w, out=out)
+        results.append(_result_p99_cosine(
+            package,
+            "bf16_linear_bf16",
+            label,
+            got,
+            expected,
+            p99_abs_limit=0.5,
+            cosine_limit=0.999,
+        ))
+
+        expected = torch.addmm(bias, x, w).to(torch.bfloat16)
+        got = ops.bf16_linear_bias_bf16(x, w, bias, out=out)
+        results.append(_result_p99_cosine(
+            package,
+            "bf16_linear_bias_bf16",
+            label,
+            got,
+            expected,
+            p99_abs_limit=0.5,
+            cosine_limit=0.999,
+        ))
 
 
 def sweep_fp8_ffn(args, results: list[Result]) -> None:

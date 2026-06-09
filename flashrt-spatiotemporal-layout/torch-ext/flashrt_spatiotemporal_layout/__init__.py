@@ -21,6 +21,15 @@ def _ncdhw_to_blc_bf16_fake(x: torch.Tensor, out: torch.Tensor) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("patch_im2col_bf16"))
+def _patch_im2col_bf16_fake(x: torch.Tensor, out: torch.Tensor) -> None:
+    if x.dim() != 4 or x.shape[1:] != (224, 224, 3):
+        raise RuntimeError("x must have shape (num_views, 224, 224, 3)")
+    if out.shape != (x.shape[0] * 256, 588):
+        raise RuntimeError("out must have shape (num_views * 256, 588)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("time_unshuffle2_bf16"))
 def _time_unshuffle2_bf16_fake(x: torch.Tensor, out: torch.Tensor) -> None:
     _check_ncdhw(x, "x")
@@ -58,6 +67,15 @@ def ncdhw_to_blc_bf16(x: torch.Tensor, out: torch.Tensor | None = None) -> torch
     return out
 
 
+def patch_im2col_bf16(x: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tensor:
+    """Convert BF16 NHWC images into flattened 14x14 patch rows."""
+
+    if out is None:
+        out = torch.empty((x.shape[0] * 256, 588), device=x.device, dtype=x.dtype)
+    ops.patch_im2col_bf16(x, out)
+    return out
+
+
 def time_unshuffle2_bf16(x: torch.Tensor, out: torch.Tensor | None = None) -> torch.Tensor:
     """Convert BF16 (B, 2C, T, H, W) into (B, C, 2T, H, W)."""
 
@@ -85,6 +103,7 @@ def update_cache2_ncdhw_bf16(cur: torch.Tensor, prev: torch.Tensor, out: torch.T
 
 __all__ = [
     "ncdhw_to_blc_bf16",
+    "patch_im2col_bf16",
     "time_unshuffle2_bf16",
     "add_bias_ncdhw_bf16",
     "update_cache2_ncdhw_bf16",

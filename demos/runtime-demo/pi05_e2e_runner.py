@@ -31,6 +31,14 @@ OFFICIAL_FLASHRT = PI_ROOT / "official" / "FlashRT"
 DEFAULT_CKPT = PI_ROOT / "checkpoints" / "pi05_libero_pytorch"
 DEFAULT_HUB_PY = PI_ROOT / ".flashrt-hub-smoke-torch211" / "bin" / "python"
 DEFAULT_OPENPI_ROOT = PI_ROOT / "openpi_src" / "src"
+DEFAULT_CONTAINER_REPO = "/workspace/PI/FlashRT-HF-kernels"
+DEFAULT_CONTAINER_OPENPI_ROOT = "/workspace/PI/openpi_src/src"
+DEFAULT_CONTAINER_CKPT = "/workspace/PI/checkpoints/pi05_libero_pytorch"
+DEFAULT_CONTAINER_FLASHRT_ROOT = "/workspace/PI/official/FlashRT"
+DEFAULT_CONTAINER_OPENPI_PY = (
+    "/workspace/PI/FlashRT-HF-kernels/internal-tests/envs/"
+    "openpi-baseline/bin/python"
+)
 
 
 @dataclass
@@ -163,30 +171,132 @@ print(json.dumps({"missing": []}))
     )
 
 
+def _container_path(host_path: Path, *, container_repo: str) -> str:
+    rel = host_path.resolve().relative_to(ROOT.resolve())
+    return str(Path(container_repo) / rel)
+
+
+def _openpi_metrics(payload: dict[str, Any]) -> dict[str, Any]:
+    latency = payload.get("latency", {})
+    return {
+        "mode": payload.get("mode"),
+        "openpi_p50_ms": latency.get("p50_ms"),
+        "openpi_p95_ms": latency.get("p95_ms"),
+        "openpi_mean_ms": latency.get("mean_ms"),
+        "first_ms": payload.get("first_ms"),
+        "load_s": payload.get("load_s"),
+    }
+
+
+def run_openpi_baseline(args: argparse.Namespace) -> StepResult:
+    if args.openpi_baseline_mode == "probe":
+        return run_openpi_probe(args)
+
+    out_json = args.output.parent / "pi05_openpi_baseline_tmp.json"
+    if args.openpi_baseline_mode == "local":
+        command = [
+            args.baseline_python,
+            "demos/runtime-demo/pi05_openpi_baseline.py",
+            "--openpi-root",
+            args.openpi_root,
+            "--checkpoint",
+            args.checkpoint,
+            "--num-views",
+            str(args.openpi_num_views),
+            "--steps",
+            str(args.steps),
+            "--warmup",
+            str(args.openpi_warmup),
+            "--iters",
+            str(args.openpi_iters),
+            "--compile",
+            args.openpi_compile,
+            "--output",
+            str(out_json),
+        ]
+        res = _run(
+            "openpi_pytorch_baseline",
+            command,
+            cwd=ROOT,
+            timeout=args.timeout,
+        )
+    else:
+        container_out = _container_path(out_json, container_repo=args.container_repo)
+        inner = (
+            f"cd {shlex.quote(args.container_repo)} && "
+            f"PYTHONPATH={shlex.quote(args.container_openpi_root)} "
+            f"{shlex.quote(args.container_python)} "
+            "demos/runtime-demo/pi05_openpi_baseline.py "
+            f"--openpi-root {shlex.quote(args.container_openpi_root)} "
+            f"--checkpoint {shlex.quote(args.container_checkpoint)} "
+            f"--num-views {args.openpi_num_views} "
+            f"--steps {args.steps} "
+            f"--warmup {args.openpi_warmup} "
+            f"--iters {args.openpi_iters} "
+            f"--compile {shlex.quote(args.openpi_compile)} "
+            f"--output {shlex.quote(container_out)}"
+        )
+        command = ["docker", "exec", args.container, "bash", "-lc", inner]
+        res = _run(
+            "openpi_pytorch_baseline",
+            command,
+            cwd=ROOT,
+            timeout=args.timeout,
+        )
+
+    if out_json.exists():
+        payload = json.loads(out_json.read_text())
+        res.metrics.update(_openpi_metrics(payload))
+        res.note = payload.get("note", "")
+    elif res.status == "pass":
+        res.note = "OpenPI baseline command passed but did not write output JSON."
+    return res
+
+
 def run_flashrt_fp16(args: argparse.Namespace) -> StepResult:
-    command = [
-        args.flashrt_python,
-        "examples/blackwell/bench_pi05_fp16.py",
-        "--checkpoint",
-        args.checkpoint,
-        "--num-views",
-        str(args.num_views),
-        "--steps",
-        str(args.steps),
-        "--warmup",
-        str(args.flashrt_warmup),
-        "--iters",
-        str(args.flashrt_iters),
-        "--hardware",
-        args.hardware,
-    ]
-    res = _run(
-        "flashrt_full_fp16_sanity",
-        command,
-        cwd=OFFICIAL_FLASHRT,
-        env=_flashrt_env(),
-        timeout=args.timeout,
-    )
+    if args.flashrt_mode == "docker":
+        inner = (
+            f"cd {shlex.quote(args.container_flashrt_root)} && "
+            f"PYTHONPATH=. {shlex.quote(args.container_flashrt_python)} "
+            "examples/blackwell/bench_pi05_fp16.py "
+            f"--checkpoint {shlex.quote(args.container_checkpoint)} "
+            f"--num-views {args.num_views} "
+            f"--steps {args.steps} "
+            f"--warmup {args.flashrt_warmup} "
+            f"--iters {args.flashrt_iters} "
+            f"--hardware {shlex.quote(args.hardware)}"
+        )
+        command = ["docker", "exec", args.container, "bash", "-lc", inner]
+        res = _run(
+            "flashrt_full_fp16",
+            command,
+            cwd=ROOT,
+            timeout=args.timeout,
+        )
+    else:
+        command = [
+            args.flashrt_python,
+            "examples/blackwell/bench_pi05_fp16.py",
+            "--checkpoint",
+            args.checkpoint,
+            "--num-views",
+            str(args.num_views),
+            "--steps",
+            str(args.steps),
+            "--warmup",
+            str(args.flashrt_warmup),
+            "--iters",
+            str(args.flashrt_iters),
+            "--hardware",
+            args.hardware,
+        ]
+        res = _run(
+            "flashrt_full_fp16",
+            command,
+            cwd=OFFICIAL_FLASHRT,
+            env=_flashrt_env(),
+            timeout=args.timeout,
+        )
     m = re.search(
         r"RESULT wall_ms .*?p50=([0-9.]+).*?p95=([0-9.]+).*?mean=([0-9.]+)",
         res.stdout_tail,
@@ -201,8 +311,84 @@ def run_flashrt_fp16(args: argparse.Namespace) -> StepResult:
             }
         )
     res.note = (
-        "FlashRT full-FP16 pipeline sanity. This is not the ecosystem PyTorch "
-        "baseline and should not be used as the speedup denominator."
+        "Checkpoint-backed FlashRT full-model FP16 E2E. This is the optimized "
+        "FlashRT full pipeline, not the public HF Kernel Hub runtime."
+    )
+    return res
+
+
+def run_flashrt_fp8(args: argparse.Namespace) -> StepResult:
+    if not args.run_flashrt_fp8:
+        return _skip(
+            "flashrt_full_fp8",
+            "disabled; pass --run-flashrt-fp8 to run the full FP8 model",
+            cwd=ROOT,
+        )
+    if args.flashrt_mode == "docker":
+        inner = (
+            f"cd {shlex.quote(args.container_flashrt_root)} && "
+            f"PYTHONPATH=. {shlex.quote(args.container_flashrt_python)} "
+            "examples/quickstart.py "
+            f"--checkpoint {shlex.quote(args.container_checkpoint)} "
+            "--framework torch --config pi05 "
+            f"--num_views {args.num_views} "
+            f"--hardware {shlex.quote(args.hardware)} "
+            f"--benchmark {args.flashrt_fp8_iters} "
+            f"--warmup {args.flashrt_fp8_warmup} "
+            "--autotune 3"
+        )
+        command = ["docker", "exec", args.container, "bash", "-lc", inner]
+        res = _run(
+            "flashrt_full_fp8",
+            command,
+            cwd=ROOT,
+            timeout=args.timeout,
+        )
+    else:
+        command = [
+            args.flashrt_python,
+            "examples/quickstart.py",
+            "--checkpoint",
+            args.checkpoint,
+            "--framework",
+            "torch",
+            "--config",
+            "pi05",
+            "--num_views",
+            str(args.num_views),
+            "--hardware",
+            args.hardware,
+            "--benchmark",
+            str(args.flashrt_fp8_iters),
+            "--warmup",
+            str(args.flashrt_fp8_warmup),
+            "--autotune",
+            "3",
+        ]
+        res = _run(
+            "flashrt_full_fp8",
+            command,
+            cwd=OFFICIAL_FLASHRT,
+            env=_flashrt_env(),
+            timeout=args.timeout,
+        )
+    m = re.search(
+        r"P50:\s*([0-9.]+)\s*ms.*?min:\s*([0-9.]+),\s*mean:\s*([0-9.]+),\s*max:\s*([0-9.]+)\s*ms",
+        res.stdout_tail,
+        flags=re.S,
+    )
+    if m:
+        res.metrics.update(
+            {
+                "wall_p50_ms": float(m.group(1)),
+                "wall_min_ms": float(m.group(2)),
+                "wall_mean_ms": float(m.group(3)),
+                "wall_max_ms": float(m.group(4)),
+            }
+        )
+    res.note = (
+        "Checkpoint-backed FlashRT full-model FP8 E2E in the validated "
+        "container runtime."
     )
     return res
 
@@ -281,8 +467,26 @@ def write_reports(path: Path, results: list[StepResult]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", default=str(DEFAULT_CKPT))
+    p.add_argument(
+        "--openpi-baseline-mode",
+        choices=("probe", "local", "docker"),
+        default="probe",
+        help="Use docker to run the real OpenPI/PyTorch baseline in pi0-stablehlo-test.",
+    )
     p.add_argument("--baseline-python", default=sys.executable)
     p.add_argument("--openpi-root", default=str(DEFAULT_OPENPI_ROOT))
+    p.add_argument("--openpi-num-views", type=int, default=2, choices=(1, 2, 3))
+    p.add_argument("--openpi-warmup", type=int, default=5)
+    p.add_argument("--openpi-iters", type=int, default=20)
+    p.add_argument("--openpi-compile", choices=("off", "on"), default="off")
+    p.add_argument("--container", default="pi0-stablehlo-test")
+    p.add_argument("--container-python", default=DEFAULT_CONTAINER_OPENPI_PY)
+    p.add_argument("--container-repo", default=DEFAULT_CONTAINER_REPO)
+    p.add_argument("--container-openpi-root", default=DEFAULT_CONTAINER_OPENPI_ROOT)
+    p.add_argument("--container-checkpoint", default=DEFAULT_CONTAINER_CKPT)
+    p.add_argument("--container-flashrt-root", default=DEFAULT_CONTAINER_FLASHRT_ROOT)
+    p.add_argument("--container-flashrt-python", default="python3")
+    p.add_argument("--flashrt-mode", choices=("local", "docker"), default="docker")
     p.add_argument("--flashrt-python", default=sys.executable)
     p.add_argument("--hub-python", default=str(DEFAULT_HUB_PY))
     p.add_argument("--hardware", default="rtx_sm120")
@@ -290,6 +494,9 @@ def main() -> None:
     p.add_argument("--steps", type=int, default=10)
     p.add_argument("--flashrt-warmup", type=int, default=10)
     p.add_argument("--flashrt-iters", type=int, default=50)
+    p.add_argument("--run-flashrt-fp8", action="store_true")
+    p.add_argument("--flashrt-fp8-warmup", type=int, default=50)
+    p.add_argument("--flashrt-fp8-iters", type=int, default=50)
     p.add_argument("--hub-profile", default="pi05_hotpath")
     p.add_argument("--hub-layers", type=int, default=4)
     p.add_argument("--hub-warmup", type=int, default=10)
@@ -298,10 +505,13 @@ def main() -> None:
     p.add_argument("--timeout", type=int, default=900)
     p.add_argument("--output", type=Path, default=ROOT / "internal-tests/runtime-demo/pi05-e2e-staging.json")
     args = p.parse_args()
+    if not args.output.is_absolute():
+        args.output = (Path.cwd() / args.output).resolve()
 
     results = [
-        run_openpi_probe(args),
+        run_openpi_baseline(args),
         run_flashrt_fp16(args),
+        run_flashrt_fp8(args),
         run_hub_runtime(args),
     ]
     write_reports(args.output, results)

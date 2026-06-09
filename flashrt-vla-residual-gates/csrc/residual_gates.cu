@@ -97,6 +97,47 @@ __global__ void joint3_bias_gate_residual_kernel(
   }
 }
 
+__global__ void gate_residual_kernel(
+    const __nv_bfloat16* __restrict__ residual,
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ gate,
+    __nv_bfloat16* __restrict__ out,
+    int n2) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= n2) return;
+  const __nv_bfloat162* r2 = reinterpret_cast<const __nv_bfloat162*>(residual);
+  const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x);
+  const __nv_bfloat162* g2 = reinterpret_cast<const __nv_bfloat162*>(gate);
+  __nv_bfloat162* o2 = reinterpret_cast<__nv_bfloat162*>(out);
+  const __nv_bfloat162 rv = r2[idx];
+  const __nv_bfloat162 xv = x2[idx];
+  const __nv_bfloat162 gv = g2[idx];
+  const float o0 = __fadd_rn(bf16_to_f32(rv.x), __fmul_rn(bf16_to_f32(xv.x), bf16_to_f32(gv.x)));
+  const float o1 = __fadd_rn(bf16_to_f32(rv.y), __fmul_rn(bf16_to_f32(xv.y), bf16_to_f32(gv.y)));
+  o2[idx] = __halves2bfloat162(f32_to_bf16(o0), f32_to_bf16(o1));
+}
+
+__global__ void bias_residual_kernel(
+    const __nv_bfloat16* __restrict__ residual,
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ bias,
+    __nv_bfloat16* __restrict__ out,
+    int dim2) {
+  const int row = blockIdx.x;
+  const __nv_bfloat162* r2 = reinterpret_cast<const __nv_bfloat162*>(residual + row * dim2 * 2);
+  const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x + row * dim2 * 2);
+  const __nv_bfloat162* b2 = reinterpret_cast<const __nv_bfloat162*>(bias);
+  __nv_bfloat162* o2 = reinterpret_cast<__nv_bfloat162*>(out + row * dim2 * 2);
+  for (int col = threadIdx.x; col < dim2; col += blockDim.x) {
+    const __nv_bfloat162 rv = r2[col];
+    const __nv_bfloat162 xv = x2[col];
+    const __nv_bfloat162 bv = b2[col];
+    const float o0 = __fadd_rn(__fadd_rn(bf16_to_f32(rv.x), bf16_to_f32(xv.x)), bf16_to_f32(bv.x));
+    const float o1 = __fadd_rn(__fadd_rn(bf16_to_f32(rv.y), bf16_to_f32(xv.y)), bf16_to_f32(bv.y));
+    o2[col] = __halves2bfloat162(f32_to_bf16(o0), f32_to_bf16(o1));
+  }
+}
+
 __global__ void joint3_bias_gate_residual_action_nobias_kernel(
     const __nv_bfloat16* __restrict__ v_residual,
     const __nv_bfloat16* __restrict__ v_x,
@@ -170,6 +211,42 @@ __global__ void joint3_bias_gate_residual_action_nobias_kernel(
 }
 
 }  // namespace
+
+void gate_residual_bf16(
+    const void* residual,
+    const void* x,
+    const void* gate,
+    void* out,
+    int n,
+    cudaStream_t stream) {
+  if (n <= 0) return;
+  const int n2 = n >> 1;
+  const int threads = 256;
+  const int blocks = (n2 + threads - 1) / threads;
+  gate_residual_kernel<<<blocks, threads, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(residual),
+      reinterpret_cast<const __nv_bfloat16*>(x),
+      reinterpret_cast<const __nv_bfloat16*>(gate),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      n2);
+}
+
+void bias_residual_bf16(
+    const void* residual,
+    const void* x,
+    const void* bias,
+    void* out,
+    int rows,
+    int dim,
+    cudaStream_t stream) {
+  if (rows <= 0 || dim <= 0) return;
+  bias_residual_kernel<<<rows, 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(residual),
+      reinterpret_cast<const __nv_bfloat16*>(x),
+      reinterpret_cast<const __nv_bfloat16*>(bias),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      dim >> 1);
+}
 
 void joint3_bias_gate_residual_bf16(
     const void* v_residual,

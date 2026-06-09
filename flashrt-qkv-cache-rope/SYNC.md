@@ -8,13 +8,21 @@ Synced from `official/FlashRT`:
 - `csrc/kernels/qwen3_qkv_post_proc.cu`: decode Q staging and KV cache-write
   math, renamed to generic decode APIs for this package.
 - `csrc/kernels/qwen3_qkv_post_proc.cuh`: decode pointer-level contract.
+- `csrc/kernels/rope.cu`: GQA sequence `qkv_split_rope` /
+  `qkv_split_rope_kvcache` adjacent-pair RoPE and KV-cache write math.
+- `csrc/kernels/rope.cuh`: source declaration for the GQA sequence cache
+  contract.
 
 Local adaptation:
 
 - Raw pointer APIs were converted to Tensor-based `torch.ops` bindings.
 - The current package exposes no-bias Q/K, bias+Q/K/V, bias+cat-workspace,
   three-segment VLA joint workspace APIs, decode Q staging, direct KV-write,
-  and device-position KV-write.
+  device-position KV-write, and GQA sequence split/RoPE/KV-cache write.
 - The decode functions use generic public names and explicit shape validation.
   They keep the upstream `head_dim == 128` contract instead of pretending to be
   arbitrary-head-dimension kernels.
+- The GQA sequence cache API keeps the upstream interleaved
+  `[cos0, sin0, ...]` RoPE table contract, but exposes a Tensor layout:
+  `packed_qkv=(B,S,(QH+2*KVH)*HD)`, `q_out=(B,S,QH,HD)`, and
+  `k_cache/v_cache=(B,max_S,KVH,HD)`.

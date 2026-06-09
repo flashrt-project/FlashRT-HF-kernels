@@ -34,6 +34,35 @@ _preload_cublaslt()
 from ._ops import add_op_namespace_prefix, ops
 
 
+@torch.library.register_fake(add_op_namespace_prefix("bf16_linear_bf16"))
+def _bf16_linear_bf16_fake(
+    x: torch.Tensor,
+    w: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if x.dim() != 2 or w.dim() != 2:
+        raise RuntimeError("x and w must be rank-2 tensors")
+    if out.shape != (x.shape[0], w.shape[1]):
+        raise RuntimeError("out shape must be (x.shape[0], w.shape[1])")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("bf16_linear_bias_bf16"))
+def _bf16_linear_bias_bf16_fake(
+    x: torch.Tensor,
+    w: torch.Tensor,
+    bias: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if x.dim() != 2 or w.dim() != 2:
+        raise RuntimeError("x and w must be rank-2 tensors")
+    if bias.dim() != 1:
+        raise RuntimeError("bias must be rank-1")
+    if out.shape != (x.shape[0], w.shape[1]):
+        raise RuntimeError("out shape must be (x.shape[0], w.shape[1])")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("bf16_gemm_bias_gelu"))
 def _bf16_gemm_bias_gelu_fake(
     a: torch.Tensor,
@@ -99,6 +128,48 @@ def _channel_scale_quantize_fp8_static_bf16_fake(
 
 def _allocate_fp8_like(input: torch.Tensor) -> torch.Tensor:
     return torch.empty(input.shape, device=input.device, dtype=torch.float8_e4m3fn)
+
+
+def bf16_linear_bf16(
+    x: torch.Tensor,
+    w: torch.Tensor,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Compute ``x @ w`` and store BF16 output.
+
+    ``x`` must be contiguous BF16 with shape ``(M, K)``. ``w`` must be
+    contiguous BF16 with shape ``(K, N)``. If ``out`` is omitted, a BF16
+    ``(M, N)`` tensor is allocated.
+    """
+
+    if out is None:
+        out = torch.empty(
+            (x.shape[0], w.shape[1]), device=x.device, dtype=torch.bfloat16
+        )
+    ops.bf16_linear_bf16(x, w, out)
+    return out
+
+
+def bf16_linear_bias_bf16(
+    x: torch.Tensor,
+    w: torch.Tensor,
+    bias: torch.Tensor,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Compute ``x @ w + bias`` and store BF16 output.
+
+    ``x`` must be contiguous BF16 with shape ``(M, K)``. ``w`` must be
+    contiguous BF16 with shape ``(K, N)``. ``bias`` must be contiguous BF16
+    with shape ``(N,)``. If ``out`` is omitted, a BF16 ``(M, N)`` tensor is
+    allocated.
+    """
+
+    if out is None:
+        out = torch.empty(
+            (x.shape[0], w.shape[1]), device=x.device, dtype=torch.bfloat16
+        )
+    ops.bf16_linear_bias_bf16(x, w, bias, out)
+    return out
 
 
 def bf16_gemm_bias_gelu(
@@ -190,6 +261,8 @@ def channel_scale_quantize_fp8_static_bf16(
 
 
 __all__ = [
+    "bf16_linear_bf16",
+    "bf16_linear_bias_bf16",
     "bf16_gemm_bias_gelu",
     "bf16_gemm_bias",
     "bias_gelu_quantize_fp8_static_bf16",

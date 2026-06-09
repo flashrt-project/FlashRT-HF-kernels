@@ -62,6 +62,73 @@ class SourceOps:
         )
         return k_cache, v_cache
 
+    def qkv_split_rope_kvcache_bf16(
+        self,
+        packed_qkv,
+        rope,
+        q_heads,
+        kv_heads,
+        head_dim,
+        cache_offset,
+        q_out=None,
+        k_cache=None,
+        v_cache=None,
+        max_seq_len=None,
+    ):
+        batch, seq_len, _ = packed_qkv.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, head_dim),
+                device=packed_qkv.device,
+                dtype=torch.bfloat16,
+            )
+        if k_cache is None or v_cache is None:
+            if max_seq_len is None:
+                max_seq_len = cache_offset + seq_len
+            shape = (batch, max_seq_len, kv_heads, head_dim)
+            if k_cache is None:
+                k_cache = torch.empty(shape, device=packed_qkv.device, dtype=torch.bfloat16)
+            if v_cache is None:
+                v_cache = torch.empty(shape, device=packed_qkv.device, dtype=torch.bfloat16)
+        self._ops.qkv_split_rope_kvcache_bf16(
+            packed_qkv,
+            rope,
+            int(q_heads),
+            int(kv_heads),
+            int(head_dim),
+            int(cache_offset),
+            q_out,
+            k_cache,
+            v_cache,
+        )
+        return q_out, k_cache, v_cache
+
+    def qkv_split_bf16(
+        self,
+        packed_qkv,
+        heads,
+        head_dim,
+        q_out=None,
+        k_out=None,
+        v_out=None,
+    ):
+        out_shape = (packed_qkv.shape[0], packed_qkv.shape[1], heads, head_dim)
+        if q_out is None:
+            q_out = torch.empty(out_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+        if k_out is None:
+            k_out = torch.empty_like(q_out)
+        if v_out is None:
+            v_out = torch.empty_like(q_out)
+        self._ops.qkv_split_bf16(
+            packed_qkv,
+            int(heads),
+            int(head_dim),
+            q_out,
+            k_out,
+            v_out,
+        )
+        return q_out, k_out, v_out
+
     def qkv_split_norm_rope_bf16(
         self,
         packed_qkv,
@@ -297,6 +364,13 @@ def make_decode_case(heads: int):
     return q, k, v, q_w, k_w, cos, sin
 
 
+def make_interleaved_rope(seq_len: int, head_dim: int) -> torch.Tensor:
+    theta = torch.randn((seq_len, head_dim // 2), device="cuda", dtype=torch.float32)
+    cos = torch.cos(theta).to(torch.bfloat16)
+    sin = torch.sin(theta).to(torch.bfloat16)
+    return torch.stack([cos, sin], dim=-1).reshape(seq_len, head_dim).contiguous()
+
+
 def make_case(batch: int, seq_len: int, heads: int, head_dim: int):
     dim = heads * head_dim
     packed_qkv = torch.randn((batch, seq_len, 3 * dim), device="cuda", dtype=torch.bfloat16)
@@ -330,6 +404,21 @@ def apply_pair_rope(x: torch.Tensor, freqs_re: torch.Tensor, freqs_im: torch.Ten
         x.shape[0], rope_seq_len, x.shape[2], x.shape[3]
     ).to(torch.bfloat16)
     return y
+
+
+def apply_interleaved_pair_rope(x: torch.Tensor, rope: torch.Tensor) -> torch.Tensor:
+    # x: (B, L, H, D), rope: (L, D) as [cos0, sin0, cos1, sin1, ...].
+    batch, seq_len, heads, head_dim = x.shape
+    xf = x.float().reshape(batch, seq_len, heads, head_dim // 2, 2)
+    re = xf[..., 0]
+    im = xf[..., 1]
+    rope_f = rope[:seq_len].float().reshape(seq_len, head_dim // 2, 2)
+    cos = rope_f[..., 0].view(1, seq_len, 1, head_dim // 2)
+    sin = rope_f[..., 1].view(1, seq_len, 1, head_dim // 2)
+    out = torch.empty_like(xf)
+    out[..., 0] = re * cos - im * sin
+    out[..., 1] = re * sin + im * cos
+    return out.reshape(batch, seq_len, heads, head_dim).to(torch.bfloat16)
 
 
 def apply_rotate_half_rope_128(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
@@ -399,6 +488,20 @@ def ref_decode_norm_rope(x: torch.Tensor, weight: torch.Tensor, cos: torch.Tenso
     return apply_rotate_half_rope_128(normed, cos, sin)
 
 
+def ref_qkv_split_rope_kvcache(packed_qkv, rope, q_heads, kv_heads, head_dim):
+    batch, seq_len, _ = packed_qkv.shape
+    q_dim = q_heads * head_dim
+    kv_dim = kv_heads * head_dim
+    q = packed_qkv[:, :, :q_dim].view(batch, seq_len, q_heads, head_dim)
+    k = packed_qkv[:, :, q_dim : q_dim + kv_dim].view(batch, seq_len, kv_heads, head_dim)
+    v = packed_qkv[:, :, q_dim + kv_dim :].view(batch, seq_len, kv_heads, head_dim)
+    return (
+        apply_interleaved_pair_rope(q, rope),
+        apply_interleaved_pair_rope(k, rope),
+        v,
+    )
+
+
 def percentile(x: torch.Tensor, q: float) -> torch.Tensor:
     flat = x.flatten()
     k = max(1, min(flat.numel(), math.ceil(q * flat.numel())))
@@ -455,6 +558,19 @@ def run_shape(ops, label: str, shape: tuple[int, int, int, int], eps: float) -> 
         )
         assert_close_distribution(f"{label}/partial_rope_q", got_q2, exp_q2)
         assert_close_distribution(f"{label}/partial_rope_k", got_k2, exp_k2)
+
+
+def run_plain_split_shape(ops, label: str, shape: tuple[int, int, int, int]) -> None:
+    batch, seq_len, heads, head_dim = shape
+    dim = heads * head_dim
+    packed = torch.randn((batch, seq_len, 3 * dim), device="cuda", dtype=torch.bfloat16)
+    got_q, got_k, got_v = ops.qkv_split_bf16(packed, heads, head_dim)
+    exp_q = packed[:, :, :dim].view(batch, seq_len, heads, head_dim).contiguous()
+    exp_k = packed[:, :, dim : 2 * dim].view(batch, seq_len, heads, head_dim).contiguous()
+    exp_v = packed[:, :, 2 * dim :].view(batch, seq_len, heads, head_dim).contiguous()
+    assert_close_distribution(f"{label}/plain_q", got_q, exp_q)
+    assert_close_distribution(f"{label}/plain_k", got_k, exp_k)
+    assert_close_distribution(f"{label}/plain_v", got_v, exp_v)
 
 
 def run_bias_and_cat_shape(ops, label: str, shape: tuple[int, int, int, int], eps: float) -> None:
@@ -574,6 +690,49 @@ def run_decode_shape(ops, label: str, heads: int, eps: float) -> None:
         raise AssertionError(f"{label}/decode_devpos_v_suffix failed: suffix modified")
 
 
+def run_kvcache_shape(
+    ops,
+    label: str,
+    batch: int,
+    seq_len: int,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+) -> None:
+    qkv_dim = (q_heads + 2 * kv_heads) * head_dim
+    packed = torch.randn((batch, seq_len, qkv_dim), device="cuda", dtype=torch.bfloat16)
+    rope = make_interleaved_rope(seq_len, head_dim)
+    max_seq_len = seq_len + 5
+    cache_offset = 2
+    q_out = torch.empty((batch, seq_len, q_heads, head_dim), device="cuda", dtype=torch.bfloat16)
+    k_cache = torch.full(
+        (batch, max_seq_len, kv_heads, head_dim), -7.0, device="cuda", dtype=torch.bfloat16
+    )
+    v_cache = torch.full_like(k_cache, -9.0)
+    ops.qkv_split_rope_kvcache_bf16(
+        packed,
+        rope,
+        q_heads,
+        kv_heads,
+        head_dim,
+        cache_offset,
+        q_out,
+        k_cache,
+        v_cache,
+    )
+    exp_q, exp_k, exp_v = ref_qkv_split_rope_kvcache(
+        packed, rope, q_heads, kv_heads, head_dim
+    )
+    sl = slice(cache_offset, cache_offset + seq_len)
+    assert_close_distribution(f"{label}/kvcache_q", q_out, exp_q)
+    assert_close_distribution(f"{label}/kvcache_k", k_cache[:, sl], exp_k)
+    assert_close_distribution(f"{label}/kvcache_v", v_cache[:, sl], exp_v)
+    if float(k_cache[:, :cache_offset].float().mean().item()) != -7.0:
+        raise AssertionError(f"{label}/kvcache_k_prefix failed: prefix modified")
+    if float(v_cache[:, cache_offset + seq_len :].float().mean().item()) != -9.0:
+        raise AssertionError(f"{label}/kvcache_v_suffix failed: suffix modified")
+
+
 def run_rejection_tests(ops) -> None:
     packed, q_w, k_w, freqs_re, freqs_im = make_case(1, 4, 4, 128)
     expect_runtime_error(
@@ -595,6 +754,34 @@ def run_rejection_tests(ops) -> None:
             q[:, :-1].contiguous(), q_w, cos, sin
         ),
     )
+    packed_gqa = torch.randn((1, 10, (8 + 2 * 1) * 256), device="cuda", dtype=torch.bfloat16)
+    rope = make_interleaved_rope(10, 256)
+    q_out = torch.empty((1, 10, 8, 256), device="cuda", dtype=torch.bfloat16)
+    k_cache = torch.empty((1, 12, 1, 256), device="cuda", dtype=torch.bfloat16)
+    v_cache = torch.empty_like(k_cache)
+    expect_runtime_error(
+        "reject kvcache bounds",
+        lambda: ops.qkv_split_rope_kvcache_bf16(
+            packed_gqa, rope, 8, 1, 256, 4, q_out, k_cache, v_cache
+        ),
+    )
+    expect_runtime_error(
+        "reject kvcache packed cols",
+        lambda: ops.qkv_split_rope_kvcache_bf16(
+            packed_gqa[:, :, :-1].contiguous(), rope, 8, 1, 256, 0, q_out, k_cache, v_cache
+        ),
+    )
+    expect_runtime_error(
+        "reject plain split output shape",
+        lambda: ops.qkv_split_bf16(
+            torch.randn((1, 4, 3 * 4 * 128), device="cuda", dtype=torch.bfloat16),
+            4,
+            128,
+            torch.empty((1, 4, 4, 64), device="cuda", dtype=torch.bfloat16),
+            torch.empty((1, 4, 4, 128), device="cuda", dtype=torch.bfloat16),
+            torch.empty((1, 4, 4, 128), device="cuda", dtype=torch.bfloat16),
+        ),
+    )
 
 
 def run(args) -> None:
@@ -611,11 +798,15 @@ def run(args) -> None:
     if args.mode == "smoke":
         shapes = {k: shapes[k] for k in ("small",)}
     for label, shape in shapes.items():
+        run_plain_split_shape(ops, label, shape)
         run_shape(ops, label, shape, args.eps)
         run_bias_and_cat_shape(ops, label, shape, args.eps)
+    run_plain_split_shape(ops, "siglip_plain", (2, 256, 16, 72))
     run_decode_shape(ops, "decode_small", 4, args.eps)
+    run_kvcache_shape(ops, "pi05_decoder_gqa", 1, 10, 8, 1, 256)
     if args.mode == "full":
         run_decode_shape(ops, "decode_vla", 24, args.eps)
+        run_kvcache_shape(ops, "gqa_batch2", 2, 16, 8, 2, 128)
     run_joint3_shape(ops, "small", 4, 128, args.eps)
     if args.mode == "full":
         run_joint3_shape(ops, "vla", 24, 128, args.eps)

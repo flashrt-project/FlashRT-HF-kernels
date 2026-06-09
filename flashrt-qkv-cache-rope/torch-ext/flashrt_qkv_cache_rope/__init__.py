@@ -78,6 +78,53 @@ def _decode_k_norm_rope_kvwrite_devpos_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("qkv_split_rope_kvcache_bf16"))
+def _qkv_split_rope_kvcache_bf16_fake(
+    packed_qkv: torch.Tensor,
+    rope: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    cache_offset: int,
+    q_out: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+) -> None:
+    _check_packed_gqa_qkv(packed_qkv, q_heads, kv_heads, head_dim)
+    batch, seq_len, _ = packed_qkv.shape
+    if rope.dim() != 2 or rope.shape[0] < seq_len or rope.shape[1] != head_dim:
+        raise RuntimeError("rope must have shape (>= seq_len, head_dim)")
+    if q_out.shape != (batch, seq_len, q_heads, head_dim):
+        raise RuntimeError("q_out must have shape (batch, seq_len, q_heads, head_dim)")
+    if k_cache.dim() != 4 or k_cache.shape[0] != batch or k_cache.shape[2:] != (kv_heads, head_dim):
+        raise RuntimeError("k_cache must have shape (batch, max_seq_len, kv_heads, head_dim)")
+    if v_cache.shape != k_cache.shape:
+        raise RuntimeError("v_cache must have the same shape as k_cache")
+    if cache_offset < 0 or cache_offset + seq_len > k_cache.shape[1]:
+        raise RuntimeError("cache_offset + seq_len must be within k_cache.shape[1]")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("qkv_split_bf16"))
+def _qkv_split_bf16_fake(
+    packed_qkv: torch.Tensor,
+    heads: int,
+    head_dim: int,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+    v_out: torch.Tensor,
+) -> None:
+    if packed_qkv.dim() != 3:
+        raise RuntimeError("packed_qkv must have shape (batch, seq_len, 3 * heads * head_dim)")
+    batch, seq_len, cols = packed_qkv.shape
+    if cols != 3 * heads * head_dim:
+        raise RuntimeError("packed_qkv.shape[2] must be 3 * heads * head_dim")
+    out_shape = (batch, seq_len, heads, head_dim)
+    if q_out.shape != out_shape or k_out.shape != out_shape or v_out.shape != out_shape:
+        raise RuntimeError("q_out, k_out, and v_out must have shape (batch, seq_len, heads, head_dim)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("qkv_split_norm_rope_bf16"))
 def _qkv_split_norm_rope_bf16_fake(
     packed_qkv: torch.Tensor,
@@ -230,6 +277,21 @@ def _check_packed_qkv(
         raise RuntimeError("norm weights must have shape (heads * head_dim,)")
 
 
+def _check_packed_gqa_qkv(
+    packed_qkv: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+) -> None:
+    if packed_qkv.dim() != 3:
+        raise RuntimeError("packed_qkv must have shape (batch, seq_len, (q_heads + 2 * kv_heads) * head_dim)")
+    if q_heads <= 0 or kv_heads <= 0 or head_dim <= 0 or head_dim % 2 != 0:
+        raise RuntimeError("q_heads, kv_heads, and even head_dim must be positive")
+    expected = (q_heads + 2 * kv_heads) * head_dim
+    if packed_qkv.shape[2] != expected:
+        raise RuntimeError("packed_qkv.shape[2] must be (q_heads + 2 * kv_heads) * head_dim")
+
+
 def _check_freqs(
     freqs_re: torch.Tensor,
     freqs_im: torch.Tensor,
@@ -284,6 +346,82 @@ def qkv_split_norm_rope_bf16(
         k_out,
     )
     return q_out, k_out
+
+
+def qkv_split_rope_kvcache_bf16(
+    packed_qkv: torch.Tensor,
+    rope: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    cache_offset: int,
+    q_out: torch.Tensor | None = None,
+    k_cache: torch.Tensor | None = None,
+    v_cache: torch.Tensor | None = None,
+    max_seq_len: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split GQA packed QKV, apply interleaved RoPE, and write K/V cache.
+
+    ``packed_qkv`` has shape ``(batch, seq_len, (q_heads + 2 * kv_heads) * head_dim)``.
+    ``rope`` has BF16 interleaved ``[cos0, sin0, cos1, sin1, ...]`` rows with
+    shape ``(>= seq_len, head_dim)``. ``q_out`` has shape
+    ``(batch, seq_len, q_heads, head_dim)``. K/V are written in-place into
+    ``(batch, max_seq_len, kv_heads, head_dim)`` caches starting at
+    ``cache_offset``.
+    """
+
+    batch, seq_len, _ = packed_qkv.shape
+    if q_out is None:
+        q_out = torch.empty(
+            (batch, seq_len, q_heads, head_dim),
+            device=packed_qkv.device,
+            dtype=torch.bfloat16,
+        )
+    if k_cache is None or v_cache is None:
+        if max_seq_len is None:
+            max_seq_len = cache_offset + seq_len
+        cache_shape = (batch, int(max_seq_len), kv_heads, head_dim)
+        if k_cache is None:
+            k_cache = torch.empty(cache_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+        if v_cache is None:
+            v_cache = torch.empty(cache_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+    ops.qkv_split_rope_kvcache_bf16(
+        packed_qkv,
+        rope,
+        int(q_heads),
+        int(kv_heads),
+        int(head_dim),
+        int(cache_offset),
+        q_out,
+        k_cache,
+        v_cache,
+    )
+    return q_out, k_cache, v_cache
+
+
+def qkv_split_bf16(
+    packed_qkv: torch.Tensor,
+    heads: int,
+    head_dim: int,
+    q_out: torch.Tensor | None = None,
+    k_out: torch.Tensor | None = None,
+    v_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split packed BF16 QKV into Q/K/V tensors.
+
+    ``packed_qkv`` has shape ``(batch, seq_len, 3 * heads * head_dim)``.
+    Outputs have shape ``(batch, seq_len, heads, head_dim)``.
+    """
+
+    out_shape = (packed_qkv.shape[0], packed_qkv.shape[1], heads, head_dim)
+    if q_out is None:
+        q_out = torch.empty(out_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+    if k_out is None:
+        k_out = torch.empty(out_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+    if v_out is None:
+        v_out = torch.empty(out_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+    ops.qkv_split_bf16(packed_qkv, int(heads), int(head_dim), q_out, k_out, v_out)
+    return q_out, k_out, v_out
 
 
 def decode_q_norm_rope_stage_bf16(
@@ -489,6 +627,8 @@ __all__ = [
     "decode_q_norm_rope_stage_bf16",
     "decode_k_norm_rope_kvwrite_bf16",
     "decode_k_norm_rope_kvwrite_devpos_bf16",
+    "qkv_split_bf16",
+    "qkv_split_rope_kvcache_bf16",
     "qkv_split_norm_rope_bf16",
     "qkv_split_bias_norm_rope_v_bf16",
     "qkv_split_bias_norm_rope_v_cat_bf16",

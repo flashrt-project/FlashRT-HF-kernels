@@ -25,6 +25,14 @@ void silu_mul_merged_quantize_fp8_static_bf16(
     int H,
     cudaStream_t stream);
 
+void gelu_mul_merged_quantize_fp8_static_bf16(
+    const void* gate_up_bf16,
+    void* out_fp8,
+    const float* scale,
+    long long M,
+    int H,
+    cudaStream_t stream);
+
 void add_bias_bf16(
     void* input_bf16,
     const void* bias_bf16,

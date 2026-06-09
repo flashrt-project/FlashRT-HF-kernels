@@ -165,6 +165,18 @@ bool log_autotune() {
   return value != nullptr && value[0] != '\0' && value[0] != '0';
 }
 
+bool disable_autotune() {
+  const char* value = std::getenv("FLASHRT_GEMM_EPILOGUES_DISABLE_AUTOTUNE");
+  return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+bool prefer_first_heuristic(int M, int N, int K, int epilogue) {
+  return epilogue == static_cast<int>(CUBLASLT_EPILOGUE_DEFAULT) &&
+         M <= 16 &&
+         K >= 2048 &&
+         N <= 2048;
+}
+
 cublasLtMatmulHeuristicResult_t select_algo(
     DeviceRuntime& runtime,
     cublasLtMatmulDesc_t matmul_desc,
@@ -208,6 +220,45 @@ cublasLtMatmulHeuristicResult_t select_algo(
 
   float alpha = 1.0f;
   float beta = 0.0f;
+
+  if (disable_autotune() || prefer_first_heuristic(M, N, K, epilogue)) {
+    for (int i = 0; i < returned_results; ++i) {
+      const cublasStatus_t status = cublasLtMatmul(
+          runtime.handle,
+          matmul_desc,
+          &alpha,
+          B,
+          A_desc,
+          A,
+          B_desc,
+          &beta,
+          D,
+          D_desc,
+          D,
+          D_desc,
+          &results[i].algo,
+          runtime.workspace,
+          runtime.workspace_size,
+          stream);
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        if (log_autotune()) {
+          printf(
+              "[flashrt-gemm-epilogues] epilogue=%d shape=(%d,%d,%d) conservative=%d/%d\n",
+              epilogue,
+              M,
+              N,
+              K,
+              i,
+              returned_results);
+        }
+        std::lock_guard<std::mutex> lock(algo_cache_mutex());
+        algo_cache()[key] = results[i];
+        return results[i];
+      }
+    }
+    throw std::runtime_error("cuBLASLt bf16 GEMM epilogue: no conservative algorithm ran");
+  }
+
   int best_index = 0;
   float best_ms = std::numeric_limits<float>::infinity();
 
@@ -310,6 +361,86 @@ cublasLtMatmulHeuristicResult_t select_algo(
 }
 
 }  // namespace
+
+void bf16_gemm(
+    const void* A,
+    const void* B,
+    void* D,
+    int M,
+    int N,
+    int K,
+    cudaStream_t stream) {
+  auto& runtime = runtime_for_current_device();
+
+  MatmulDesc matmul_desc;
+  MatrixLayout A_desc;
+  MatrixLayout B_desc;
+  MatrixLayout D_desc;
+  MatmulPreference preference;
+
+  FLASHRT_CUBLAS_CHECK(
+      cublasLtMatmulDescCreate(&matmul_desc.value, CUBLAS_COMPUTE_32F, CUDA_R_32F));
+
+  cublasOperation_t op_n = CUBLAS_OP_N;
+  FLASHRT_CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
+      matmul_desc.value, CUBLASLT_MATMUL_DESC_TRANSA, &op_n, sizeof(op_n)));
+  FLASHRT_CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
+      matmul_desc.value, CUBLASLT_MATMUL_DESC_TRANSB, &op_n, sizeof(op_n)));
+
+  cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_DEFAULT;
+  FLASHRT_CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
+      matmul_desc.value, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue)));
+
+  // Expose row-major tensors at the public API, but use cuBLASLt's native
+  // column-major view internally: D_row(M,N) is D_col^T(N,M), so compute
+  // D_col = B_col^T(N,K) @ A_col^T(K,M).
+  FLASHRT_CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&A_desc.value, CUDA_R_16BF, N, K, N));
+  FLASHRT_CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&B_desc.value, CUDA_R_16BF, K, M, K));
+  FLASHRT_CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&D_desc.value, CUDA_R_16BF, N, M, N));
+
+  FLASHRT_CUBLAS_CHECK(cublasLtMatmulPreferenceCreate(&preference.value));
+  FLASHRT_CUBLAS_CHECK(cublasLtMatmulPreferenceSetAttribute(
+      preference.value,
+      CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
+      &runtime.workspace_size,
+      sizeof(runtime.workspace_size)));
+
+  cublasLtMatmulHeuristicResult_t heuristic = select_algo(
+      runtime,
+      matmul_desc.value,
+      A_desc.value,
+      B_desc.value,
+      D_desc.value,
+      preference.value,
+      A,
+      B,
+      D,
+      M,
+      N,
+      K,
+      static_cast<int>(epilogue),
+      stream);
+
+  float alpha = 1.0f;
+  float beta = 0.0f;
+  FLASHRT_CUBLAS_CHECK(cublasLtMatmul(
+      runtime.handle,
+      matmul_desc.value,
+      &alpha,
+      B,
+      A_desc.value,
+      A,
+      B_desc.value,
+      &beta,
+      D,
+      D_desc.value,
+      D,
+      D_desc.value,
+      &heuristic.algo,
+      runtime.workspace,
+      runtime.workspace_size,
+      stream));
+}
 
 void bf16_gemm_bias(
     const void* A,

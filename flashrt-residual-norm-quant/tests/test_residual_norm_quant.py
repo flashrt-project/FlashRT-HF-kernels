@@ -44,6 +44,12 @@ class SourceOps:
         self._ops.rms_norm_quant_fp8_static_bf16(x, weight, scale, float(eps), out)
         return out
 
+    def layer_norm_bf16(self, x, weight, bias, eps=1e-5, out=None):
+        if out is None:
+            out = torch.empty_like(x, dtype=torch.bfloat16)
+        self._ops.layer_norm_bf16(x, weight, bias, float(eps), out)
+        return out
+
     def residual_add_rms_norm_quant_fp8_static_bf16(
         self, residual, x, weight, scale, eps=1e-6, out=None
     ):
@@ -120,6 +126,16 @@ def ref_rms_norm_quant(x, weight, scale, eps) -> torch.Tensor:
     return quantize_fp8(ref_rms_norm(x, weight, eps), scale)
 
 
+def ref_layer_norm_bf16(x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor, eps: float) -> torch.Tensor:
+    return torch.nn.functional.layer_norm(
+        x.float(),
+        (x.shape[1],),
+        weight.float(),
+        bias.float(),
+        eps=eps,
+    ).to(torch.bfloat16)
+
+
 def ref_residual_add_rms_norm_quant(residual, x, weight, scale, eps):
     added = residual.float() + x.float()
     residual_out = added.to(torch.bfloat16)
@@ -133,8 +149,9 @@ def make_case(rows: int, dim: int):
     x = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
     residual = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
     weight = (1.0 + 0.1 * torch.randn((dim,), device="cuda", dtype=torch.bfloat16)).contiguous()
+    bias = (0.1 * torch.randn((dim,), device="cuda", dtype=torch.bfloat16)).contiguous()
     scale = torch.tensor([0.04], device="cuda", dtype=torch.float32)
-    return x, residual, weight, scale
+    return x, residual, weight, bias, scale
 
 
 def percentile(x: torch.Tensor, q: float) -> torch.Tensor:
@@ -207,7 +224,7 @@ def expect_runtime_error(label: str, fn) -> None:
 
 
 def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
-    x, residual, weight, scale = make_case(rows, dim)
+    x, residual, weight, bias, scale = make_case(rows, dim)
 
     got_norm = ops.rms_norm_bf16(x, weight, eps)
     exp_norm = ref_rms_norm_bf16(x, weight, eps)
@@ -215,6 +232,16 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
         f"{label}/rms_norm_bf16",
         got_norm,
         exp_norm,
+        p99_abs_limit=0.015625,
+        p99_rel_limit=0.02,
+    )
+
+    got_ln = ops.layer_norm_bf16(x, weight, bias, eps)
+    exp_ln = ref_layer_norm_bf16(x, weight, bias, eps)
+    assert_close_distribution(
+        f"{label}/layer_norm_bf16",
+        got_ln,
+        exp_ln,
         p99_abs_limit=0.015625,
         p99_rel_limit=0.02,
     )
@@ -245,7 +272,7 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
 
 
 def run_rejection_tests(ops) -> None:
-    x, residual, weight, scale = make_case(4, 128)
+    x, residual, weight, bias, scale = make_case(4, 128)
     bad_x = torch.randn((4, 127), device="cuda", dtype=torch.bfloat16)
     bad_weight = torch.randn((127,), device="cuda", dtype=torch.bfloat16)
     bad_out = torch.empty((4, 128), device="cuda", dtype=torch.bfloat16).t()
@@ -258,6 +285,10 @@ def run_rejection_tests(ops) -> None:
     expect_runtime_error(
         "reject non-contiguous output",
         lambda: ops.rms_norm_bf16(x, weight, out=bad_out),
+    )
+    expect_runtime_error(
+        "reject layer norm bias shape mismatch",
+        lambda: ops.layer_norm_bf16(x, weight, bad_weight),
     )
     expect_runtime_error(
         "reject residual shape mismatch",

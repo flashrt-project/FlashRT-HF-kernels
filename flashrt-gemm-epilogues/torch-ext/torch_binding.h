@@ -2,6 +2,17 @@
 
 #include <torch/all.h>
 
+void bf16_linear_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& w,
+    torch::Tensor& out);
+
+void bf16_linear_bias_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& w,
+    torch::Tensor const& bias,
+    torch::Tensor& out);
+
 void bf16_gemm_bias_gelu(
     torch::Tensor const& a,
     torch::Tensor const& b,

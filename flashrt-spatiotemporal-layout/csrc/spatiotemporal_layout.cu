@@ -36,6 +36,30 @@ __global__ void ncdhw_to_blc_bf16_kernel(
   }
 }
 
+__global__ void patch_im2col_bf16_kernel(
+    const __nv_bfloat16* __restrict__ input,
+    __nv_bfloat16* __restrict__ output,
+    int num_views,
+    int total) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= total) return;
+
+  const int patch_idx = idx / 588;
+  const int feat_idx = idx - patch_idx * 588;
+  const int view = patch_idx / 256;
+  const int local_patch = patch_idx - view * 256;
+  const int patch_h = local_patch / 16;
+  const int patch_w = local_patch - patch_h * 16;
+  const int pixel_h = feat_idx / 42;
+  const int pixel_w = (feat_idx - pixel_h * 42) / 3;
+  const int channel = feat_idx - pixel_h * 42 - pixel_w * 3;
+  const int row = patch_h * 14 + pixel_h;
+  const int col = patch_w * 14 + pixel_w;
+  const int src =
+      view * (224 * 224 * 3) + row * (224 * 3) + col * 3 + channel;
+  output[idx] = input[src];
+}
+
 __global__ void time_unshuffle2_bf16_kernel(
     const __nv_bfloat16* __restrict__ x,
     __nv_bfloat16* __restrict__ out,
@@ -138,6 +162,19 @@ void ncdhw_to_blc_bf16(
       frames,
       height,
       width,
+      total);
+}
+
+void patch_im2col_bf16(
+    const void* input,
+    void* output,
+    int num_views,
+    cudaStream_t stream) {
+  const int total = num_views * 256 * 588;
+  patch_im2col_bf16_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input),
+      reinterpret_cast<__nv_bfloat16*>(output),
+      num_views,
       total);
 }
 

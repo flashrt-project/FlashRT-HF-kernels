@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import math
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
 import torch
+import torch.nn.functional as F
 from kernels import get_kernel
 
 
@@ -21,6 +24,7 @@ class Profile:
     action_tokens: int
     text_tokens: int
     heads: int
+    decoder_kv_heads: int
     head_dim: int
     latent_c: int
     latent_t: int
@@ -45,6 +49,7 @@ PROFILES = {
         action_tokens=8,
         text_tokens=8,
         heads=4,
+        decoder_kv_heads=1,
         head_dim=128,
         latent_c=16,
         latent_t=4,
@@ -56,9 +61,40 @@ PROFILES = {
     "pi05_hotpath": Profile(
         name="pi05_hotpath",
         video_tokens=512,
+        action_tokens=10,
+        text_tokens=48,
+        heads=8,
+        decoder_kv_heads=1,
+        head_dim=128,
+        latent_c=64,
+        latent_t=4,
+        latent_h=32,
+        latent_w=32,
+        ffn_hidden=4096,
+        max_seq_len=4096,
+    ),
+    "pi05_decoder_hotpath": Profile(
+        name="pi05_decoder_hotpath",
+        video_tokens=512,
+        action_tokens=10,
+        text_tokens=48,
+        heads=8,
+        decoder_kv_heads=1,
+        head_dim=128,
+        latent_c=64,
+        latent_t=4,
+        latent_h=32,
+        latent_w=32,
+        ffn_hidden=4096,
+        max_seq_len=4096,
+    ),
+    "vla_video_hotpath": Profile(
+        name="vla_video_hotpath",
+        video_tokens=512,
         action_tokens=32,
         text_tokens=16,
         heads=24,
+        decoder_kv_heads=1,
         head_dim=128,
         latent_c=64,
         latent_t=4,
@@ -90,6 +126,11 @@ class Result:
     cosine: float
     expected_rms: float
     cosine_gate_enabled: bool
+    ffn_activation: str
+    ffn_source: str
+    qkv_source: str
+    attention_backend: str
+    decoder_qkv_backend: str
 
 
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
@@ -108,17 +149,33 @@ def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.
     return xf * inv * weight.float()
 
 
-def rope_rotate(x: torch.Tensor, freqs_re: torch.Tensor, freqs_im: torch.Tensor) -> torch.Tensor:
-    # x: (..., head_dim), rotate-half contract used by the FlashRT kernels.
-    half = x.shape[-1] // 2
-    xf = x.float()
-    x0 = xf[..., :half]
-    x1 = xf[..., half:]
-    cos = freqs_re[: x.shape[-3]].view(1, x.shape[-3], 1, half).float()
-    sin = freqs_im[: x.shape[-3]].view(1, x.shape[-3], 1, half).float()
-    y0 = x0 * cos - x1 * sin
-    y1 = x1 * cos + x0 * sin
-    return torch.cat([y0, y1], dim=-1).to(torch.bfloat16)
+def pair_rope_rotate(x: torch.Tensor, freqs_re: torch.Tensor, freqs_im: torch.Tensor) -> torch.Tensor:
+    # qkv_split_joint3_cat_bf16 uses adjacent even/odd RoPE pairs for the
+    # video segment. Decode staging uses the rotate-half contract below.
+    bsz, seq, heads, head_dim = x.shape
+    xf = x.float().reshape(bsz, seq, heads, head_dim // 2, 2)
+    re = xf[..., 0]
+    im = xf[..., 1]
+    cos = freqs_re[:seq].view(1, seq, 1, head_dim // 2).float()
+    sin = freqs_im[:seq].view(1, seq, 1, head_dim // 2).float()
+    out = torch.empty_like(xf)
+    out[..., 0] = re * cos - im * sin
+    out[..., 1] = re * sin + im * cos
+    return out.reshape(bsz, seq, heads, head_dim).to(torch.bfloat16)
+
+
+def interleaved_pair_rope(x: torch.Tensor, rope: torch.Tensor) -> torch.Tensor:
+    bsz, seq, heads, head_dim = x.shape
+    xf = x.float().reshape(bsz, seq, heads, head_dim // 2, 2)
+    re = xf[..., 0]
+    im = xf[..., 1]
+    rope_pair = rope[:seq].float().reshape(seq, head_dim // 2, 2)
+    cos = rope_pair[..., 0].view(1, seq, 1, head_dim // 2)
+    sin = rope_pair[..., 1].view(1, seq, 1, head_dim // 2)
+    out = torch.empty_like(xf)
+    out[..., 0] = re * cos - im * sin
+    out[..., 1] = re * sin + im * cos
+    return out.reshape(bsz, seq, heads, head_dim).to(torch.bfloat16)
 
 
 def decode_rope_rotate(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
@@ -149,6 +206,18 @@ def time_us(fn: Callable[[], object], *, warmup: int, iters: int) -> float:
     end.record()
     torch.cuda.synchronize()
     return start.elapsed_time(end) * 1000.0 / iters
+
+
+def sdpa_attention_bthd(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """Non-causal attention for tensors shaped [B, T, H, D]."""
+    out = F.scaled_dot_product_attention(
+        q.transpose(1, 2),
+        k.transpose(1, 2),
+        v.transpose(1, 2),
+        dropout_p=0.0,
+        is_causal=False,
+    )
+    return out.transpose(1, 2).contiguous()
 
 
 class RuntimeState:
@@ -203,6 +272,20 @@ class RuntimeState:
         self.sin_decode = torch.sin(theta_decode).to(torch.bfloat16).contiguous()
         self.cur_pos = torch.tensor([7], device=device, dtype=torch.int32)
 
+        decoder_qkv_dim = (profile.heads + 2 * profile.decoder_kv_heads) * profile.head_dim
+        self.decoder_packed_qkv = torch.randn(
+            (1, a, decoder_qkv_dim),
+            device=device,
+            dtype=torch.bfloat16,
+        )
+        theta_decoder_seq = torch.randn((a, profile.head_dim // 2), device=device)
+        decoder_cos = torch.cos(theta_decoder_seq).to(torch.bfloat16)
+        decoder_sin = torch.sin(theta_decoder_seq).to(torch.bfloat16)
+        self.decoder_rope = torch.stack([decoder_cos, decoder_sin], dim=-1).reshape(
+            a, profile.head_dim
+        ).contiguous()
+        self.decoder_cache_offset = 7
+
         self.v_res = torch.randn((v, d), device=device, dtype=torch.bfloat16)
         self.v_x = torch.randn_like(self.v_res)
         self.v_gate = torch.randn_like(self.v_res)
@@ -242,31 +325,56 @@ class RuntimeState:
 
 
 class PyTorchPI05Reference:
-    def __init__(self, state: RuntimeState) -> None:
+    def __init__(
+        self,
+        state: RuntimeState,
+        *,
+        ffn_activation: str,
+        attention_backend: str,
+        decoder_qkv_backend: str,
+    ) -> None:
         self.s = state
+        self.ffn_activation = ffn_activation
+        self.attention_backend = attention_backend
+        self.decoder_qkv_backend = decoder_qkv_backend
 
     def _qkv_joint(self):
         s = self.s
         p = s.p
         d = p.dim
 
-        def segment(packed, q_w, k_w, bias=None):
+        def segment(packed, q_w, k_w, bias=None, rope=False):
             if bias is not None:
-                packed = (packed.float() + bias.float().view(1, 1, -1)).to(torch.bfloat16)
+                packed = packed.float() + bias.float().view(1, 1, -1)
             q, k, v = packed.split(d, dim=2)
             q = q.view(1, q.shape[1], p.heads, p.head_dim)
             k = k.view(1, k.shape[1], p.heads, p.head_dim)
-            v = v.view(1, v.shape[1], p.heads, p.head_dim).contiguous()
+            v = v.to(torch.bfloat16).view(1, v.shape[1], p.heads, p.head_dim).contiguous()
             q = rms_norm(q, q_w.view(p.heads, p.head_dim)).to(torch.bfloat16)
             k = rms_norm(k, k_w.view(p.heads, p.head_dim)).to(torch.bfloat16)
-            q = rope_rotate(q, s.freqs_re, s.freqs_im)
-            k = rope_rotate(k, s.freqs_re, s.freqs_im)
+            if rope:
+                q = pair_rope_rotate(q, s.freqs_re, s.freqs_im)
+                k = pair_rope_rotate(k, s.freqs_re, s.freqs_im)
             return q, k, v
 
-        qv, kv, vv = segment(s.packed_v, s.q_w_v, s.k_w_v, s.qkv_v_bias)
+        qv, kv, vv = segment(s.packed_v, s.q_w_v, s.k_w_v, s.qkv_v_bias, rope=True)
         qa, ka, va = segment(s.packed_a, s.q_w_a, s.k_w_a)
         qu, ku, vu = segment(s.packed_u, s.q_w_u, s.k_w_u)
         return torch.cat([qv, qa, qu], dim=1), torch.cat([kv, ka, ku], dim=1), torch.cat([vv, va, vu], dim=1)
+
+    def _decoder_qkv_gqa(self):
+        s = self.s
+        p = s.p
+        q_dim = p.heads * p.head_dim
+        kv_dim = p.decoder_kv_heads * p.head_dim
+        q = s.decoder_packed_qkv[:, :, :q_dim].view(1, p.action_tokens, p.heads, p.head_dim)
+        k = s.decoder_packed_qkv[:, :, q_dim : q_dim + kv_dim].view(
+            1, p.action_tokens, p.decoder_kv_heads, p.head_dim
+        )
+        v = s.decoder_packed_qkv[:, :, q_dim + kv_dim :].view(
+            1, p.action_tokens, p.decoder_kv_heads, p.head_dim
+        )
+        return interleaved_pair_rope(q, s.decoder_rope), interleaved_pair_rope(k, s.decoder_rope), v
 
     def __call__(self) -> torch.Tensor:
         s = self.s
@@ -280,22 +388,28 @@ class PyTorchPI05Reference:
         _ = latent[:, :, -2:] if latent.shape[2] >= 2 else torch.cat([s.latent_prev[:, :, 1:2], latent], dim=2)
 
         q_cat, k_cat, v_cat = self._qkv_joint()
-        q_decode = decode_rope_rotate(
-            rms_norm(s.q_pre, s.q_norm_decode).to(torch.bfloat16),
-            s.cos_decode,
-            s.sin_decode,
-        )
-        k_decode = decode_rope_rotate(
-            rms_norm(s.k_pre, s.k_norm_decode).to(torch.bfloat16),
-            s.cos_decode,
-            s.sin_decode,
-        )
-        _ = q_decode, k_decode, s.v_pre
+        if self.decoder_qkv_backend == "gqa-cache":
+            q_decode, k_decode, v_decode = self._decoder_qkv_gqa()
+        else:
+            q_decode = decode_rope_rotate(
+                rms_norm(s.q_pre, s.q_norm_decode).to(torch.bfloat16),
+                s.cos_decode,
+                s.sin_decode,
+            )
+            k_decode = decode_rope_rotate(
+                rms_norm(s.k_pre, s.k_norm_decode).to(torch.bfloat16),
+                s.cos_decode,
+                s.sin_decode,
+            )
+            v_decode = s.v_pre
 
         v_out = (s.v_res.float() + (s.v_x.float() + s.v_bias.float().view(1, -1)) * s.v_gate.float()).to(torch.bfloat16)
         a_out = (s.a_res.float() + (s.a_x.float() + s.a_bias.float().view(1, -1)) * s.a_gate.float()).to(torch.bfloat16)
         u_out = (s.u_res.float() + s.u_x.float()).to(torch.bfloat16)
         fused = torch.cat([v_out, a_out, u_out], dim=0)
+        if self.attention_backend == "sdpa":
+            attn = sdpa_attention_bthd(q_cat, k_cat, v_cat).view(p.total_tokens, p.dim)
+            fused.add_(attn)
 
         updated = (fused.float() + s.ada_x.float() * s.ada_gate_mul.float()).to(torch.bfloat16)
         dim = updated.shape[1]
@@ -310,25 +424,60 @@ class PyTorchPI05Reference:
                 @ dequant_fp8(s.gate_up_w[i], s.ffn_gate_up_w_scale).T
             ).to(torch.bfloat16)
             gate, up = gate_up.float().chunk(2, dim=1)
-            hidden = quantize_fp8((torch.nn.functional.silu(gate) * up).to(torch.bfloat16), s.ffn_hidden_scale)
+            if self.ffn_activation == "gelu":
+                activated = torch.nn.functional.gelu(gate, approximate="tanh")
+            else:
+                activated = torch.nn.functional.silu(gate)
+            hidden = quantize_fp8((activated * up).to(torch.bfloat16), s.ffn_hidden_scale)
             x_bf16 = (
                 dequant_fp8(hidden, s.ffn_hidden_scale)
                 @ dequant_fp8(s.down_w[i], s.ffn_down_w_scale).T
             ).to(torch.bfloat16)
             if i != s.layers - 1:
                 x = quantize_fp8(x_bf16, s.ffn_input_scale)
-        return x_bf16 + q_cat.flatten()[0].to(torch.bfloat16) * 0 + k_cat.flatten()[0].to(torch.bfloat16) * 0 + v_cat.flatten()[0].to(torch.bfloat16) * 0
+        keepalive = (
+            q_cat.flatten()[0].to(torch.bfloat16) * 0
+            + k_cat.flatten()[0].to(torch.bfloat16) * 0
+            + v_cat.flatten()[0].to(torch.bfloat16) * 0
+            + q_decode.flatten()[0].to(torch.bfloat16) * 0
+            + k_decode.flatten()[0].to(torch.bfloat16) * 0
+            + v_decode.flatten()[0].to(torch.bfloat16) * 0
+        )
+        if self.attention_backend == "none":
+            return x_bf16 + keepalive
+        return x_bf16
 
 
 class HubPI05Runtime:
-    def __init__(self, state: RuntimeState, *, version: int) -> None:
+    def __init__(
+        self,
+        state: RuntimeState,
+        *,
+        version: int,
+        ffn_activation: str,
+        attention_backend: str,
+        decoder_qkv_backend: str,
+        local_qkv_artifact: str | None = None,
+        local_ffn_artifact: str | None = None,
+    ) -> None:
         self.s = state
         self.p = state.p
+        self.ffn_activation = ffn_activation
+        self.attention_backend = attention_backend
+        self.decoder_qkv_backend = decoder_qkv_backend
         self.layout = get_kernel("flashrt/flashrt-spatiotemporal-layout", version=version, trust_remote_code=True)
-        self.qkv = get_kernel("flashrt/flashrt-qkv-cache-rope", version=version, trust_remote_code=True)
+        if local_qkv_artifact:
+            sys.path.insert(0, local_qkv_artifact)
+            self.qkv = importlib.import_module("flashrt_qkv_cache_rope")
+        else:
+            self.qkv = get_kernel("flashrt/flashrt-qkv-cache-rope", version=version, trust_remote_code=True)
         self.gates = get_kernel("flashrt/flashrt-vla-residual-gates", version=version, trust_remote_code=True)
         self.adapt = get_kernel("flashrt/flashrt-adaptive-norms", version=version, trust_remote_code=True)
-        self.ffn = get_kernel("flashrt/flashrt-fp8-swiglu-ffn", version=version, trust_remote_code=True)
+        if local_ffn_artifact:
+            sys.path.insert(0, local_ffn_artifact)
+            self.ffn = importlib.import_module("flashrt_fp8_swiglu_ffn")
+        else:
+            self.ffn = get_kernel("flashrt/flashrt-fp8-swiglu-ffn", version=version, trust_remote_code=True)
         self.quant = get_kernel("flashrt/flashrt-gemm-epilogues", version=version, trust_remote_code=True)
 
         p = self.p
@@ -342,9 +491,23 @@ class HubPI05Runtime:
         self.q_cat = torch.empty((1, total, p.heads, p.head_dim), device=state.latent.device, dtype=torch.bfloat16)
         self.k_cat = torch.empty_like(self.q_cat)
         self.v_cat = torch.empty_like(self.q_cat)
+        self.attn_out = torch.empty_like(self.q_cat)
         self.q_decode = torch.empty((p.heads, p.head_dim), device=state.latent.device, dtype=torch.bfloat16)
         self.k_cache = torch.empty((p.max_seq_len, p.heads, p.head_dim), device=state.latent.device, dtype=torch.bfloat16)
         self.v_cache = torch.empty_like(self.k_cache)
+        self.decoder_q = torch.empty(
+            (1, p.action_tokens, p.heads, p.head_dim),
+            device=state.latent.device,
+            dtype=torch.bfloat16,
+        )
+        decoder_cache_shape = (
+            1,
+            p.max_seq_len,
+            p.decoder_kv_heads,
+            p.head_dim,
+        )
+        self.decoder_k_cache = torch.empty(decoder_cache_shape, device=state.latent.device, dtype=torch.bfloat16)
+        self.decoder_v_cache = torch.empty_like(self.decoder_k_cache)
         self.v_out = torch.empty_like(state.v_res)
         self.a_out = torch.empty_like(state.a_res)
         self.u_out = torch.empty_like(state.u_res)
@@ -384,19 +547,38 @@ class HubPI05Runtime:
             self.k_cat,
             self.v_cat,
         )
-        self.qkv.decode_q_norm_rope_stage_bf16(
-            s.q_pre, s.q_norm_decode, s.cos_decode, s.sin_decode, q_out=self.q_decode
-        )
-        self.qkv.decode_k_norm_rope_kvwrite_devpos_bf16(
-            s.k_pre,
-            s.v_pre,
-            s.k_norm_decode,
-            s.cos_decode,
-            s.sin_decode,
-            s.cur_pos,
-            self.k_cache,
-            self.v_cache,
-        )
+        if self.decoder_qkv_backend == "gqa-cache":
+            if not hasattr(self.qkv, "qkv_split_rope_kvcache_bf16"):
+                raise RuntimeError(
+                    "qkv_split_rope_kvcache_bf16 is not available. "
+                    "Pass --local-qkv-artifact pointing at a rebuilt "
+                    "flashrt-qkv-cache-rope artifact."
+                )
+            self.qkv.qkv_split_rope_kvcache_bf16(
+                s.decoder_packed_qkv,
+                s.decoder_rope,
+                p.heads,
+                p.decoder_kv_heads,
+                p.head_dim,
+                s.decoder_cache_offset,
+                self.decoder_q,
+                self.decoder_k_cache,
+                self.decoder_v_cache,
+            )
+        else:
+            self.qkv.decode_q_norm_rope_stage_bf16(
+                s.q_pre, s.q_norm_decode, s.cos_decode, s.sin_decode, q_out=self.q_decode
+            )
+            self.qkv.decode_k_norm_rope_kvwrite_devpos_bf16(
+                s.k_pre,
+                s.v_pre,
+                s.k_norm_decode,
+                s.cos_decode,
+                s.sin_decode,
+                s.cur_pos,
+                self.k_cache,
+                self.v_cache,
+            )
 
         self.gates.joint3_bias_gate_residual_bf16(
             s.v_res,
@@ -416,6 +598,9 @@ class HubPI05Runtime:
         self.fused[: p.video_tokens].copy_(self.v_out)
         self.fused[p.video_tokens : p.video_tokens + p.action_tokens].copy_(self.a_out)
         self.fused[p.video_tokens + p.action_tokens :].copy_(self.u_out)
+        if self.attention_backend == "sdpa":
+            self.attn_out.copy_(sdpa_attention_bthd(self.q_cat, self.k_cat, self.v_cat))
+            self.fused.add_(self.attn_out.view(p.total_tokens, p.dim))
         _, x, _ = self.adapt.gate_residual_ada_norm_fp8_static_bf16(
             self.fused,
             s.ada_x,
@@ -427,7 +612,18 @@ class HubPI05Runtime:
             gate_out=self.ada_gate,
         )
         for i in range(s.layers):
-            out = self.ffn.fp8_swiglu_mlp_bf16(
+            ffn_op_name = (
+                "fp8_geglu_mlp_bf16"
+                if self.ffn_activation == "gelu"
+                else "fp8_swiglu_mlp_bf16"
+            )
+            if not hasattr(self.ffn, ffn_op_name):
+                raise RuntimeError(
+                    f"{ffn_op_name} is not available in flashrt-fp8-swiglu-ffn. "
+                    "Rebuild/reupload the package with GeGLU support or run "
+                    "--ffn-activation silu against the current Hub artifact."
+                )
+            out = getattr(self.ffn, ffn_op_name)(
                 x,
                 s.gate_up_w[i],
                 s.down_w[i],
@@ -447,6 +643,13 @@ class HubPI05Runtime:
                     self.next_fp8[i],
                 )
                 x = self.next_fp8[i]
+        if self.decoder_qkv_backend == "gqa-cache":
+            keepalive = (
+                self.decoder_q.flatten()[0].to(torch.bfloat16) * 0
+                + self.decoder_k_cache.flatten()[0].to(torch.bfloat16) * 0
+                + self.decoder_v_cache.flatten()[0].to(torch.bfloat16) * 0
+            )
+            return self.ffn_out[-1] + keepalive
         return self.ffn_out[-1]
 
 
@@ -500,8 +703,21 @@ def run(args: argparse.Namespace) -> Result:
     profile = PROFILES[args.profile]
     device = torch.device("cuda")
     state = RuntimeState(profile, args.layers, device)
-    eager = PyTorchPI05Reference(state)
-    runtime = HubPI05Runtime(state, version=args.version)
+    eager = PyTorchPI05Reference(
+        state,
+        ffn_activation=args.ffn_activation,
+        attention_backend=args.attention_backend,
+        decoder_qkv_backend=args.decoder_qkv_backend,
+    )
+    runtime = HubPI05Runtime(
+        state,
+        version=args.version,
+        ffn_activation=args.ffn_activation,
+        attention_backend=args.attention_backend,
+        decoder_qkv_backend=args.decoder_qkv_backend,
+        local_qkv_artifact=args.local_qkv_artifact,
+        local_ffn_artifact=args.local_ffn_artifact,
+    )
 
     expected = eager()
     got = runtime()
@@ -555,6 +771,11 @@ def run(args: argparse.Namespace) -> Result:
         cosine=cosine,
         expected_rms=expected_rms,
         cosine_gate_enabled=cosine_gate_enabled,
+        ffn_activation=args.ffn_activation,
+        ffn_source=f"local:{args.local_ffn_artifact}" if args.local_ffn_artifact else "hub",
+        qkv_source=f"local:{args.local_qkv_artifact}" if args.local_qkv_artifact else "hub",
+        attention_backend=args.attention_backend,
+        decoder_qkv_backend=args.decoder_qkv_backend,
     )
 
 
@@ -587,6 +808,11 @@ def write_markdown(path: Path, result: Result) -> None:
 | cosine | {result.cosine:.8f} |
 | expected_rms | {result.expected_rms:.8f} |
 | cosine_gate_enabled | `{result.cosine_gate_enabled}` |
+| FFN activation | `{result.ffn_activation}` |
+| FFN source | `{result.ffn_source}` |
+| QKV source | `{result.qkv_source}` |
+| Attention backend | `{result.attention_backend}` |
+| Decoder QKV backend | `{result.decoder_qkv_backend}` |
 | graph_status | `{result.graph_status}` |
 
 """
@@ -599,6 +825,40 @@ def main() -> None:
     parser.add_argument("--profile", choices=sorted(PROFILES), default="pi05_hotpath")
     parser.add_argument("--layers", type=int, default=4)
     parser.add_argument("--version", type=int, default=1)
+    parser.add_argument(
+        "--ffn-activation",
+        choices=("gelu", "silu"),
+        default="gelu",
+        help="PI0.5/Gemma uses gelu. Current published Hub artifacts may only "
+        "have silu until flashrt-fp8-swiglu-ffn is rebuilt.",
+    )
+    parser.add_argument(
+        "--local-ffn-artifact",
+        default=None,
+        help="Optional local build/<variant> directory for validating an unreleased "
+        "flashrt-fp8-swiglu-ffn artifact. Other packages are still loaded from Hub.",
+    )
+    parser.add_argument(
+        "--local-qkv-artifact",
+        default=None,
+        help="Optional local build/<variant> directory for validating an unreleased "
+        "flashrt-qkv-cache-rope artifact.",
+    )
+    parser.add_argument(
+        "--attention-backend",
+        choices=("none", "sdpa"),
+        default="none",
+        help="`none` preserves the package-composition hotpath. `sdpa` runs real "
+        "non-causal attention on the Q/K/V produced by flashrt-qkv-cache-rope.",
+    )
+    parser.add_argument(
+        "--decoder-qkv-backend",
+        choices=("decode-stage", "gqa-cache"),
+        default="decode-stage",
+        help="`decode-stage` uses the published single-token decode staging APIs. "
+        "`gqa-cache` uses qkv_split_rope_kvcache_bf16 for PI0.5-style decoder "
+        "packed GQA QKV plus K/V cache writes.",
+    )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iters", type=int, default=50)
     parser.add_argument("--seed", type=int, default=0)

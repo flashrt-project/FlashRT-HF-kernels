@@ -3,6 +3,18 @@
 
 #include <torch/all.h>
 
+void gate_residual_bf16(
+    torch::Tensor const& residual,
+    torch::Tensor const& x,
+    torch::Tensor const& gate,
+    torch::Tensor& out);
+
+void bias_residual_bf16(
+    torch::Tensor const& residual,
+    torch::Tensor const& x,
+    torch::Tensor const& bias,
+    torch::Tensor& out);
+
 void joint3_bias_gate_residual_bf16(
     torch::Tensor const& v_residual,
     torch::Tensor const& v_x,

@@ -12,11 +12,16 @@ Required before publishing this package:
 
    - `fp8_gemm_bf16`
    - `silu_mul_merged_quantize_fp8_static_bf16`
+   - `gelu_mul_merged_quantize_fp8_static_bf16`
    - `fp8_swiglu_mlp_bf16`
+   - `fp8_geglu_mlp_bf16`
    - invalid shape rejection
 
-   Correctness output must include `max_abs`, `mean_abs`, `p99_abs`, cosine
-   similarity, and relative error.
+   The full MLP ops must be exact against the staged kernel composition
+   (`max_abs=0`). Activation-quantization checks against PyTorch eager are
+   distributional because CUDA libdevice and PyTorch eager can land on opposite
+   sides of FP8 bin boundaries for a small fraction of transcendental
+   activation values.
 
 2. Source-extension benchmark:
 

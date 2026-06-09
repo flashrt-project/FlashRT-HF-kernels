@@ -1,12 +1,12 @@
 # flashrt-fp8-swiglu-ffn
 
-Tensor-facing FlashRT FP8 SwiGLU FFN kernels for Hugging Face `kernels`.
+Tensor-facing FlashRT FP8 GeGLU/SwiGLU FFN kernels for Hugging Face `kernels`.
 
 This package is the second-batch VLA/runtime package for Gemma-style FFN
 islands:
 
 ```text
-FP8 input -> FP8 gate/up GEMM -> SiLU(gate) * up -> FP8 requant -> FP8 down GEMM -> BF16 output
+FP8 input -> FP8 gate/up GEMM -> GeGLU/SwiGLU gate activation -> FP8 requant -> FP8 down GEMM -> BF16 output
 ```
 
 The APIs are generic Tensor APIs. Model-specific PI0.5/GROOT/Wan runtime wiring
@@ -16,7 +16,9 @@ lives in `demos/`, not in the package entry points.
 
 - `fp8_gemm_bf16(input, weight, input_scale, weight_scale, out=None)`
 - `silu_mul_merged_quantize_fp8_static_bf16(gate_up_bf16, output_scale, out_fp8=None)`
+- `gelu_mul_merged_quantize_fp8_static_bf16(gate_up_bf16, output_scale, out_fp8=None)`
 - `fp8_swiglu_mlp_bf16(input, gate_up_weight, down_weight, input_scale, gate_up_weight_scale, hidden_scale, down_weight_scale, gate_up_bf16=None, hidden_fp8=None, out=None)`
+- `fp8_geglu_mlp_bf16(input, gate_up_weight, down_weight, input_scale, gate_up_weight_scale, hidden_scale, down_weight_scale, gate_up_bf16=None, hidden_fp8=None, out=None)`
 
 Tensor conventions:
 
@@ -47,7 +49,7 @@ x_fp8 = torch.clamp(x.float() / x_scale, -448, 448).to(torch.float8_e4m3fn)
 gate_up_w_fp8 = torch.clamp(gate_up_w.float() / gate_up_scale, -448, 448).to(torch.float8_e4m3fn)
 down_w_fp8 = torch.clamp(down_w.float() / down_scale, -448, 448).to(torch.float8_e4m3fn)
 
-y = ops.fp8_swiglu_mlp_bf16(
+y = ops.fp8_geglu_mlp_bf16(
     x_fp8,
     gate_up_w_fp8,
     down_w_fp8,
@@ -57,6 +59,10 @@ y = ops.fp8_swiglu_mlp_bf16(
     down_scale,
 )
 ```
+
+Use `fp8_geglu_mlp_bf16` for Gemma/PI0.5-style
+`gelu_pytorch_tanh(gate) * up`. Use `fp8_swiglu_mlp_bf16` for true
+`SiLU(gate) * up` blocks.
 
 For hot-path runtime use, load the kernel once, keep weights/scales resident,
 preallocate `gate_up_bf16`, `hidden_fp8`, and `out`, and capture the repeated

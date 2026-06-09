@@ -71,6 +71,18 @@ class SourceOps:
         )
         return v_out, a_out, u_out
 
+    def gate_residual_bf16(self, residual, x, gate, out=None):
+        if out is None:
+            out = torch.empty_like(residual)
+        self._ops.gate_residual_bf16(residual, x, gate, out)
+        return out
+
+    def bias_residual_bf16(self, residual, x, bias, out=None):
+        if out is None:
+            out = torch.empty_like(residual)
+        self._ops.bias_residual_bf16(residual, x, bias, out)
+        return out
+
     def joint3_bias_gate_residual_action_nobias_bf16(
         self,
         v_residual,
@@ -174,6 +186,10 @@ def ref_gate(residual, x, gate):
     return (residual.float() + x.float() * gate.float()).to(torch.bfloat16)
 
 
+def ref_bias_residual(residual, x, bias):
+    return (residual.float() + x.float() + bias.float().view(1, -1)).to(torch.bfloat16)
+
+
 def ref_add(residual, x):
     return (residual.float() + x.float()).to(torch.bfloat16)
 
@@ -198,6 +214,44 @@ def assert_close_distribution(name: str, got: torch.Tensor, expected: torch.Tens
         f"PASS {name}: max_abs={max_abs:.6f} mean_abs={mean_abs:.6f} "
         f"p99_abs={p99_abs:.6f} cosine={cosine:.8f}"
     )
+
+
+def run_gate_residual_case(ops, label: str, rows: int, dim: int) -> None:
+    residual = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+    x = torch.randn_like(residual)
+    gate = torch.randn_like(residual)
+    out = torch.empty_like(residual)
+    got = ops.gate_residual_bf16(residual, x, gate, out=out)
+    expected = ref_gate(residual, x, gate)
+    if got is not out:
+        raise AssertionError(f"{label}/gate_residual did not reuse out")
+    assert_close_distribution(f"{label}/gate_residual", out, expected)
+
+    residual_inplace = residual.clone()
+    expected_inplace = ref_gate(residual_inplace, x, gate)
+    got_inplace = ops.gate_residual_bf16(residual_inplace, x, gate, out=residual_inplace)
+    if got_inplace is not residual_inplace:
+        raise AssertionError(f"{label}/gate_residual_inplace did not reuse residual")
+    assert_close_distribution(f"{label}/gate_residual_inplace", residual_inplace, expected_inplace)
+
+
+def run_bias_residual_case(ops, label: str, rows: int, dim: int) -> None:
+    residual = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+    x = torch.randn_like(residual)
+    bias = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+    out = torch.empty_like(residual)
+    got = ops.bias_residual_bf16(residual, x, bias, out=out)
+    expected = ref_bias_residual(residual, x, bias)
+    if got is not out:
+        raise AssertionError(f"{label}/bias_residual did not reuse out")
+    assert_close_distribution(f"{label}/bias_residual", out, expected)
+
+    residual_inplace = residual.clone()
+    expected_inplace = ref_bias_residual(residual_inplace, x, bias)
+    got_inplace = ops.bias_residual_bf16(residual_inplace, x, bias, out=residual_inplace)
+    if got_inplace is not residual_inplace:
+        raise AssertionError(f"{label}/bias_residual_inplace did not reuse residual")
+    assert_close_distribution(f"{label}/bias_residual_inplace", residual_inplace, expected_inplace)
 
 
 def run_case(ops, label: str, rows: tuple[int, int, int], dim: int) -> None:
@@ -244,8 +298,16 @@ def run(args) -> None:
     }
     if args.mode == "smoke":
         shapes = {"small": shapes["small"]}
+    gate_shapes = {
+        "pi05_decoder": (10, 1024),
+        "pi05_decoder_attn": (10, 2048),
+        "vlm": (512, 1152),
+    }
     for label, (rows, dim) in shapes.items():
         run_case(ops, label, rows, dim)
+    for label, (rows, dim) in gate_shapes.items():
+        run_gate_residual_case(ops, label, rows, dim)
+        run_bias_residual_case(ops, label, rows, dim)
 
 
 def main() -> None:

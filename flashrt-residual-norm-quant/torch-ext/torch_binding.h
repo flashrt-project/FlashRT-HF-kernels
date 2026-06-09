@@ -9,6 +9,13 @@ void rms_norm_bf16(
     double eps,
     torch::Tensor& out);
 
+void layer_norm_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double eps,
+    torch::Tensor& out);
+
 void rms_norm_quant_fp8_static_bf16(
     torch::Tensor const& x,
     torch::Tensor const& weight,

@@ -1,12 +1,13 @@
 # benchmarks
 
-Package-level microbenchmarks for FP8 SwiGLU FFN blocks.
+Package-level microbenchmarks for FP8 GeGLU/SwiGLU FFN blocks.
 
 The benchmark compares:
 
 - FlashRT Tensor API: `fp8_swiglu_mlp_bf16`
-- PyTorch eager reference: FP8 dequant GEMM, `SiLU(gate) * up`, FP8 requant,
-  FP8 dequant GEMM
+- FlashRT Tensor API: `fp8_geglu_mlp_bf16`
+- PyTorch eager reference: FP8 dequant GEMM, `SiLU(gate) * up` or
+  `GELU_tanh(gate) * up`, FP8 requant, FP8 dequant GEMM
 - Optional `torch.compile` reference after the compiled reference is verified
   against eager
 

@@ -41,19 +41,21 @@ Published v1 packages:
 | `flashrt/flashrt-smallm-gemm` | Shape-specialized SM120 NVFP4 W4A4 decode matvec. | You need a low-batch/decode M=1 W4A4 matvec with BF16 output on supported Blackwell shapes. |
 | `flashrt/flashrt-fused-quant` | Fused activation plus NVFP4 quantization. | You need memory-bound `SiLU(gate) * up` activation and NVFP4 swizzled quantization in one call. |
 
-Source-validated V2 candidate packages for the VLA/world-model runtime demo:
+Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 
 | Package | What it contains | Use it when |
 | --- | --- | --- |
 | `flashrt/flashrt-fp8-swiglu-ffn` | FP8 gate/up GEMM, SiLU product, FP8 requant, and FP8 down GEMM for SwiGLU FFNs. | You want Gemma-style VLA/VLM language-path FFN islands without returning to PyTorch between FP8 GEMMs. |
 | `flashrt/flashrt-residual-norm-quant` | Residual add, RMSNorm, and static FP8 activation producer kernels. | You need to feed adjacent FP8 blocks from a BF16 residual path with one fused producer. |
-| `flashrt/flashrt-qkv-cache-rope` | Packed-QKV split, Q/K RMSNorm, RoPE, joint Q/K/V workspace writes, decode Q staging, and KV cache-write. | You need attention staging for VLA/VLM/video blocks, including graph-friendly single-token decode cache writes. |
+| `flashrt/flashrt-qkv-cache-rope` | Packed-QKV split, Q/K RMSNorm, RoPE, joint Q/K/V workspace writes, GQA sequence cache writes, decode Q staging, and KV cache-write. | You need attention staging for VLA/VLM/video blocks, including graph-friendly decoder KV cache writes. |
 | `flashrt/flashrt-vla-residual-gates` | Video/action/und joint gated residual updates. | You have multi-segment VLA block glue and want one CUDA launch for the segment residual/gate updates. |
 | `flashrt/flashrt-adaptive-norms` | AdaRMSNorm/style modulation and fused residual/AdaRMSNorm/static-FP8 output. | You need DiT/VLA/world-model adaptive normalization and optional FP8 activation output. |
 | `flashrt/flashrt-spatiotemporal-layout` | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers. | You need world-model/video layout glue to keep the model-demo hot path on CUDA. |
 
-The V2 candidates are not public hardware claims until their kernel-builder
-artifacts and installed-artifact validation are completed.
+Package-specific hardware claims should use the corresponding built-artifact
+and multi-hardware validation rows. The PI0.5 runtime demo composes these
+packages as a fixed-shape hot path with preloaded ops, persistent buffers,
+static calibration, and CUDA Graph replay.
 
 ## Quick Examples
 
@@ -147,10 +149,24 @@ ops.decode_k_norm_rope_kvwrite_devpos_bf16(
     k_cache,
     v_cache,
 )
+
+ops.qkv_split_rope_kvcache_bf16(
+    packed_qkv,      # (batch, seq_len, (q_heads + 2 * kv_heads) * head_dim), BF16
+    rope,            # (>= seq_len, head_dim), BF16 [cos0, sin0, ...] rows
+    q_heads=8,
+    kv_heads=1,
+    head_dim=128,
+    cache_offset=prefix_len,
+    q_out=q_seq,     # (batch, seq_len, q_heads, head_dim), BF16
+    k_cache=k_cache, # (batch, max_seq_len, kv_heads, head_dim), BF16
+    v_cache=v_cache,
+)
 ```
 
 `decode_*` APIs are fixed to `head_dim == 128` and use BF16 `(64,)` cos/sin
-vectors with a rotate-half RoPE contract. Unsupported shapes are rejected.
+vectors with a rotate-half RoPE contract. `qkv_split_rope_kvcache_bf16` is the
+sequence GQA form and uses interleaved BF16 `(seq_len, head_dim)` RoPE rows.
+Unsupported shapes are rejected.
 
 ### World-Model Layout Glue
 

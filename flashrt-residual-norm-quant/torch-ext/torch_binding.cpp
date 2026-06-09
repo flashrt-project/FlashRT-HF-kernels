@@ -112,6 +112,35 @@ void rms_norm_bf16(
 #endif
 }
 
+void layer_norm_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double eps,
+    torch::Tensor& out) {
+  check_bf16_matrix(x, "x");
+  check_bf16_vector(weight, "weight", x.size(1), x.get_device());
+  check_bf16_vector(bias, "bias", x.size(1), x.get_device());
+  check_bf16_matrix(out, "out");
+  check_same_shape_device(x, out, "x", "out");
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::residual_norm_quant::layer_norm_bf16(
+      x.data_ptr(),
+      weight.data_ptr(),
+      bias.data_ptr(),
+      out.data_ptr(),
+      static_cast<int>(x.size(0)),
+      static_cast<int>(x.size(1)),
+      static_cast<float>(eps),
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-residual-norm-quant was not built with CUDA support");
+#endif
+}
+
 void rms_norm_quant_fp8_static_bf16(
     torch::Tensor const& x,
     torch::Tensor const& weight,
@@ -175,6 +204,8 @@ void residual_add_rms_norm_quant_fp8_static_bf16(
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("rms_norm_bf16("
           "Tensor x, Tensor weight, float eps, Tensor! out) -> ()");
+  ops.def("layer_norm_bf16("
+          "Tensor x, Tensor weight, Tensor bias, float eps, Tensor! out) -> ()");
   ops.def("rms_norm_quant_fp8_static_bf16("
           "Tensor x, Tensor weight, Tensor scale, float eps, Tensor! out) -> ()");
   ops.def("residual_add_rms_norm_quant_fp8_static_bf16("
@@ -182,6 +213,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "float eps, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("rms_norm_bf16", torch::kCUDA, &rms_norm_bf16);
+  ops.impl("layer_norm_bf16", torch::kCUDA, &layer_norm_bf16);
   ops.impl("rms_norm_quant_fp8_static_bf16",
            torch::kCUDA,
            &rms_norm_quant_fp8_static_bf16);

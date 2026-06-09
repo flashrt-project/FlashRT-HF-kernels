@@ -41,6 +41,34 @@ A package may be promoted from draft to buildable when:
 - `kernel-builder build <package>` succeeds locally.
 - `kernel-builder check-abi <package>` succeeds for produced native modules.
 
+## Release / HF Jobs Workflow
+
+Before pushing a package change that should rebuild Hub artifacts:
+
+1. Identify every package with changed CUDA/C++ bindings, Python wrappers,
+   tests, benchmarks, `build.toml`, `flake.nix`, or `flake.lock`.
+2. Run source correctness for those packages with the strictest available
+   shape mode. Use package tests rather than model demos as the package gate.
+3. Run representative benchmarks for changed performance-sensitive APIs and
+   record shape, dtype, tolerance, and hardware in package docs or internal
+   notes.
+4. Run `kernel-builder-docker check-config .` from each changed package
+   directory.
+5. Keep `build/`, `result/`, `dist/`, wheels, `__pycache__/`, and
+   `internal-tests/` outputs untracked. `scripts/prebuild_check.py` is expected
+   to fail until ignored local build artifacts are removed or the check is run
+   in a clean clone.
+6. Use `.github/workflows/build-kernels-hf-jobs.yml` for release packaging and
+   upload. Add any newly changed package to the workflow path filters and
+   matrix before relying on push-triggered builds.
+7. After HF Jobs uploads artifacts, verify by loading through
+   `get_kernel("flashrt/<package>", version=1, trust_remote_code=True)` in a
+   matching PyTorch/CUDA environment and rerun installed-artifact correctness.
+
+For the PI0.5 runtime demo, do not use random-input OpenPI smoke rows as public
+baselines. Public runtime comparisons should use the real LIBERO bundle path
+or a clearly labeled full policy-wrapper benchmark.
+
 ## Source Sync Rules
 
 For each package, document source provenance in `SYNC.md` before copying code.

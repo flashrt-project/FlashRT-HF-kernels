@@ -148,6 +148,47 @@ class SourceOps:
         )
         return q_cat_out, k_cat_out, v_cat_out
 
+    def qkv_split_rope_kvcache_bf16(
+        self,
+        packed_qkv,
+        rope,
+        q_heads,
+        kv_heads,
+        head_dim,
+        cache_offset,
+        q_out=None,
+        k_cache=None,
+        v_cache=None,
+        max_seq_len=None,
+    ):
+        batch, seq_len, _ = packed_qkv.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, head_dim),
+                device=packed_qkv.device,
+                dtype=torch.bfloat16,
+            )
+        if k_cache is None or v_cache is None:
+            if max_seq_len is None:
+                max_seq_len = cache_offset + seq_len
+            cache_shape = (batch, max_seq_len, kv_heads, head_dim)
+            if k_cache is None:
+                k_cache = torch.empty(cache_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+            if v_cache is None:
+                v_cache = torch.empty(cache_shape, device=packed_qkv.device, dtype=torch.bfloat16)
+        self._ops.qkv_split_rope_kvcache_bf16(
+            packed_qkv,
+            rope,
+            int(q_heads),
+            int(kv_heads),
+            int(head_dim),
+            int(cache_offset),
+            q_out,
+            k_cache,
+            v_cache,
+        )
+        return q_out, k_cache, v_cache
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -202,6 +243,13 @@ def make_freqs(seq_len: int, head_dim: int):
     return torch.cos(theta).contiguous(), torch.sin(theta).contiguous()
 
 
+def make_interleaved_rope(seq_len: int, head_dim: int):
+    theta = torch.randn((seq_len, head_dim // 2), device="cuda", dtype=torch.float32)
+    cos = torch.cos(theta).to(torch.bfloat16)
+    sin = torch.sin(theta).to(torch.bfloat16)
+    return torch.stack([cos, sin], dim=-1).reshape(seq_len, head_dim).contiguous()
+
+
 def make_case(batch: int, seq_len: int, heads: int, head_dim: int):
     dim = heads * head_dim
     packed = torch.randn((batch, seq_len, 3 * dim), device="cuda", dtype=torch.bfloat16)
@@ -240,6 +288,20 @@ def apply_pair_rope(x: torch.Tensor, freqs_re: torch.Tensor, freqs_im: torch.Ten
     out = torch.empty_like(pair.float())
     out[..., 0] = re * fr - im * fi
     out[..., 1] = re * fi + im * fr
+    return out.reshape(batch, seq_len, heads, head_dim).to(torch.bfloat16)
+
+
+def apply_interleaved_pair_rope(x: torch.Tensor, rope: torch.Tensor):
+    batch, seq_len, heads, head_dim = x.shape
+    pair = x.float().reshape(batch, seq_len, heads, head_dim // 2, 2)
+    re = pair[..., 0]
+    im = pair[..., 1]
+    rope_pair = rope[:seq_len].float().reshape(seq_len, head_dim // 2, 2)
+    cos = rope_pair[..., 0].view(1, seq_len, 1, head_dim // 2)
+    sin = rope_pair[..., 1].view(1, seq_len, 1, head_dim // 2)
+    out = torch.empty_like(pair.float())
+    out[..., 0] = re * cos - im * sin
+    out[..., 1] = re * sin + im * cos
     return out.reshape(batch, seq_len, heads, head_dim).to(torch.bfloat16)
 
 
@@ -288,6 +350,16 @@ def torch_ref_no_rope(packed, q_w, k_w, heads, head_dim, eps):
 
 def torch_ref_decode(x, weight, cos, sin, eps):
     return apply_rotate_half_rope_128(rms_norm(x, weight, eps).to(torch.bfloat16), cos, sin)
+
+
+def torch_ref_kvcache(packed_qkv, rope, q_heads, kv_heads, head_dim):
+    batch, seq_len, _ = packed_qkv.shape
+    q_dim = q_heads * head_dim
+    kv_dim = kv_heads * head_dim
+    q = packed_qkv[:, :, :q_dim].view(batch, seq_len, q_heads, head_dim)
+    k = packed_qkv[:, :, q_dim : q_dim + kv_dim].view(batch, seq_len, kv_heads, head_dim)
+    v = packed_qkv[:, :, q_dim + kv_dim :].view(batch, seq_len, kv_heads, head_dim)
+    return apply_interleaved_pair_rope(q, rope), apply_interleaved_pair_rope(k, rope), v
 
 
 def make_joint3_case(video_len: int, action_len: int, und_len: int, heads: int, head_dim: int):
@@ -623,6 +695,85 @@ def run_decode_kv(ops, name: str, heads: int, devpos: bool, args) -> Result:
     )
 
 
+def run_kvcache_gqa(
+    ops,
+    name: str,
+    batch: int,
+    seq_len: int,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    args,
+) -> Result:
+    qkv_dim = (q_heads + 2 * kv_heads) * head_dim
+    packed = torch.randn((batch, seq_len, qkv_dim), device="cuda", dtype=torch.bfloat16)
+    rope = make_interleaved_rope(seq_len, head_dim)
+    cache_offset = 2
+    max_seq_len = cache_offset + seq_len + 2
+    q_out = torch.empty((batch, seq_len, q_heads, head_dim), device="cuda", dtype=torch.bfloat16)
+    k_cache = torch.empty((batch, max_seq_len, kv_heads, head_dim), device="cuda", dtype=torch.bfloat16)
+    v_cache = torch.empty_like(k_cache)
+    got_q, got_k_cache, got_v_cache = ops.qkv_split_rope_kvcache_bf16(
+        packed,
+        rope,
+        q_heads,
+        kv_heads,
+        head_dim,
+        cache_offset,
+        q_out,
+        k_cache,
+        v_cache,
+    )
+    exp_q, exp_k, exp_v = torch_ref_kvcache(packed, rope, q_heads, kv_heads, head_dim)
+    sl = slice(cache_offset, cache_offset + seq_len)
+    q_p99, q_cos = metrics(got_q, exp_q)
+    k_p99, k_cos = metrics(got_k_cache[:, sl], exp_k)
+    v_p99, v_cos = metrics(got_v_cache[:, sl], exp_v)
+
+    def flashrt_fn():
+        return ops.qkv_split_rope_kvcache_bf16(
+            packed,
+            rope,
+            q_heads,
+            kv_heads,
+            head_dim,
+            cache_offset,
+            q_out,
+            k_cache,
+            v_cache,
+        )
+
+    def eager_fn():
+        exp_q_local, exp_k_local, exp_v_local = torch_ref_kvcache(packed, rope, q_heads, kv_heads, head_dim)
+        q_out.copy_(exp_q_local)
+        k_cache[:, sl].copy_(exp_k_local)
+        v_cache[:, sl].copy_(exp_v_local)
+        return q_out, k_cache, v_cache
+
+    flashrt_us = time_us(flashrt_fn, args.warmup, args.iters)
+    eager_us = time_us(eager_fn, args.warmup, args.iters)
+    status = (
+        "PASS"
+        if q_p99 <= args.p99_abs_limit and k_p99 <= args.p99_abs_limit and v_p99 == 0.0
+        else "FAIL"
+    )
+    return Result(
+        shape=name,
+        batch=batch,
+        seq_len=seq_len,
+        heads=q_heads,
+        head_dim=head_dim,
+        flashrt_us=flashrt_us,
+        torch_eager_us=eager_us,
+        speedup_vs_eager=eager_us / flashrt_us,
+        q_p99_abs=max(q_p99, v_p99),
+        k_p99_abs=k_p99,
+        q_cosine=min(q_cos, v_cos),
+        k_cosine=k_cos,
+        status=status,
+    )
+
+
 def write_markdown(path: Path, results: list[Result]) -> None:
     lines = [
         "| Shape | B,L,H,D | FlashRT us | Eager us | vs eager | Q p99 | K p99 | Q cosine | K cosine | Status |",
@@ -658,11 +809,14 @@ def main() -> None:
     results = [run_one(ops, name, SHAPES[name], args) for name in SHAPE_GROUPS[args.shapes]]
     if args.shapes in ("smoke", "all"):
         results.append(run_joint3(ops, "joint3_small", 64, 8, 4, 8, 128, args))
+        results.append(run_kvcache_gqa(ops, "pi05_decoder_gqa_kvcache", 1, 10, 8, 1, 256, args))
     if args.shapes in ("headline", "all"):
         results.append(run_joint3(ops, "joint3_vla", 2520, 16, 16, 24, 128, args))
         results.append(run_decode_q(ops, "decode_q_stage_h24", 24, args))
         results.append(run_decode_kv(ops, "decode_kvwrite_h8", 8, False, args))
         results.append(run_decode_kv(ops, "decode_kvwrite_devpos_h8", 8, True, args))
+    if args.shapes == "headline":
+        results.append(run_kvcache_gqa(ops, "pi05_decoder_gqa_kvcache", 1, 10, 8, 1, 256, args))
 
     for r in results:
         print(

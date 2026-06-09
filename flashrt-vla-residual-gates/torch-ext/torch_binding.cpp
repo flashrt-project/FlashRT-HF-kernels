@@ -54,6 +54,63 @@ void check_bias(torch::Tensor const& bias, int64_t dim, const char* name) {
 
 }  // namespace
 
+void gate_residual_bf16(
+    torch::Tensor const& residual,
+    torch::Tensor const& x,
+    torch::Tensor const& gate,
+    torch::Tensor& out) {
+  check_matrix(residual, "residual");
+  check_like(x, residual, "x", "residual");
+  check_like(gate, residual, "gate", "residual");
+  check_like(out, residual, "out", "residual");
+  check_same_device(residual, x, "residual", "x");
+  check_same_device(residual, gate, "residual", "gate");
+  check_same_device(residual, out, "residual", "out");
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(residual.device());
+  auto stream = at::cuda::getCurrentCUDAStream(residual.get_device()).stream();
+  flash_rt::vla_residual_gates::gate_residual_bf16(
+      residual.data_ptr(),
+      x.data_ptr(),
+      gate.data_ptr(),
+      out.data_ptr(),
+      static_cast<int>(residual.numel()),
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-vla-residual-gates was not built with CUDA support");
+#endif
+}
+
+void bias_residual_bf16(
+    torch::Tensor const& residual,
+    torch::Tensor const& x,
+    torch::Tensor const& bias,
+    torch::Tensor& out) {
+  check_matrix(residual, "residual");
+  check_like(x, residual, "x", "residual");
+  check_like(out, residual, "out", "residual");
+  check_bias(bias, residual.size(1), "bias");
+  check_same_device(residual, x, "residual", "x");
+  check_same_device(residual, bias, "residual", "bias");
+  check_same_device(residual, out, "residual", "out");
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(residual.device());
+  auto stream = at::cuda::getCurrentCUDAStream(residual.get_device()).stream();
+  flash_rt::vla_residual_gates::bias_residual_bf16(
+      residual.data_ptr(),
+      x.data_ptr(),
+      bias.data_ptr(),
+      out.data_ptr(),
+      static_cast<int>(residual.size(0)),
+      static_cast<int>(residual.size(1)),
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-vla-residual-gates was not built with CUDA support");
+#endif
+}
+
 void joint3_bias_gate_residual_bf16(
     torch::Tensor const& v_residual,
     torch::Tensor const& v_x,
@@ -195,6 +252,10 @@ void joint3_bias_gate_residual_action_nobias_bf16(
 }
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+  ops.def("gate_residual_bf16("
+          "Tensor residual, Tensor x, Tensor gate, Tensor! out) -> ()");
+  ops.def("bias_residual_bf16("
+          "Tensor residual, Tensor x, Tensor bias, Tensor! out) -> ()");
   ops.def("joint3_bias_gate_residual_bf16("
           "Tensor v_residual, Tensor v_x, Tensor v_bias, Tensor v_gate, Tensor! v_out, "
           "Tensor a_residual, Tensor a_x, Tensor a_bias, Tensor a_gate, Tensor! a_out, "
@@ -204,6 +265,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor a_residual, Tensor a_x, Tensor a_gate, Tensor! a_out, "
           "Tensor u_residual, Tensor u_x, Tensor! u_out) -> ()");
 #if defined(CUDA_KERNEL)
+  ops.impl("gate_residual_bf16",
+           torch::kCUDA,
+           &gate_residual_bf16);
+  ops.impl("bias_residual_bf16",
+           torch::kCUDA,
+           &bias_residual_bf16);
   ops.impl("joint3_bias_gate_residual_bf16",
            torch::kCUDA,
            &joint3_bias_gate_residual_bf16);
