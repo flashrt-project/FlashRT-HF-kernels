@@ -196,9 +196,10 @@ PI0.5 HF-kernel runtime milestone:
 - HF-kernel SigLIP vision/projector -> HF-kernel Gemma encoder -> HF-kernel
   PI0.5 decoder -> 10-step denoise -> action.
 - Timed hot path has `torch_gaps=[]` and CUDA Graph replay enabled.
-- RTX 5090 graph latency: `22.464 ms` (`44.52 Hz`) with BF16 projections;
-  `~21.6 ms` with `--fp8-projections` (QKV/O/vision projection GEMMs in FP8,
-  published Hub kernels only, action `cosine ~0.99986` vs official FlashRT).
+- RTX 5090 graph latency: `~21.6 ms` (`~46.3 Hz`, `11.9x` over the baseline) —
+  default path runs QKV/O/vision projection GEMMs in FP8 (published Hub kernels
+  only), action `cosine ~0.99986` vs official FlashRT. `--no-fp8-projections`
+  gives the BF16-projection path (`~22.5 ms`, `cosine ~0.99996`).
 - Current conservative OpenPI/PyTorch BF16 first-call baseline:
   `257.078 ms` (`3.89 Hz`).
 - Action correctness vs HF reference: `p99_abs=0.007812`,

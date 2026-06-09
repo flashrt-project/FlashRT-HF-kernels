@@ -1787,16 +1787,18 @@ def main() -> None:
     visencdec.add_argument("--attention-backend", choices=("fa2",), default="fa2")
     visencdec.add_argument(
         "--fp8-projections",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Run QKV/O/vision projections in FP8 (published Hub kernels only). "
-        "Deeper quantization path; ~20.7 ms on RTX 5090 vs ~22.5 ms BF16-projection default.",
+        "Default ON: ~21.6 ms on RTX 5090. Use --no-fp8-projections for the "
+        "BF16-projection path (~22.5 ms, slightly higher cosine).",
     )
     visencdec.add_argument("--warmup", type=int, default=2)
     visencdec.add_argument("--iters", type=int, default=10)
     visencdec.add_argument("--cuda-graph", action="store_true")
     visencdec.add_argument("--p99-abs-limit", type=float, default=0.5)
     visencdec.add_argument("--cosine-limit", type=float, default=0.9)
-    visencdec.add_argument("--encoder-p99-abs-limit", type=float, default=0.5)
+    visencdec.add_argument("--encoder-p99-abs-limit", type=float, default=0.9)
     visencdec.add_argument("--encoder-cosine-limit", type=float, default=0.9)
     visencdec.add_argument("--vision-p99-abs-limit", type=float, default=0.5)
     visencdec.add_argument("--vision-cosine-limit", type=float, default=0.9)

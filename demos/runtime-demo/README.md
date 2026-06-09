@@ -80,7 +80,10 @@ OpenPI baseline now live under `demos/runtime-demo/test/`.
    noise, and reference action, so **the timed hot path runs without invoking
    OpenPI or FlashRT** (it imports neither at runtime).
 
-### Run — BF16-projection (default)
+### Run
+
+The default path runs the QKV / O / vision projection GEMMs in FP8 (published
+Hub kernels only):
 
 ```bash
 PY=/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python
@@ -89,32 +92,17 @@ $PY demos/runtime-demo/pi05_hf_decoder_e2e.py run-vision-encoder-decoder \
   --checkpoint /path/to/pi05_libero_pytorch \
   --calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-decoder-static-scales.json \
   --encoder-calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-frame50-static-scales.json \
-  --encoder-p99-abs-limit 0.75 --cuda-graph --warmup 8 --iters 30
+  --cuda-graph --warmup 8 --iters 30
 ```
 
-Expected on RTX 5090: `status=pass`, `graph_us ~= 22500` (≈22.5 ms, ≈44 Hz),
-`torch_gaps=[]`, action `cosine ~= 0.99996` vs the HF reference and `~= 0.99995`
-vs the official FlashRT decoder output.
-
-### Run — FP8-projection (deeper quantization)
-
-Add `--fp8-projections` to also run the QKV / O / vision projection GEMMs in
-FP8 (published Hub kernels only); relax the encoder gate slightly:
-
-```bash
-$PY demos/runtime-demo/pi05_hf_decoder_e2e.py run-vision-encoder-decoder \
-  --encoder-bundle internal-tests/runtime-demo/pi05-real-images-encoder-x-kv-frame50.pt \
-  --checkpoint /path/to/pi05_libero_pytorch \
-  --calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-decoder-static-scales.json \
-  --encoder-calibration-input internal-tests/runtime-demo/pi05-hf-vision-encoder-frame50-static-scales.json \
-  --encoder-p99-abs-limit 0.9 --fp8-projections --cuda-graph --warmup 8 --iters 30
-```
-
-Expected on RTX 5090: `status=pass`, `graph_us ~= 21600` (≈21.6 ms), action
+Expected on RTX 5090: `status=pass`, `graph_us ~= 21600` (**≈21.6 ms, ≈46 Hz**,
+**11.9x** over the OpenPI/PyTorch first-call baseline), `torch_gaps=[]`, action
 `cosine ~= 0.99986` vs the official FlashRT decoder output — lossless within the
-action tolerance, and ≈1.7 ms faster than the BF16-projection path. Result
-artifact:
+action tolerance. Result artifact:
 `internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-fp8-projections.json`.
+
+Pass `--no-fp8-projections` for the BF16-projection path (`~22.5 ms`, action
+`cosine ~= 0.99996`).
 
 ### Regenerating the input bundle (optional — needs OpenPI + FlashRT)
 
@@ -397,16 +385,16 @@ Real-input PI0.5 HF-kernel runtime path on RTX 5090:
 - CUDA Graph: `ok`.
 - Static calibration: computed run and loaded-calibration run both pass.
 
-| Path | Scope | Latency ms | Hz | Notes |
-| --- | --- | ---: | ---: | --- |
-| OpenPI/PyTorch BF16 | First model call after construction | 257.078 | 3.89 | Real checkpoint, official OpenPI model path. This is the current conservative baseline until a full real-LIBERO policy-wrapper benchmark is added. |
-| FlashRT HF kernels (BF16 projections, default) | Real-input model runtime hot path, CUDA Graph replay | 22.464 | 44.52 | Normalized LIBERO bundle through HF kernels, persistent buffers, static calibration, CUDA Graph replay. |
-| FlashRT HF kernels (`--fp8-projections`) | Same hot path, QKV/O/vision projections in FP8 | ~21.6 | ~46.3 | Published Hub kernels only; action `cosine ~= 0.99986` vs official FlashRT output (lossless within tolerance). |
+| Path | Scope | Latency ms | Hz | Speedup | Notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| OpenPI/PyTorch BF16 | First model call after construction | 257.078 | 3.89 | 1.0x | Real checkpoint, official OpenPI model path. Conservative baseline until a full real-LIBERO policy-wrapper benchmark is added. |
+| FlashRT HF kernels | Real-input model runtime hot path, CUDA Graph replay | **21.6** | **46.3** | **11.9x** | Default path: QKV/O/vision projections in FP8, published Hub kernels only, persistent buffers, static calibration. Action `cosine ~= 0.99986` vs official FlashRT output (lossless within tolerance). |
 
-The default HF-kernel graph path is `11.44x` faster than the current
-OpenPI/PyTorch first-call baseline; `--fp8-projections` is roughly `11.9x`. A
-future policy-wrapper benchmark should report input preprocessing and bundle
-capture separately from the model runtime hot path.
+The HF-kernel graph path is `11.9x` faster than the current OpenPI/PyTorch
+first-call baseline. Pass `--no-fp8-projections` for the BF16-projection path
+(`~22.5 ms`, action `cosine ~= 0.99996`). A future policy-wrapper benchmark
+should report input preprocessing and bundle capture separately from the model
+runtime hot path.
 
 Correctness for
 `internal-tests/runtime-demo/pi05-hf-vision-encoder-decoder-frame50-static-loaded.json`:
