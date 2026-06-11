@@ -9,15 +9,14 @@ naive per-projection FP8 swap re-quantizes activations four times per layer
 and loses to cuBLAS at the small token counts pi05 runs; that path needs
 quantize fusion, not a drop-in).
 
-The model keeps its own ``torch.compile`` as the runtime layer -- the swapped
-modules are compile-clean, so the model recompiles around them and FP8 runs
+The policy keeps its own ``torch.compile`` as the runtime layer -- the swapped
+modules are compile-clean, so the policy recompiles around them and FP8 runs
 inside the existing CUDA graph. No custom runtime is needed.
 
-Key lesson encoded here: FP8 static scales MUST be calibrated on a *real*
-observation. pi05's prefix mixes image and text tokens with very wide
-activation magnitudes; calibrating on random inputs produces broken per-tensor
-scales and destroys the action output. Calibrate on a real frame from the
-dataset the checkpoint targets.
+Static FP8 scales are calibrated on a real observation from the target dataset
+(run through the policy's preprocessor) and captured in eager mode, since a
+compiled graph does not fire Python forward hooks. Per-tensor scales depend on
+the activation distribution, so a real observation is required.
 
 Measured on RTX 5090 (LIBERO finetune, 10 denoise steps), action expert +
 prefix MLPs swapped: ~62 ms -> ~53 ms end to end (about 1.17x) with action
