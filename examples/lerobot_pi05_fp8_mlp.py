@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Hot-plug FlashRT FP8 GeGLU MLP kernels into a LeRobot pi05 policy.
 
-This is a *partial* model-integration example: it replaces only the Gemma
-GeGLU MLP blocks (gate/up/down with gelu_pytorch_tanh) in pi05's two Gemma
-stacks -- the action expert and the prefix language model -- with the fused
-``fp8_geglu_mlp_bf16`` kernel. Attention projections are left untouched (a
-naive per-projection FP8 swap re-quantizes activations four times per layer
-and loses to cuBLAS at the small token counts pi05 runs; that path needs
-quantize fusion, not a drop-in).
+This is a partial integration example: it replaces the Gemma GeGLU MLP blocks
+(gate/up/down with gelu_pytorch_tanh) in pi05's two Gemma stacks -- the action
+expert and the prefix language model -- with the fused ``fp8_geglu_mlp_bf16``
+kernel. Attention projections are left in BF16.
 
 The policy keeps its own ``torch.compile`` as the runtime layer -- the swapped
 modules are compile-clean, so the policy recompiles around them and FP8 runs
