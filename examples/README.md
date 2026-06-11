@@ -60,6 +60,37 @@ is demonstrating drop-in replacement. For the fastest production path, connect
 FlashRT FP8 producers directly to FlashRT FP8 consumers so the model does not
 re-quantize BF16 activations at every layer.
 
+## 3. LeRobot pi05 (partial integration)
+
+`lerobot_pi05_fp8_mlp.py` hot-plugs the fused `fp8_geglu_mlp_bf16` kernel into
+the Gemma GeGLU MLP blocks of a real [LeRobot](https://github.com/huggingface/lerobot)
+pi05 policy (action expert + prefix language model). The model keeps its own
+`torch.compile`, so it simply recompiles around the FP8 modules.
+
+```bash
+pip install "lerobot[pi,dataset]"
+huggingface-cli login        # the PaliGemma tokenizer is gated
+python examples/lerobot_pi05_fp8_mlp.py
+```
+
+Measured on RTX 5090 (LIBERO finetune, 10 denoise steps): about `1.17x`
+end-to-end with action cosine similarity `~0.998` versus the BF16 baseline.
+
+Two lessons it encodes:
+
+- **Calibrate FP8 scales on a real observation.** pi05's prefix mixes image and
+  text tokens with very wide activation magnitudes; random-input calibration
+  produces broken per-tensor scales. The example pulls a real frame from the
+  dataset the checkpoint targets and runs the policy's own preprocessor.
+- **Calibrate in eager mode.** A compiled graph does not fire Python forward
+  hooks, so the example temporarily drops the compiled methods while capturing
+  activation statistics.
+
+It is *partial* on purpose: only the MLP blocks are swapped. The attention
+projections are small per-token GEMMs, and a naive per-projection FP8 swap
+re-quantizes activations four times per layer and loses to cuBLAS at those
+sizes -- that path needs quantize fusion, not a drop-in.
+
 ## Notes
 
 - `flashrt-fp8-ffn` expects FP8 E4M3 input and weights plus CUDA float32 scalar
