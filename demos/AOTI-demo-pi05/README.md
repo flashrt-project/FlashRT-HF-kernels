@@ -75,12 +75,13 @@ accumulating CUDA-graph memory.
   flow timestep, `torch.tensor(att_masks, device=cuda)` for the suffix mask), ~2
   host↔GPU syncs per step (~21 per call). This precomputes the timestep schedule
   once and builds the suffix mask on-device, dropping syncs to ~2 (bit-exact). It
-  also replaces the per-step `copy.deepcopy` of the prefix KV cache with a shallow
-  copy (new cache + layer objects, shared tensors), avoiding a full KV-tensor copy
-  each step — correctness-equivalent because the joint forward's `cache.update()`
-  reassigns via `cat`. It is a runtime monkeypatch of the policy's methods
-  (LeRobot source is untouched), so it is slightly more than a module swap; it
-  covers the non-RTC path.
+  also removes the per-step `copy.deepcopy` of the prefix KV cache: the joint
+  forward appends the suffix K/V to the shared cache, so the step lets it append
+  and then slices each layer back to the prefix length (a traceable tensor op, no
+  Python copy). That removes the loop's last graph break — the 10 steps now
+  compile as a single graph — and is what lets the loop export with AOTI. It is a
+  runtime monkeypatch of the policy's methods (LeRobot source is untouched), so it
+  is slightly more than a module swap; it covers the non-RTC path.
 - **torch.compile** — `max-autotune` on the denoise hot path (the runtime layer;
   no manual CUDA graph needed).
 - **torch.export + AOTInductor** (`export-aoti`) — compiles the cleanly-exportable
@@ -104,14 +105,15 @@ accumulating CUDA-graph memory.
 
 - This is the LeRobot-integration recipe. For FlashRT's own hand-built static hot
   path (manual CUDA graph, lower latency), see `demos/runtime-demo`.
-- Graph structure is no longer the lever: after the sync-free pass the whole
-  `sample_actions` compiles with a single graph break, and forcing a full CUDA
-  graph (`mode="reduce-overhead"`) is *slower* than `max-autotune` at pi05's small
-  shapes (autotuned kernels beat pure graph replay). So `max-autotune` is the
-  compiled ceiling for this FP8 coverage. The remaining headroom is compute —
-  attention and the QKV/O projections still run in BF16 — which needs FP8 with a
-  fused norm→FP8 producer for the projections (more than a drop-in, it edits the
-  attention path). A fully traceable KV-cache path is still what would unblock
-  full-loop AOTI export for ZeroGPU Spaces, separate from latency. Faster than
-  that means attacking the 10 steps themselves (step caching / fewer steps), which
-  changes the action output and must be validated on task success, not cosine.
+- After the sync-free pass the whole `sample_actions` compiles as a single graph
+  (0 breaks — the KV-cache slice-back replaces the per-step copy), which is what
+  unblocks full-loop AOTI export for ZeroGPU Spaces. Full-model compile beats
+  regional compilation here: ~54 ms (full, `max-autotune`) vs ~66 ms (regional, no
+  FP8) — full-model keeps the whole denoise loop under CUDA graphs, while a block
+  compiled and called in a Python loop can't stably use CUDA graphs (output
+  buffer reuse), so it falls back to no-cudagraphs and pays the launch overhead.
+  The remaining headroom is compute — attention and the QKV/O projections still
+  run in BF16 — which needs FP8 with a fused norm→FP8 producer (more than a
+  drop-in, it edits the attention path). Faster than that means attacking the 10
+  steps themselves (step caching / fewer steps), which changes the action output
+  and must be validated on task success, not cosine.

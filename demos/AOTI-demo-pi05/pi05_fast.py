@@ -257,15 +257,16 @@ def apply_sync_free_loop(policy) -> None:
     ``torch.tensor(att_masks, device=cuda)`` every step (~2 host syncs/step); the
     timestep schedule is precomputed once and the suffix attention mask is built
     on-device instead of from a Python list.
-    It also replaces the per-step ``copy.deepcopy`` of the prefix KV cache with a
-    shallow copy (new cache + layer objects, shared tensors), avoiding a copy of
-    every KV tensor each step — correctness-equivalent because the joint forward's
-    ``cache.update()`` reassigns via ``cat`` rather than writing in place.
+    It also removes the per-step ``copy.deepcopy`` of the prefix KV cache: the
+    joint forward appends the suffix K/V to the shared prefix cache, so instead of
+    copying the cache up front, the step lets it append and then slices each layer
+    back to the prefix length afterwards (a traceable tensor op, not a Python
+    object copy). That keeps the whole 10-step loop a single graph (no graph
+    break) and is what lets the loop export with AOTI.
 
     Applied as a runtime monkeypatch (LeRobot source is untouched). Covers the
     non-RTC inference path.
     """
-    import copy
     import types
 
     import torch.nn.functional as F
@@ -330,12 +331,16 @@ def apply_sync_free_loop(policy) -> None:
         pos = torch.sum(prefix_pad_masks, dim=-1)[:, None] + torch.cumsum(suffix_pad_masks, dim=1) - 1
         full_4d = self._prepare_attention_masks_4d(full)
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
-        kv = copy.copy(past_key_values)                              # shallow cache
-        kv.layers = [copy.copy(layer) for layer in past_key_values.layers]   # new layer objs, shared tensors
         outs, _ = self.paligemma_with_expert.forward(
-            attention_mask=full_4d, position_ids=pos, past_key_values=kv,
+            attention_mask=full_4d, position_ids=pos, past_key_values=past_key_values,
             inputs_embeds=[None, suffix_embs], use_cache=False, adarms_cond=[None, adarms_cond],
         )
+        # the joint forward appended this step's suffix K/V to the shared prefix
+        # cache; slice each layer back to the prefix length so the next step starts
+        # clean (traceable tensor op, no Python copy -> no graph break).
+        for layer in past_key_values.layers:
+            layer.keys = layer.keys[:, :, :prefix_len, :]
+            layer.values = layer.values[:, :, :prefix_len, :]
         suffix_out = outs[1][:, -self.config.chunk_size:].to(torch.float32)
         return self.action_out_proj(suffix_out)
 
