@@ -98,10 +98,14 @@ python run_benchmark.py --single --no-fp8        # compile-only rung
 
 - This is the LeRobot-integration recipe. For FlashRT's own hand-built static hot
   path (manual CUDA graph, lower latency), see `demos/runtime-demo`.
-- The next lossless lever is a single CUDA graph for the 10-step loop. The
-  sync-free pass already removes the per-step syncs and the deepcopy (now a shallow
-  copy), but that shallow copy is still Python, so the loop does not yet capture as
-  one graph; a fully traceable KV-cache path would close that and also unblock
-  full-loop AOTI export. Beyond that, going faster means attacking the 10 steps
-  themselves (step caching / fewer steps), which changes the action output and must
-  be validated on task success, not cosine.
+- Graph structure is no longer the lever: after the sync-free pass the whole
+  `sample_actions` compiles with a single graph break, and forcing a full CUDA
+  graph (`mode="reduce-overhead"`) is *slower* than `max-autotune` at pi05's small
+  shapes (autotuned kernels beat pure graph replay). So `max-autotune` is the
+  compiled ceiling for this FP8 coverage. The remaining headroom is compute —
+  attention and the QKV/O projections still run in BF16 — which needs FP8 with a
+  fused norm→FP8 producer for the projections (more than a drop-in, it edits the
+  attention path). A fully traceable KV-cache path is still what would unblock
+  full-loop AOTI export for ZeroGPU Spaces, separate from latency. Faster than
+  that means attacking the 10 steps themselves (step caching / fewer steps), which
+  changes the action output and must be validated on task success, not cosine.
