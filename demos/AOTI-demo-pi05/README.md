@@ -43,10 +43,16 @@ pip install kernels
 pip install "lerobot[pi,dataset]"
 huggingface-cli login        # the PaliGemma tokenizer is gated
 
-python run_benchmark.py                          # the full ladder above
-python run_benchmark.py --single --compile-mode export-aoti
-python run_benchmark.py --single --no-fp8        # compile-only rung
+python run_benchmark.py                                    # the full ladder above
+python run_benchmark.py --single --sync-free --vision-fp8  # one config only
+python run_benchmark.py --single --no-fp8                  # compile-only rung
 ```
+
+The demo loads the kernels from the Hub via `get_kernel`, so the packages
+`flashrt/flashrt-fp8-swiglu-ffn`, `flashrt/flashrt-fp8-ffn` and
+`flashrt/flashrt-gemm-epilogues` must be reachable by your account. The full
+ladder reloads a compiled policy per rung in one process; on limited VRAM run
+rungs individually with `--single` to avoid accumulating CUDA-graph memory.
 
 ## The optimizations
 
@@ -82,8 +88,7 @@ python run_benchmark.py --single --no-fp8        # compile-only rung
   Spaces (where each request forks a fresh process and JIT caches do not carry
   over). The 10-step denoise loop does not yet export as one graph (a per-step
   KV-cache `deepcopy`, a dynamic prefix length, and a fake-tensor mask broadcast
-  break `torch.export`); compiling the full loop with AOTI is the documented next
-  step.
+  break `torch.export`); compiling the full loop with AOTI is future work.
 - **Inductor tuning flags** — `coordinate_descent_tuning`,
   `coordinate_descent_check_all_directions`, `epilogue_fusion=False`.
 

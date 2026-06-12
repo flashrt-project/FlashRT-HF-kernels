@@ -5,13 +5,17 @@ Reports end-to-end latency (full pi05 hot path: SigLIP vision + projector +
 PaliGemma prefix + 10-step denoise + action head) and action cosine similarity
 versus the eager baseline, for each rung of the stack.
 
-    python run_benchmark.py                 # full ladder
-    python run_benchmark.py --compile-mode export-aoti
-    python run_benchmark.py --no-fp8        # compile-only rung
+    python run_benchmark.py                                    # full ladder
+    python run_benchmark.py --single --sync-free --vision-fp8  # one config only
+    python run_benchmark.py --single --no-fp8                  # compile-only rung
 
 Requirements:
-    pip install "lerobot[pi,dataset]"
+    pip install kernels "lerobot[pi,dataset]"
     huggingface-cli login        # the PaliGemma tokenizer is gated
+
+The demo loads the FlashRT kernels from the Hub via get_kernel; those packages
+must be reachable by your account. The full ladder reloads a compiled policy per
+rung in one process -- on limited VRAM, run rungs individually with --single.
 """
 
 from __future__ import annotations
@@ -74,7 +78,7 @@ def cosine(a: torch.Tensor, b: torch.Tensor) -> float:
     return torch.nn.functional.cosine_similarity(a.float().flatten(), b.float().flatten(), dim=0).item()
 
 
-def measure(name: str, cfg: dict, baseline_action, observation_builder) -> tuple[str, float, float]:
+def measure(name: str, cfg: dict, baseline_action, observation_builder):
     import gc
 
     torch._dynamo.reset()
