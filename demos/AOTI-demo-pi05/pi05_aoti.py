@@ -12,7 +12,7 @@ attention-mask broadcast all break ``torch.export``). So this AOTI route
 compiles the cleanly-exportable, static-shape SigLIP vision embed -- which runs
 on every inference -- to a ``.pt2`` artifact, and keeps the denoise loop on
 ``torch.compile``. Extending AOTI to the denoise loop (remove the deepcopy,
-freeze the prefix length) is the documented next step toward a ZeroGPU Space.
+freeze the prefix length) is future work toward a ZeroGPU Space.
 
 On a warm persistent process AOTI and compile reach the same speed; AOTI's win
 is the portable artifact, not extra throughput.
