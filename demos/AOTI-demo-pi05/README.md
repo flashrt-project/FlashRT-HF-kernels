@@ -27,14 +27,14 @@ Full hot path = SigLIP vision (×2 views) + projector + PaliGemma prefix +
 | + torch.compile | 61.7 ms | 1.81× | 1.0 |
 | + FlashRT FP8 GeGLU MLP | 53.0 ms | 2.11× | 0.9999 |
 | + FlashRT FP8 vision MLP | 48.9 ms | 2.28× | 0.9999 |
-| **+ sync-free denoise loop (full)** | **42.8 ms** | **2.62×** | 0.9999 |
+| **+ sync-free denoise loop (full)** | **40.7 ms** | **2.75×** | 0.9999 |
 
 Latencies are warm steady-state medians (the first call is ~2.5× higher, a
 one-time cost). `torch.compile` carries the first 1.81×; the FlashRT fused FP8
 kernels add the GeGLU MLP in both Gemma stacks and the GELU MLP in the SigLIP
-vision tower; removing the per-step CPU↔GPU syncs in the denoise loop adds the
-rest. `export-aoti` matches warm compile speed — its value is the portable
-artifact, not extra throughput.
+vision tower; the sync-free pass removes the per-step CPU↔GPU syncs and the
+per-step KV-cache copy. `export-aoti` matches warm compile speed — its value is
+the portable artifact, not extra throughput.
 
 ## Run
 
@@ -68,8 +68,12 @@ python run_benchmark.py --single --no-fp8        # compile-only rung
   flow timestep, `torch.tensor(att_masks, device=cuda)` for the suffix mask), ~2
   host↔GPU syncs per step (~21 per call). This precomputes the timestep schedule
   once and caches the constant suffix mask, dropping syncs to ~2 (bit-exact). It
-  is a runtime monkeypatch of the policy's methods (LeRobot source is untouched),
-  so it is slightly more than a module swap; it covers the non-RTC path.
+  also replaces the per-step `copy.deepcopy` of the prefix KV cache with a shallow
+  copy (new cache + layer objects, shared tensors), avoiding a full KV-tensor copy
+  each step — correctness-equivalent because the joint forward's `cache.update()`
+  reassigns via `cat`. It is a runtime monkeypatch of the policy's methods
+  (LeRobot source is untouched), so it is slightly more than a module swap; it
+  covers the non-RTC path.
 - **torch.compile** — `max-autotune` on the denoise hot path (the runtime layer;
   no manual CUDA graph needed).
 - **torch.export + AOTInductor** (`export-aoti`) — compiles the cleanly-exportable
@@ -94,9 +98,10 @@ python run_benchmark.py --single --no-fp8        # compile-only rung
 
 - This is the LeRobot-integration recipe. For FlashRT's own hand-built static hot
   path (manual CUDA graph, lower latency), see `demos/runtime-demo`.
-- The next lossless lever is the per-step `copy.deepcopy` of the KV cache in the
-  denoise loop: it is a hard graph break, so the 10 steps never capture as a
-  single CUDA graph. Removing it (with a static prefix length) would fold the loop
-  into one graph and also unblock full-loop AOTI export. Beyond that, going faster
-  means attacking the 10 steps themselves (step caching / fewer steps), which
-  changes the action output and must be validated on task success, not cosine.
+- The next lossless lever is a single CUDA graph for the 10-step loop. The
+  sync-free pass already removes the per-step syncs and the deepcopy (now a shallow
+  copy), but that shallow copy is still Python, so the loop does not yet capture as
+  one graph; a fully traceable KV-cache path would close that and also unblock
+  full-loop AOTI export. Beyond that, going faster means attacking the 10 steps
+  themselves (step caching / fewer steps), which changes the action output and must
+  be validated on task success, not cosine.

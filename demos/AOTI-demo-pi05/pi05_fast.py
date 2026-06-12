@@ -256,11 +256,15 @@ def apply_sync_free_loop(policy) -> None:
     out of the loop. The stock loop calls ``torch.tensor(time, device=cuda)`` and
     ``torch.tensor(att_masks, device=cuda)`` every step (~2 host syncs/step); the
     timestep schedule is precomputed once and the suffix attention mask is cached.
+    It also replaces the per-step ``copy.deepcopy`` of the prefix KV cache with a
+    shallow copy (new cache + layer objects, shared tensors), avoiding a copy of
+    every KV tensor each step — correctness-equivalent because the joint forward's
+    ``cache.update()`` reassigns via ``cat`` rather than writing in place.
 
     Applied as a runtime monkeypatch (LeRobot source is untouched). Covers the
     non-RTC inference path.
     """
-    import math  # noqa: F401
+    import copy
     import types
 
     import torch.nn.functional as F
@@ -315,8 +319,29 @@ def apply_sync_free_loop(policy) -> None:
             x_t = x_t + dt * v_t
         return x_t
 
+    def denoise_step(self, prefix_pad_masks, past_key_values, x_t, timestep):
+        suffix_embs, suffix_pad_masks, suffix_att_masks, adarms_cond = self.embed_suffix(x_t, timestep)
+        suffix_len = suffix_pad_masks.shape[1]
+        bsize = prefix_pad_masks.shape[0]
+        prefix_len = prefix_pad_masks.shape[1]
+        prefix_pad_2d = prefix_pad_masks[:, None, :].expand(bsize, suffix_len, prefix_len)
+        suffix_att_2d = M.make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+        full = torch.cat([prefix_pad_2d, suffix_att_2d], dim=2)
+        pos = torch.sum(prefix_pad_masks, dim=-1)[:, None] + torch.cumsum(suffix_pad_masks, dim=1) - 1
+        full_4d = self._prepare_attention_masks_4d(full)
+        self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"
+        kv = copy.copy(past_key_values)                              # shallow cache
+        kv.layers = [copy.copy(layer) for layer in past_key_values.layers]   # new layer objs, shared tensors
+        outs, _ = self.paligemma_with_expert.forward(
+            attention_mask=full_4d, position_ids=pos, past_key_values=kv,
+            inputs_embeds=[None, suffix_embs], use_cache=False, adarms_cond=[None, adarms_cond],
+        )
+        suffix_out = outs[1][:, -self.config.chunk_size:].to(torch.float32)
+        return self.action_out_proj(suffix_out)
+
     model.embed_suffix = types.MethodType(embed_suffix, model)
     model.sample_actions = types.MethodType(sample_actions, model)
+    model.denoise_step = types.MethodType(denoise_step, model)
 
 
 def apply_compile(policy, mode: str = "max-autotune") -> None:
