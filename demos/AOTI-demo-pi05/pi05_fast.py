@@ -251,6 +251,74 @@ def force_eager(policy) -> None:
         vars(model).pop(name, None)
 
 
+def apply_sync_free_loop(policy) -> None:
+    """Remove per-denoise-step CPU->GPU syncs by hoisting constant tensor builds
+    out of the loop. The stock loop calls ``torch.tensor(time, device=cuda)`` and
+    ``torch.tensor(att_masks, device=cuda)`` every step (~2 host syncs/step); the
+    timestep schedule is precomputed once and the suffix attention mask is cached.
+
+    Applied as a runtime monkeypatch (LeRobot source is untouched). Covers the
+    non-RTC inference path.
+    """
+    import math  # noqa: F401
+    import types
+
+    import torch.nn.functional as F
+    from lerobot.policies.pi05 import modeling_pi05 as M
+
+    model = policy.model
+
+    def embed_suffix(self, noisy_actions, timestep):
+        time_emb = M.create_sinusoidal_pos_embedding(
+            timestep, self.action_in_proj.out_features,
+            min_period=self.config.min_period, max_period=self.config.max_period,
+            device=timestep.device,
+        ).type(dtype=timestep.dtype)
+        action_emb = self.action_in_proj(noisy_actions)
+        x = F.silu(self.time_mlp_in(time_emb))
+        adarms_cond = F.silu(self.time_mlp_out(x))
+        bsize, action_time_dim = action_emb.shape[:2]
+        pad = torch.ones(bsize, action_time_dim, dtype=torch.bool, device=timestep.device)
+        key = (bsize, action_emb.dtype, self.config.chunk_size)
+        cache = getattr(self, "_suffix_attmask_cache", None)
+        if cache is None or cache[0] != key:
+            am = [1] + [0] * (self.config.chunk_size - 1)
+            t = torch.tensor(am, dtype=action_emb.dtype, device=action_emb.device)[None, :].expand(bsize, len(am))
+            self._suffix_attmask_cache = (key, t)
+            cache = self._suffix_attmask_cache
+        return action_emb, pad, cache[1], adarms_cond
+
+    def sample_actions(self, images, img_masks, tokens, masks, noise=None, num_steps=None, **kwargs):
+        if num_steps is None:
+            num_steps = self.config.num_inference_steps
+        bsize = tokens.shape[0]
+        device = tokens.device
+        if noise is None:
+            noise = self.sample_noise((bsize, self.config.chunk_size, self.config.max_action_dim), device)
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(images, img_masks, tokens, masks)
+        prefix_att_2d_masks = M.make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        prefix_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
+        self.paligemma_with_expert.paligemma.model.language_model.config._attn_implementation = "eager"
+        _, past_key_values = self.paligemma_with_expert.forward(
+            attention_mask=prefix_4d, position_ids=prefix_position_ids,
+            past_key_values=None, inputs_embeds=[prefix_embs, None], use_cache=True,
+        )
+        dt = -1.0 / num_steps
+        times = torch.tensor([1.0 + s * dt for s in range(num_steps)], dtype=torch.float32, device=device)
+        x_t = noise
+        for step in range(num_steps):
+            v_t = self.denoise_step(
+                prefix_pad_masks=prefix_pad_masks, past_key_values=past_key_values,
+                x_t=x_t, timestep=times[step].expand(bsize),
+            )
+            x_t = x_t + dt * v_t
+        return x_t
+
+    model.embed_suffix = types.MethodType(embed_suffix, model)
+    model.sample_actions = types.MethodType(sample_actions, model)
+
+
 def apply_compile(policy, mode: str = "max-autotune") -> None:
     """Compile the denoise hot path. pi05 already compiles ``sample_actions`` when
     ``compile_model=True``; we (re)apply explicitly so the recipe is self-contained."""
@@ -263,13 +331,16 @@ def apply_compile(policy, mode: str = "max-autotune") -> None:
 
 
 def optimize(policy, batch, *, fp8: bool = True, vision_fp8: bool = False,
-             inductor_flags: bool = True, compile_mode: str = "compile", safety: float = 1.0):
+             sync_free: bool = False, inductor_flags: bool = True,
+             compile_mode: str = "compile", safety: float = 1.0):
     """Apply the optimization ladder in place and return the policy.
 
     compile_mode: "disabled" | "compile" | "export-aoti".
     """
     if inductor_flags:
         apply_inductor_flags()
+    if sync_free:
+        apply_sync_free_loop(policy)
     quant_ops = load_kernel(GEMM_REPO) if (fp8 or vision_fp8) else None
     if fp8:
         ffn_ops = load_kernel(FFN_REPO)
