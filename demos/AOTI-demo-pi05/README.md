@@ -74,7 +74,7 @@ accumulating CUDA-graph memory.
   tensor from a Python value every step (`torch.tensor(time, device=cuda)` for the
   flow timestep, `torch.tensor(att_masks, device=cuda)` for the suffix mask), ~2
   host↔GPU syncs per step (~21 per call). This precomputes the timestep schedule
-  once and caches the constant suffix mask, dropping syncs to ~2 (bit-exact). It
+  once and builds the suffix mask on-device, dropping syncs to ~2 (bit-exact). It
   also replaces the per-step `copy.deepcopy` of the prefix KV cache with a shallow
   copy (new cache + layer objects, shared tensors), avoiding a full KV-tensor copy
   each step — correctness-equivalent because the joint forward's `cache.update()`

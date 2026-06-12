@@ -255,7 +255,8 @@ def apply_sync_free_loop(policy) -> None:
     """Remove per-denoise-step CPU->GPU syncs by hoisting constant tensor builds
     out of the loop. The stock loop calls ``torch.tensor(time, device=cuda)`` and
     ``torch.tensor(att_masks, device=cuda)`` every step (~2 host syncs/step); the
-    timestep schedule is precomputed once and the suffix attention mask is cached.
+    timestep schedule is precomputed once and the suffix attention mask is built
+    on-device instead of from a Python list.
     It also replaces the per-step ``copy.deepcopy`` of the prefix KV cache with a
     shallow copy (new cache + layer objects, shared tensors), avoiding a copy of
     every KV tensor each step — correctness-equivalent because the joint forward's
@@ -283,14 +284,13 @@ def apply_sync_free_loop(policy) -> None:
         adarms_cond = F.silu(self.time_mlp_out(x))
         bsize, action_time_dim = action_emb.shape[:2]
         pad = torch.ones(bsize, action_time_dim, dtype=torch.bool, device=timestep.device)
-        key = (bsize, action_emb.dtype, self.config.chunk_size)
-        cache = getattr(self, "_suffix_attmask_cache", None)
-        if cache is None or cache[0] != key:
-            am = [1] + [0] * (self.config.chunk_size - 1)
-            t = torch.tensor(am, dtype=action_emb.dtype, device=action_emb.device)[None, :].expand(bsize, len(am))
-            self._suffix_attmask_cache = (key, t)
-            cache = self._suffix_attmask_cache
-        return action_emb, pad, cache[1], adarms_cond
+        # suffix attention-mask pattern [1, 0, 0, ...] built on-device: no host
+        # sync (the stock torch.tensor(python_list) does), and a fresh tensor each
+        # step so CUDA graphs don't see a reused persistent buffer.
+        am = torch.zeros(self.config.chunk_size, dtype=action_emb.dtype, device=action_emb.device)
+        am[0] = 1
+        att_masks = am[None, :].expand(bsize, self.config.chunk_size)
+        return action_emb, pad, att_masks, adarms_cond
 
     def sample_actions(self, images, img_masks, tokens, masks, noise=None, num_steps=None, **kwargs):
         if num_steps is None:
