@@ -11,6 +11,7 @@ The stack:
 bf16 eager (baseline)
   + inductor tuning flags
   + FlashRT fused FP8 GeGLU MLP   (action expert + prefix language model)
+  + FlashRT fused FP8 GELU MLP    (SigLIP vision tower)
   + torch.compile  OR  torch.export + AOTInductor
 ```
 
@@ -23,12 +24,14 @@ Full hot path = SigLIP vision (×2 views) + projector + PaliGemma prefix +
 | --- | --- | --- | --- |
 | bf16 eager (baseline) | 111.8 ms | 1.00× | 1.0 |
 | + torch.compile | 61.7 ms | 1.81× | 1.0 |
-| **+ FlashRT FP8 MLP + compile** | **53.0 ms** | **2.11×** | 0.9999 |
-| + FP8 MLP + export-aoti | 54.0 ms | 2.07× | 0.9999 |
+| + FlashRT FP8 GeGLU MLP | 53.0 ms | 2.11× | 0.9999 |
+| **+ FlashRT FP8 vision MLP (full)** | **48.9 ms** | **2.28×** | 0.9999 |
 
 The bulk of the speedup is `torch.compile` (which LeRobot pi05 also enables by
-default); the FlashRT fused FP8 MLP adds ~1.16× on top, losslessly. AOTI matches
-warm compile speed — its value is the portable artifact, not extra throughput.
+default); the FlashRT fused FP8 kernels add ~1.26× on top, losslessly — the
+GeGLU MLP in both Gemma stacks plus the GELU MLP in the SigLIP vision tower.
+`export-aoti` matches warm compile speed (the portable artifact is its value,
+not extra throughput).
 
 ## Run
 
@@ -52,6 +55,11 @@ python run_benchmark.py --single --no-fp8        # compile-only rung
   mode (a compiled graph does not fire the calibration hooks). Attention
   projections stay in BF16 — they are small per-token GEMMs where a per-projection
   FP8 swap loses to cuBLAS.
+- **FlashRT fused FP8 GELU MLP** — replaces the SigLIP vision-tower MLP
+  (`fc1` → gelu_tanh → `fc2`, with bias) with `fp8_gelu_mlp_bf16` from
+  `flashrt/flashrt-fp8-ffn`. The vision tower is large-token, where FP8 pays off;
+  it is kept in fp32, so the module casts to BF16 for the FP8 path and back so the
+  SigLIP residual is unchanged. Enable with `--vision-fp8`.
 - **torch.compile** — `max-autotune` on the denoise hot path (the runtime layer;
   no manual CUDA graph needed).
 - **torch.export + AOTInductor** (`export-aoti`) — compiles the cleanly-exportable

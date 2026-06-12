@@ -28,6 +28,7 @@ import torch
 import torch.nn as nn
 
 FFN_REPO = "flashrt/flashrt-fp8-swiglu-ffn"
+GELU_FFN_REPO = "flashrt/flashrt-fp8-ffn"
 GEMM_REPO = "flashrt/flashrt-gemm-epilogues"
 
 
@@ -106,6 +107,86 @@ class FlashRTGeGLU(nn.Module):
         return out.reshape(shape)
 
 
+class FlashRTGeluMLP(nn.Module):
+    """FP8 drop-in for a SigLIP MLP (fc1 -> gelu_tanh -> fc2, with bias).
+
+    The vision tower is kept in fp32; this casts to bf16 for the FP8 path and
+    back to the input dtype so the SigLIP residual stays unchanged.
+    """
+
+    def __init__(self, mlp, in_amax: float, hid_amax: float, ffn_ops, quant_ops, safety: float = 1.0) -> None:
+        super().__init__()
+        self.ffn_ops = ffn_ops
+        self.quant_ops = quant_ops
+        self.in_features = mlp.fc1.weight.shape[1]
+        self.out_features = mlp.fc2.weight.shape[0]
+        device = mlp.fc1.weight.device
+
+        up_fp8, up_scale = quantize_fp8(mlp.fc1.weight)
+        down_fp8, down_scale = quantize_fp8(mlp.fc2.weight)
+        self.register_buffer("up_fp8", up_fp8.to(device))
+        self.register_buffer("down_fp8", down_fp8.to(device))
+        self.register_buffer("up_scale", up_scale.to(device))
+        self.register_buffer("down_scale", down_scale.to(device))
+        self.register_buffer("up_bias", mlp.fc1.bias.detach().to(torch.bfloat16))
+        self.register_buffer("down_bias", mlp.fc2.bias.detach().to(torch.bfloat16))
+        self.register_buffer("input_scale", static_scale(in_amax, safety).to(device))
+        self.register_buffer("hidden_scale", static_scale(hid_amax, safety).to(device))
+        self.register_buffer("channel_scale", torch.ones(self.in_features, device=device, dtype=torch.bfloat16))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        shape = x.shape
+        dtype = x.dtype
+        flat = x.reshape(-1, self.in_features).to(torch.bfloat16)
+        x_fp8 = self.quant_ops.channel_scale_quantize_fp8_static_bf16(flat, self.channel_scale, self.input_scale)
+        out = self.ffn_ops.fp8_gelu_mlp_bf16(
+            x_fp8, self.up_fp8, self.up_bias, self.down_fp8, self.down_bias,
+            self.input_scale, self.up_scale, self.hidden_scale, self.down_scale,
+        )
+        return out.reshape(*shape[:-1], self.out_features).to(dtype)
+
+
+def siglip_mlps(model) -> list:
+    """The SigLIP vision-tower MLP modules."""
+    vision_tower = model.paligemma_with_expert.paligemma.model.vision_tower
+    return [m for _, m in vision_tower.named_modules() if type(m).__name__ == "SiglipMLP"]
+
+
+def calibrate_siglip(policy, batch, mlps) -> list[tuple[float, float]]:
+    """Per-MLP input/hidden amax for the SigLIP MLPs, eager (see calibrate_mlps)."""
+    model = policy.model
+    stats = [[0.0, 0.0] for _ in mlps]
+    handles = []
+    for idx, mlp in enumerate(mlps):
+        def hook(mod, inputs, idx=idx):
+            x = inputs[0]
+            stats[idx][0] = max(stats[idx][0], x.float().abs().max().item())
+            hidden = mod.activation_fn(mod.fc1(x))
+            stats[idx][1] = max(stats[idx][1], hidden.float().abs().max().item())
+
+        handles.append(mlp.register_forward_pre_hook(hook))
+
+    saved = {name: vars(model).pop(name) for name in ("sample_actions", "forward") if name in vars(model)}
+    with torch.inference_mode():
+        policy.predict_action_chunk(dict(batch))
+    torch.cuda.synchronize()
+    vars(model).update(saved)
+    for handle in handles:
+        handle.remove()
+    return [(a, b) for a, b in stats]
+
+
+def apply_fp8_vision_mlp(policy, batch, ffn_ops, quant_ops, safety: float = 1.0) -> None:
+    """Replace every SigLIP MLP with the fused FP8 GELU kernel (calibrated)."""
+    mlps = siglip_mlps(policy.model)
+    stats = calibrate_siglip(policy, batch, mlps)
+    vision_tower = policy.model.paligemma_with_expert.paligemma.model.vision_tower
+    device = next(policy.parameters()).device
+    layers = vision_tower.vision_model.encoder.layers
+    for layer, (in_amax, hid_amax) in zip(layers, stats):
+        layer.mlp = FlashRTGeluMLP(layer.mlp, in_amax, hid_amax, ffn_ops, quant_ops, safety).to(device)
+
+
 def gemma_layers(model) -> list:
     """The Gemma decoder layers in pi05: action expert + prefix language model."""
     expert = list(model.paligemma_with_expert.gemma_expert.model.layers)
@@ -181,18 +262,21 @@ def apply_compile(policy, mode: str = "max-autotune") -> None:
     model.sample_actions = torch.compile(fn, mode=mode)
 
 
-def optimize(policy, batch, *, fp8: bool = True, inductor_flags: bool = True,
-             compile_mode: str = "compile", safety: float = 1.0):
+def optimize(policy, batch, *, fp8: bool = True, vision_fp8: bool = False,
+             inductor_flags: bool = True, compile_mode: str = "compile", safety: float = 1.0):
     """Apply the optimization ladder in place and return the policy.
 
     compile_mode: "disabled" | "compile" | "export-aoti".
     """
     if inductor_flags:
         apply_inductor_flags()
+    quant_ops = load_kernel(GEMM_REPO) if (fp8 or vision_fp8) else None
     if fp8:
         ffn_ops = load_kernel(FFN_REPO)
-        quant_ops = load_kernel(GEMM_REPO)
         apply_fp8_mlp(policy, batch, ffn_ops, quant_ops, safety)
+    if vision_fp8:
+        gelu_ops = load_kernel(GELU_FFN_REPO)
+        apply_fp8_vision_mlp(policy, batch, gelu_ops, quant_ops, safety)
     if compile_mode == "disabled":
         force_eager(policy)
     elif compile_mode == "compile":
