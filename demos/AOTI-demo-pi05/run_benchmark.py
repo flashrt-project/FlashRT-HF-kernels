@@ -13,9 +13,9 @@ Requirements:
     pip install kernels "lerobot[pi,dataset]"
     huggingface-cli login        # the PaliGemma tokenizer is gated
 
-The demo loads the FlashRT kernels from the Hub via get_kernel; those packages
-must be reachable by your account. The full ladder reloads a compiled policy per
-rung in one process -- on limited VRAM, run rungs individually with --single.
+The demo loads the published FlashRT Hub packages via get_kernel (see
+../../docs/usage.md for the package map). The full ladder reloads a compiled
+policy per rung in one process -- on limited VRAM, run rungs with --single.
 """
 
 from __future__ import annotations

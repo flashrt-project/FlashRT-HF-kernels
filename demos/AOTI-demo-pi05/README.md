@@ -48,11 +48,12 @@ python run_benchmark.py --single --sync-free --vision-fp8  # one config only
 python run_benchmark.py --single --no-fp8                  # compile-only rung
 ```
 
-The demo loads the kernels from the Hub via `get_kernel`, so the packages
+The demo loads the published FlashRT Hub packages
 `flashrt/flashrt-fp8-swiglu-ffn`, `flashrt/flashrt-fp8-ffn` and
-`flashrt/flashrt-gemm-epilogues` must be reachable by your account. The full
-ladder reloads a compiled policy per rung in one process; on limited VRAM run
-rungs individually with `--single` to avoid accumulating CUDA-graph memory.
+`flashrt/flashrt-gemm-epilogues` via `get_kernel` (see `../../docs/usage.md` for
+the package map). The full ladder reloads a compiled policy per rung in one
+process; on limited VRAM run rungs individually with `--single` to avoid
+accumulating CUDA-graph memory.
 
 ## The optimizations
 
