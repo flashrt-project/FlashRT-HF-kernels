@@ -28,6 +28,18 @@ void msa_decode_sparse_attn_mma(torch::Tensor const& q,
                                 double sm_scale,
                                 torch::Tensor& out);
 
+// Block-max QK scoring for the lightning indexer (q/k already dequantized to
+// bf16). scores is [Hq, max_blocks, total_q] f32, pre-filled with -inf.
+void msa_indexer_block_scores(torch::Tensor const& q,
+                              torch::Tensor const& k_pages,
+                              torch::Tensor const& batch_of_q,
+                              torch::Tensor const& cu_q,
+                              torch::Tensor const& cu_k,
+                              torch::Tensor const& cu_pages,
+                              torch::Tensor const& kv_indices,
+                              int64_t causal,
+                              torch::Tensor& scores);
+
 // Paged tensor-core variant (separate k/v caches + req_to_token indirection).
 void msa_decode_sparse_attn_mma_paged(torch::Tensor const& q,
                                       torch::Tensor const& k_cache,

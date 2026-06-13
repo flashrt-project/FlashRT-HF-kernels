@@ -7,6 +7,7 @@ from typing import Optional
 
 import torch
 
+from ._native import has_native_ops, native_indexer_block_scores
 from .decode.topk_sparse import flash_decode_with_gqa_share_sparse
 from .prefill.topk_sparse import flash_prefill_with_gqa_share_sparse
 from .quantize import Nvfp4QuantizedTensor, dequantize_nvfp4_128x4_to_bf16
@@ -599,6 +600,29 @@ def fp4_indexer_block_scores(
 
     q = _apply_public_fp4_scale(_unpack_e2m1_fp4(q_fp4), q_scale)
     k = _apply_public_fp4_scale(_unpack_e2m1_fp4(k_fp4), k_scale)
+
+    # Native block-max QK kernel for the cubic scoring loop when available.
+    # Same dequant numerics as the reference (bf16 compute); falls back to the
+    # Python reference below in source-tree mode.
+    if has_native_ops() and q_fp4.is_cuda:
+        batch = int(cu_seqlens_q.numel()) - 1
+        q_lens = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).to(torch.int64)
+        batch_of_q = torch.repeat_interleave(
+            torch.arange(batch, device=q_fp4.device, dtype=torch.int32),
+            q_lens,
+        )
+        return native_indexer_block_scores(
+            q.to(torch.bfloat16),
+            k.to(torch.bfloat16),
+            batch_of_q,
+            cu_seqlens_q.to(torch.int32),
+            cu_seqlens_k.to(torch.int32),
+            cu_page_offsets.to(torch.int32),
+            kv_indices.to(torch.int32),
+            max_blocks=max_blocks,
+            causal=causal,
+        )
+
     gqa = hq // hkv
     batch = int(cu_seqlens_q.numel()) - 1
     cu_q = cu_seqlens_q.to("cpu", non_blocking=False).tolist()

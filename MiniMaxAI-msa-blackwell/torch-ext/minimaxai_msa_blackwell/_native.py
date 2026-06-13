@@ -147,9 +147,70 @@ def native_decode_sparse_attn_mma_paged(
     return out
 
 
+if _HAS_NATIVE_OPS:
+
+    @torch.library.register_fake(
+        add_op_namespace_prefix("msa_indexer_block_scores")
+    )
+    def _msa_indexer_block_scores_fake(
+        q: torch.Tensor,
+        k_pages: torch.Tensor,
+        batch_of_q: torch.Tensor,
+        cu_q: torch.Tensor,
+        cu_k: torch.Tensor,
+        cu_pages: torch.Tensor,
+        kv_indices: torch.Tensor,
+        causal: int,
+        scores: torch.Tensor,
+    ) -> None:
+        return None
+
+
+def native_indexer_block_scores(
+    q: torch.Tensor,
+    k_pages: torch.Tensor,
+    batch_of_q: torch.Tensor,
+    cu_q: torch.Tensor,
+    cu_k: torch.Tensor,
+    cu_pages: torch.Tensor,
+    kv_indices: torch.Tensor,
+    *,
+    max_blocks: int,
+    causal: bool,
+) -> torch.Tensor:
+    """Block-max QK indexer scores. q/k_pages are bf16 (already dequantized).
+
+    Returns [Hq, max_blocks, total_q] f32 (-inf where no key is visible).
+    """
+
+    if not _HAS_NATIVE_OPS:
+        raise RuntimeError("native MiniMax MSA ops are not available in source-tree mode")
+    total_q = int(q.shape[0])
+    hq = int(q.shape[1])
+    scores = torch.full(
+        (hq, int(max_blocks), total_q),
+        float("-inf"),
+        dtype=torch.float32,
+        device=q.device,
+    )
+    ops.msa_indexer_block_scores(
+        q.contiguous(),
+        k_pages.contiguous(),
+        batch_of_q.contiguous(),
+        cu_q.contiguous(),
+        cu_k.contiguous(),
+        cu_pages.contiguous(),
+        kv_indices.contiguous(),
+        1 if causal else 0,
+        scores,
+    )
+    return scores
+
+
 __all__ = [
     "has_native_ops",
     "native_topk_from_scores",
     "native_decode_mma_supported",
     "native_decode_sparse_attn_mma_paged",
+    "native_indexer_block_scores",
 ]

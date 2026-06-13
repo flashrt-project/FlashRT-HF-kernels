@@ -12,6 +12,7 @@
 
 #include "msa_decode_attn.cuh"
 #include "msa_decode_attn_mma.cuh"
+#include "msa_indexer_block_scores.cuh"
 #include "msa_topk_from_scores.cuh"
 #include "registration.h"
 #include "torch_binding.h"
@@ -242,6 +243,55 @@ void msa_decode_sparse_attn_mma_paged(torch::Tensor const& q,
 #endif
 }
 
+void msa_indexer_block_scores(torch::Tensor const& q,
+                              torch::Tensor const& k_pages,
+                              torch::Tensor const& batch_of_q,
+                              torch::Tensor const& cu_q,
+                              torch::Tensor const& cu_k,
+                              torch::Tensor const& cu_pages,
+                              torch::Tensor const& kv_indices,
+                              int64_t causal,
+                              torch::Tensor& scores) {
+  check_cuda_contiguous(q, "q");
+  check_cuda_contiguous(k_pages, "k_pages");
+  check_int32(batch_of_q, "batch_of_q");
+  check_int32(cu_q, "cu_q");
+  check_int32(cu_k, "cu_k");
+  check_int32(cu_pages, "cu_pages");
+  check_int32(kv_indices, "kv_indices");
+  TORCH_CHECK(q.scalar_type() == torch::kBFloat16 &&
+              k_pages.scalar_type() == torch::kBFloat16,
+              "q and k_pages must be bf16");
+  TORCH_CHECK(scores.scalar_type() == torch::kFloat32 && scores.is_cuda() &&
+              scores.is_contiguous(), "scores must be contiguous f32 CUDA");
+  TORCH_CHECK(q.dim() == 3, "q must be (total_q, Hq, D)");
+  TORCH_CHECK(k_pages.dim() == 4, "k_pages must be (num_pages, Hkv, page, D)");
+  const int64_t total_q = q.size(0), Hq = q.size(1), D = q.size(2);
+  const int64_t num_pages = k_pages.size(0), Hkv = k_pages.size(1);
+  const int64_t page_size = k_pages.size(2);
+  TORCH_CHECK(k_pages.size(3) == D, "q/k head_dim mismatch");
+  TORCH_CHECK(D % 32 == 0 && D <= 256, "D must be a multiple of 32, <= 256");
+  TORCH_CHECK(Hq % Hkv == 0, "Hq must be a multiple of Hkv");
+  TORCH_CHECK(scores.dim() == 3 && scores.size(0) == Hq &&
+              scores.size(2) == total_q, "scores must be (Hq, max_blocks, total_q)");
+  const int64_t max_blocks = scores.size(1);
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard device_guard(q.device());
+  auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
+  flashrt_minimax_msa::msa_indexer_block_scores_cuda(
+      q.data_ptr(), k_pages.data_ptr(), batch_of_q.data_ptr<int>(),
+      cu_q.data_ptr<int>(), cu_k.data_ptr<int>(), cu_pages.data_ptr<int>(),
+      kv_indices.data_ptr<int>(), scores.data_ptr<float>(),
+      checked_positive_int(total_q, "total_q"), checked_positive_int(Hq, "Hq"),
+      checked_positive_int(Hkv, "Hkv"), checked_positive_int(D, "D"),
+      checked_positive_int(num_pages, "num_pages"),
+      checked_positive_int(max_blocks, "max_blocks"),
+      checked_positive_int(page_size, "page_size"), causal != 0, stream);
+#else
+  TORCH_CHECK(false, "minimaxai-msa-blackwell was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("msa_topk_from_scores(Tensor score, Tensor seq_lens, int block_size, "
           "int topk, Tensor! topk_idx) -> ()");
@@ -254,6 +304,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("msa_decode_sparse_attn_mma_paged(Tensor q, Tensor k_cache, Tensor "
           "v_cache, Tensor req_to_token, Tensor seq_lens, Tensor slot_ids, "
           "Tensor topk_idx, int block_size, float sm_scale, Tensor! out) -> ()");
+  ops.def("msa_indexer_block_scores(Tensor q, Tensor k_pages, Tensor "
+          "batch_of_q, Tensor cu_q, Tensor cu_k, Tensor cu_pages, Tensor "
+          "kv_indices, int causal, Tensor! scores) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("msa_topk_from_scores", torch::kCUDA, &msa_topk_from_scores);
   ops.impl("msa_decode_sparse_attn", torch::kCUDA, &msa_decode_sparse_attn);
@@ -261,6 +314,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
            &msa_decode_sparse_attn_mma);
   ops.impl("msa_decode_sparse_attn_mma_paged", torch::kCUDA,
            &msa_decode_sparse_attn_mma_paged);
+  ops.impl("msa_indexer_block_scores", torch::kCUDA,
+           &msa_indexer_block_scores);
 #endif
 }
 
