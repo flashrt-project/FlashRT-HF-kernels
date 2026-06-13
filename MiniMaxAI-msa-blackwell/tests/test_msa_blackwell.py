@@ -45,10 +45,13 @@ import torch
 
 from minimaxai_msa_blackwell import (  # noqa: E402
     build_k2q_csr,
+    dequantize_nvfp4_128x4_to_bf16,
     flash_decode_with_gqa_share_sparse,
     flash_decode_with_topk_idx,
     has_native_ops,
+    native_nvfp4_dequant_swizzled_to_bf16,
     native_topk_from_scores,
+    Nvfp4QuantizedTensor,
     sparse_atten_func,
     sparse_atten_nvfp4_kv_func,
     sparse_decode_atten_func,
@@ -366,7 +369,7 @@ def _run_official_prefill_wrapper_case(seq_len):
     return cos_sim(official, direct), max_abs_err(official, direct)
 
 
-def _run_official_nvfp4_prefill_bf16_fallback_case(seq_len):
+def _run_official_nvfp4_prefill_bf16_dispatch_case(seq_len):
     q, _sink, k_cache, v_cache, _req_to_token, _slot_ids, _seq_lens, _prefix_lens, cu_seqlens, topk_idx = (
         _build_prefill_inputs(seq_len, with_sink=False)
     )
@@ -496,6 +499,45 @@ def _run_native_topk_case(heads, batch_size, max_blocks, seq_lens_list, topk):
     return min_overlap
 
 
+def _run_native_nvfp4_dequant_case(rows, cols):
+    g = torch.Generator(device=DEVICE).manual_seed(314)
+    packed = torch.randint(
+        0,
+        256,
+        (rows, cols // 2),
+        dtype=torch.uint8,
+        device=DEVICE,
+        generator=g,
+    )
+    scale_cols = cols // 16
+    padded_rows = ((rows + 127) // 128) * 128
+    padded_scale_cols = ((scale_cols + 3) // 4) * 4
+    # Positive finite e4m3 bytes only. 0x7f is NaN in torch.float8_e4m3fn.
+    scale_128x4 = torch.randint(
+        0,
+        0x7F,
+        (padded_rows, padded_scale_cols),
+        dtype=torch.uint8,
+        device=DEVICE,
+        generator=g,
+    )
+    global_scale = torch.tensor([0.125], dtype=torch.float32, device=DEVICE)
+    qx = Nvfp4QuantizedTensor(
+        data=packed,
+        scale_128x4=scale_128x4,
+        global_scale=global_scale,
+        logical_scale_shape=(rows, scale_cols),
+        original_shape=(rows, cols),
+    )
+    ref = dequantize_nvfp4_128x4_to_bf16(qx)
+    got = native_nvfp4_dequant_swizzled_to_bf16(
+        packed,
+        scale_128x4,
+        global_scale,
+    )
+    return cos_sim(got, ref), max_abs_err(got, ref)
+
+
 # ===========================================================================
 # pytest entrypoints
 # ===========================================================================
@@ -574,13 +616,13 @@ def test_official_sparse_prefill_wrapper_matches_direct_kernel(seq_len):
     assert err == 0.0, f"[official prefill wrapper {seq_len}] max_abs_err {err:.4e}"
 
 
-def test_official_nvfp4_prefill_bf16_fallback_matches_sparse_prefill():
+def test_official_nvfp4_prefill_bf16_dispatch_matches_sparse_prefill():
     if not torch.cuda.is_available():
         pytest.skip("CUDA required")
     torch.manual_seed(0)
-    cos, err = _run_official_nvfp4_prefill_bf16_fallback_case(512)
-    assert cos >= 0.99999, f"[official nvfp4 bf16 fallback] cos {cos:.6f}"
-    assert err == 0.0, f"[official nvfp4 bf16 fallback] max_abs_err {err:.4e}"
+    cos, err = _run_official_nvfp4_prefill_bf16_dispatch_case(512)
+    assert cos >= 0.99999, f"[official nvfp4 bf16 dispatch] cos {cos:.6f}"
+    assert err == 0.0, f"[official nvfp4 bf16 dispatch] max_abs_err {err:.4e}"
 
 
 @pytest.mark.parametrize(
@@ -598,6 +640,17 @@ def test_native_topk_from_scores(heads, batch_size, max_blocks, seq_lens_list, t
         pytest.skip("native extension is not available in source-tree mode")
     overlap = _run_native_topk_case(heads, batch_size, max_blocks, seq_lens_list, topk)
     assert overlap >= 0.999, f"[native topk] set overlap {overlap:.3f}"
+
+
+@pytest.mark.parametrize("rows,cols", [(1, 128), (257, 128), (64, 4096)])
+def test_native_nvfp4_dequant_swizzled_to_bf16(rows, cols):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    if not has_native_ops():
+        pytest.skip("native extension is not available in source-tree mode")
+    cos, err = _run_native_nvfp4_dequant_case(rows, cols)
+    assert cos >= 0.99999, f"[native nvfp4 dequant] cos {cos:.6f}"
+    assert err == 0.0, f"[native nvfp4 dequant] max_abs_err {err:.4e}"
 
 
 # ===========================================================================
@@ -659,9 +712,9 @@ def main():
         ok &= good
         print(f"{sl:<22}{cos:>12.6f}{err:>16.4e}{'PASS' if good else 'FAIL':>10}")
 
-    print("\n== official MiniMax NVFP4 prefill API fallback (BF16 dispatch check) ==")
+    print("\n== official MiniMax NVFP4 prefill API dispatch check ==")
     print(f"{'seq_len':<22}{'cos':>12}{'max_abs_err':>16}{'verdict':>10}")
-    cos, err = _run_official_nvfp4_prefill_bf16_fallback_case(512)
+    cos, err = _run_official_nvfp4_prefill_bf16_dispatch_case(512)
     good = cos >= 0.99999 and err == 0.0
     ok &= good
     print(f"{512:<22}{cos:>12.6f}{err:>16.4e}{'PASS' if good else 'FAIL':>10}")
@@ -684,6 +737,14 @@ def main():
             good = overlap >= 0.999
             ok &= good
             print(f"{tag:<22}{overlap:>12.3f}{'PASS' if good else 'FAIL':>10}")
+
+        print("\n== native CUDA NVFP4 swizzled -> BF16 dequant ==")
+        print(f"{'shape':<22}{'cos':>12}{'max_abs_err':>16}{'verdict':>10}")
+        for rows, cols in [(1, 128), (257, 128), (64, 4096)]:
+            cos, err = _run_native_nvfp4_dequant_case(rows, cols)
+            good = cos >= 0.99999 and err == 0.0
+            ok &= good
+            print(f"{rows}x{cols:<17}{cos:>12.6f}{err:>16.4e}{'PASS' if good else 'FAIL':>10}")
     else:
         print("SKIP: native extension is not available in source-tree mode")
 

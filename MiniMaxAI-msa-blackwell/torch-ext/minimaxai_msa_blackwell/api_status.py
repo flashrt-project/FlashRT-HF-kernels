@@ -22,6 +22,7 @@ V1_AVAILABLE_FUNCTIONS = (
     "nvfp4_global_scale_from_amax",
     "has_native_ops",
     "native_topk_from_scores",
+    "native_nvfp4_dequant_swizzled_to_bf16",
     "flash_decode_with_topk_idx",
     "flash_decode_with_gqa_share_sparse",
     "naive_flash_decode_with_topk_idx",
@@ -55,7 +56,7 @@ _OFFICIAL_API_STATUS = {
     "sparse_atten_nvfp4_kv_func": {
         "status": "available",
         "target": "blackwell-prefill-nvfp4",
-        "reason": "Official NVFP4 KV prefill API is available via NVFP4 dequantization followed by the Blackwell prefill wrapper.",
+        "reason": "Official NVFP4 KV prefill API is available via native swizzled NVFP4 dequantization followed by the Blackwell prefill wrapper.",
     },
     "sparse_decode_atten_func": {
         "status": "available",
@@ -70,12 +71,12 @@ _OFFICIAL_API_STATUS = {
     "fp4_indexer_block_scores": {
         "status": "available",
         "target": "blackwell-fp4-indexer",
-        "reason": "Official FP4 block-score API is available as a correctness-first PyTorch fallback.",
+        "reason": "Official FP4 block-score API uses the native Blackwell block-score kernel in built artifacts, with a reference fallback in source-tree mode.",
     },
     "build_k2q_csr": {
         "status": "available",
         "target": "v1",
-        "reason": "Torch CSR construction fallback is available for compatibility.",
+        "reason": "CSR construction helper is available for the official prefill API.",
     },
     "SparseK2qCsrBuilderSm100": {
         "status": "available",

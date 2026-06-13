@@ -39,7 +39,7 @@ msa = get_kernel(
 |---|---|
 | `sparse_decode_atten_func` | Available. Blackwell paged BF16/FP16 single-token decode wrapper. |
 | `SparseDecodePagedAttentionWrapper` | Available. `plan(...).run(...)` wrapper for the same decode path. |
-| `build_k2q_csr` | Available. Torch CSR construction fallback. |
+| `build_k2q_csr` | Available. CSR construction helper for the official prefill API. |
 | `SparseK2qCsrBuilderSm100` | Available compatibility class; `build()` delegates to `build_k2q_csr`. |
 | `Nvfp4QuantizedTensor` | Available metadata dataclass. |
 | `quantize_bf16_to_nvfp4_128x4` | Available when Transformer Engine NVFP4 support is installed. |
@@ -48,8 +48,8 @@ msa = get_kernel(
 | `swizzle_nvfp4_scale_to_128x4` | Available scale-layout helper. |
 | `nvfp4_global_scale_from_amax` | Available scale helper. |
 | `sparse_atten_func` | Available. Official CSR sparse prefill API backed by the Blackwell Triton BF16/FP16 prefill kernel. |
-| `sparse_atten_nvfp4_kv_func` | Available. NVFP4 KV compatibility path: dequantizes KV with 128x4 metadata, then calls Blackwell sparse prefill. |
-| `fp4_indexer_block_scores` | Available. Correctness-first FP4 block-score fallback returning the official `[Hq, ceil(max_seqlen_k/128), total_q]` score layout. |
+| `sparse_atten_nvfp4_kv_func` | Available. Built artifacts use native CUDA swizzled NVFP4 -> BF16 dequantization, then call Blackwell sparse prefill. |
+| `fp4_indexer_block_scores` | Available. Built artifacts use the native CUDA Blackwell block-score kernel and return the official `[Hq, ceil(max_seqlen_k/128), total_q]` score layout. |
 
 ### FlashRT Blackwell helper names
 
@@ -59,6 +59,7 @@ path:
 - `flash_decode_with_topk_idx`
 - `flash_decode_with_gqa_share_sparse`
 - `native_topk_from_scores`
+- `native_nvfp4_dequant_swizzled_to_bf16`
 - `has_native_ops`
 - `naive_flash_decode_with_topk_idx`
 - `naive_flash_decode_with_gqa_share_sparse`
@@ -206,14 +207,17 @@ out = msa.flash_decode_with_gqa_share_sparse(
 This package contains:
 
 - native CUDA score-to-top-k helper;
-- Blackwell-validated Triton CUDA sparse decode and prefill attention;
+- native CUDA tensor-core sparse decode route for the MiniMax-M3 Blackwell shape;
+- native CUDA FP4 block-score indexer;
+- native CUDA swizzled NVFP4 -> BF16 dequantization for the W4A16 quality path;
+- Blackwell-validated sparse prefill attention wrapper;
 - MiniMaxAI/msa-compatible Python API layer for decode, prefill, CSR, NVFP4,
   and FP4 block-score helpers.
 
-The optimized SM100 CUTE prefill/indexer bodies are not claimed as ported here.
-For Blackwell, this package provides a validated Triton sparse prefill path and
-correctness-first compatibility fallbacks where the original API requires SM100
-FP4/NVFP4-specific machinery.
+When loaded from Hub built artifacts, the decode, FP4 indexer, and NVFP4
+dequant hot paths use compiled CUDA ops. The source-tree mode keeps reference
+paths so the API and correctness tests remain runnable before a wheel/shared
+object has been built.
 
 Source provenance and validation details are documented in `SYNC.md` and
 `VALIDATION.md`.

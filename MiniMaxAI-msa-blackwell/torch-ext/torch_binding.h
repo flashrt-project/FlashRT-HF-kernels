@@ -40,6 +40,11 @@ void msa_indexer_block_scores(torch::Tensor const& q,
                               int64_t causal,
                               torch::Tensor& scores);
 
+void msa_nvfp4_dequant_swizzled_to_bf16(torch::Tensor const& packed,
+                                        torch::Tensor const& scale_128x4,
+                                        double global_scale,
+                                        torch::Tensor& out);
+
 // Paged tensor-core variant (separate k/v caches + req_to_token indirection).
 void msa_decode_sparse_attn_mma_paged(torch::Tensor const& q,
                                       torch::Tensor const& k_cache,

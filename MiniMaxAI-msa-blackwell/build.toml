@@ -32,4 +32,6 @@ src = [
   "csrc/msa_decode_attn_mma.cuh",
   "csrc/msa_indexer_block_scores.cu",
   "csrc/msa_indexer_block_scores.cuh",
+  "csrc/msa_nvfp4_dequant.cu",
+  "csrc/msa_nvfp4_dequant.cuh",
 ]

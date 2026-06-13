@@ -7,9 +7,12 @@ MiniMax-M3 decode-sparse attention path used by FlashRT's MiniMax Spark runtime.
 
 Implementation status:
   * native CUDA helper: score -> top-k sparse block ids;
-  * Triton CUDA attention kernels: Blackwell-validated decode and prefill paths;
+  * native CUDA tensor-core sparse decode for the MiniMax-M3 Blackwell shape;
+  * native CUDA FP4 block-score indexer;
+  * native CUDA helper: swizzled NVFP4 -> BF16 dequant for the W4A16 quality path;
+  * Blackwell-validated sparse prefill path;
   * MiniMaxAI/msa compatibility wrappers for CSR prefill, decode, NVFP4 helpers,
-    and FP4 block-score fallback.
+    and FP4 block-score helpers.
 
 The upstream MiniMaxAI/msa package is SM100-only; this package is the Blackwell
 extension path. The public API is Tensor-oriented and independent from
@@ -48,7 +51,11 @@ from .interface import (
     sparse_atten_nvfp4_kv_func,
     sparse_decode_atten_func,
 )
-from ._native import has_native_ops, native_topk_from_scores
+from ._native import (
+    has_native_ops,
+    native_nvfp4_dequant_swizzled_to_bf16,
+    native_topk_from_scores,
+)
 from .naive.flash_with_topk_idx import naive_flash_decode_with_topk_idx
 from .naive.topk_sparse import naive_flash_decode_with_gqa_share_sparse
 from .quantize import (
@@ -88,6 +95,7 @@ __all__ = [
     "flash_decode_with_gqa_share_sparse",
     "has_native_ops",
     "native_topk_from_scores",
+    "native_nvfp4_dequant_swizzled_to_bf16",
     "naive_flash_decode_with_gqa_share_sparse",
     "naive_flash_decode_with_topk_idx",
     "get_cu_seqblocks",

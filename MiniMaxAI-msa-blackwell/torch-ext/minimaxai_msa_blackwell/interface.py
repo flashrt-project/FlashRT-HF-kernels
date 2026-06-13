@@ -7,7 +7,11 @@ from typing import Optional
 
 import torch
 
-from ._native import has_native_ops, native_indexer_block_scores
+from ._native import (
+    has_native_ops,
+    native_indexer_block_scores,
+    native_nvfp4_dequant_swizzled_to_bf16,
+)
 from .decode.topk_sparse import flash_decode_with_gqa_share_sparse
 from .prefill.topk_sparse import flash_prefill_with_gqa_share_sparse
 from .quantize import Nvfp4QuantizedTensor, dequantize_nvfp4_128x4_to_bf16
@@ -489,6 +493,12 @@ def _nvfp4_dequant_kv(
 ) -> torch.Tensor:
     if packed.dtype is not torch.uint8:
         return packed
+    if has_native_ops() and packed.is_cuda:
+        return native_nvfp4_dequant_swizzled_to_bf16(
+            packed,
+            scale_128x4,
+            global_scale,
+        )
     original_shape = tuple(int(v) for v in packed.shape[:-1]) + (int(packed.shape[-1]) * 2,)
     rows = 1
     for dim in original_shape[:-1]:
@@ -573,11 +583,12 @@ def fp4_indexer_block_scores(
     qo_offset: Optional[torch.Tensor] = None,
     scale_layout: str = "preordered_mma",
 ) -> torch.Tensor:
-    """Correctness-first FP4 block-score API for Blackwell.
+    """FP4 block-score API for Blackwell.
 
     Returns the official shape `[Hq, ceil(max_seqlen_k / 128), total_q]`.
-    This fallback is intentionally simple and is used to keep the public API
-    callable on Blackwell while optimized CUTE block scoring remains SM100-only.
+    Built artifacts route CUDA tensors through the native Blackwell block-score
+    kernel. Source-tree mode uses the reference loop below so the API remains
+    testable before the extension is built.
     """
 
     del qo_offset

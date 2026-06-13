@@ -13,6 +13,7 @@
 #include "msa_decode_attn.cuh"
 #include "msa_decode_attn_mma.cuh"
 #include "msa_indexer_block_scores.cuh"
+#include "msa_nvfp4_dequant.cuh"
 #include "msa_topk_from_scores.cuh"
 #include "registration.h"
 #include "torch_binding.h"
@@ -292,6 +293,61 @@ void msa_indexer_block_scores(torch::Tensor const& q,
 #endif
 }
 
+void msa_nvfp4_dequant_swizzled_to_bf16(torch::Tensor const& packed,
+                                        torch::Tensor const& scale_128x4,
+                                        double global_scale,
+                                        torch::Tensor& out) {
+  check_cuda_contiguous(packed, "packed");
+  check_cuda_contiguous(scale_128x4, "scale_128x4");
+  check_cuda_contiguous(out, "out");
+  TORCH_CHECK(packed.scalar_type() == torch::kUInt8,
+              "packed must have dtype torch.uint8");
+  TORCH_CHECK(scale_128x4.scalar_type() == torch::kUInt8,
+              "scale_128x4 must have dtype torch.uint8");
+  TORCH_CHECK(out.scalar_type() == torch::kBFloat16,
+              "out must have dtype torch.bfloat16");
+  TORCH_CHECK(packed.dim() >= 2, "packed must have at least 2 dimensions");
+  TORCH_CHECK(out.dim() == packed.dim(), "out rank must match packed rank");
+  const int64_t packed_last = packed.size(packed.dim() - 1);
+  const int64_t cols = out.size(out.dim() - 1);
+  TORCH_CHECK(cols == packed_last * 2,
+              "out last dim must be packed last dim * 2");
+  TORCH_CHECK(cols % 16 == 0, "logical columns must be a multiple of 16");
+  int64_t rows = 1;
+  for (int64_t dim = 0; dim < packed.dim() - 1; ++dim) {
+    TORCH_CHECK(out.size(dim) == packed.size(dim),
+                "out shape must match packed shape except last dim");
+    rows *= packed.size(dim);
+  }
+  TORCH_CHECK(rows > 0 && rows <= std::numeric_limits<int>::max(),
+              "flattened rows must fit int");
+  TORCH_CHECK(cols > 0 && cols <= std::numeric_limits<int>::max(),
+              "logical columns must fit int");
+  const int64_t scale_cols = cols / 16;
+  const int64_t padded_rows = ((rows + 127) / 128) * 128;
+  const int64_t padded_scale_cols = ((scale_cols + 3) / 4) * 4;
+  TORCH_CHECK(scale_128x4.numel() >= padded_rows * padded_scale_cols,
+              "scale_128x4 is too small for the requested logical shape");
+  TORCH_CHECK(packed.get_device() == scale_128x4.get_device() &&
+              packed.get_device() == out.get_device(),
+              "packed, scale_128x4, and out must be on the same CUDA device");
+
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard device_guard(packed.device());
+  auto stream = at::cuda::getCurrentCUDAStream(packed.get_device()).stream();
+  flashrt_minimax_msa::nvfp4_dequant_swizzled_to_bf16_cuda(
+      packed.data_ptr<uint8_t>(),
+      scale_128x4.data_ptr<uint8_t>(),
+      out.data_ptr(),
+      checked_positive_int(rows, "rows"),
+      checked_positive_int(cols, "cols"),
+      static_cast<float>(global_scale),
+      stream);
+#else
+  TORCH_CHECK(false, "minimaxai-msa-blackwell was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("msa_topk_from_scores(Tensor score, Tensor seq_lens, int block_size, "
           "int topk, Tensor! topk_idx) -> ()");
@@ -307,6 +363,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("msa_indexer_block_scores(Tensor q, Tensor k_pages, Tensor "
           "batch_of_q, Tensor cu_q, Tensor cu_k, Tensor cu_pages, Tensor "
           "kv_indices, int causal, Tensor! scores) -> ()");
+  ops.def("msa_nvfp4_dequant_swizzled_to_bf16(Tensor packed, Tensor "
+          "scale_128x4, float global_scale, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("msa_topk_from_scores", torch::kCUDA, &msa_topk_from_scores);
   ops.impl("msa_decode_sparse_attn", torch::kCUDA, &msa_decode_sparse_attn);
@@ -316,6 +374,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
            &msa_decode_sparse_attn_mma_paged);
   ops.impl("msa_indexer_block_scores", torch::kCUDA,
            &msa_indexer_block_scores);
+  ops.impl("msa_nvfp4_dequant_swizzled_to_bf16", torch::kCUDA,
+           &msa_nvfp4_dequant_swizzled_to_bf16);
 #endif
 }
 

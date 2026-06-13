@@ -207,10 +207,53 @@ def native_indexer_block_scores(
     return scores
 
 
+if _HAS_NATIVE_OPS:
+
+    @torch.library.register_fake(
+        add_op_namespace_prefix("msa_nvfp4_dequant_swizzled_to_bf16")
+    )
+    def _msa_nvfp4_dequant_swizzled_to_bf16_fake(
+        packed: torch.Tensor,
+        scale_128x4: torch.Tensor,
+        global_scale: float,
+        out: torch.Tensor,
+    ) -> None:
+        return None
+
+
+def native_nvfp4_dequant_swizzled_to_bf16(
+    packed: torch.Tensor,
+    scale_128x4: torch.Tensor,
+    global_scale: torch.Tensor | float,
+) -> torch.Tensor:
+    """Expand swizzled NVFP4 weights/KV to dense BF16 with the native CUDA path."""
+
+    if not _HAS_NATIVE_OPS:
+        raise RuntimeError("native MiniMax MSA ops are not available in source-tree mode")
+    if packed.dtype is not torch.uint8:
+        raise TypeError("packed must be torch.uint8")
+    if scale_128x4.dtype is not torch.uint8:
+        raise TypeError("scale_128x4 must be torch.uint8")
+    original_shape = tuple(int(v) for v in packed.shape[:-1]) + (int(packed.shape[-1]) * 2,)
+    out = torch.empty(original_shape, device=packed.device, dtype=torch.bfloat16)
+    if isinstance(global_scale, torch.Tensor):
+        global_scale_value = float(global_scale.reshape(-1)[0].item())
+    else:
+        global_scale_value = float(global_scale)
+    ops.msa_nvfp4_dequant_swizzled_to_bf16(
+        packed.contiguous(),
+        scale_128x4.contiguous(),
+        global_scale_value,
+        out,
+    )
+    return out
+
+
 __all__ = [
     "has_native_ops",
     "native_topk_from_scores",
     "native_decode_mma_supported",
     "native_decode_sparse_attn_mma_paged",
     "native_indexer_block_scores",
+    "native_nvfp4_dequant_swizzled_to_bf16",
 ]

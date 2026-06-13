@@ -65,7 +65,7 @@ def test_pure_python_compat_helpers() -> None:
     assert row_ptr.shape == (1, 3)
 
 
-def test_fp4_indexer_block_scores_fallback_is_callable() -> None:
+def test_fp4_indexer_block_scores_is_callable() -> None:
     import torch
 
     total_q, hq, hkv, pages, packed_d = 2, 4, 1, 1, 64

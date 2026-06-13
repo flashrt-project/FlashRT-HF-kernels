@@ -46,8 +46,9 @@ Expected full coverage:
 | Decode sparse GQA attention with sink | ctx 2048, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Official decode API wrapper | ctx 2048, 4096 | direct Blackwell decode kernel | cos = 1.0, max_abs = 0 |
 | Official CSR prefill API wrapper | ctx 512, 2048 | direct Blackwell prefill kernel | cos = 1.0, max_abs = 0 under CSR-preserved block order |
-| Official NVFP4 prefill API wrapper | ctx 512 BF16 fallback path | `sparse_atten_func` | cos = 1.0, max_abs = 0 |
-| Official FP4 indexer API fallback | tiny FP4 packed tensors | shape/finite-score check | returns official score layout |
+| Official NVFP4 prefill API wrapper | ctx 512 BF16 dispatch path | `sparse_atten_func` | cos = 1.0, max_abs = 0 |
+| Native CUDA NVFP4 dequant | rows/cols `(1,128)`, `(257,128)`, `(64,4096)` | Python NVFP4 reference | exact BF16 match |
+| Official FP4 indexer API | tiny FP4 packed tensors; native artifact path when built | PyTorch block-score reference | returns official score layout |
 | Decode lightning indexer | ctx 2048, 4096, 32768 | PyTorch blockmax top-k set | overlap >= 0.99 |
 | Standalone long-context decode | ctx 65536, 131072 | paged FP32 PyTorch / direct kernel | cos >= 0.999; wrapper max_abs = 0 |
 | Installed-artifact native long top-k | blocks 512, 1024 | PyTorch top-k over valid blocks | exact set match |
@@ -77,9 +78,10 @@ The test tracks every official `MiniMaxAI/msa` public API name:
 
 The root module exports every official public name. Decode, CSR prefill, NVFP4
 prefill compatibility, FP4 block scoring, CSR, and NVFP4 helper names are all
-callable. The optimized SM100 CUTE bodies are not claimed as ported here; where
-that matters, this package uses Blackwell Triton kernels or correctness-first
-fallbacks instead of returning fake results.
+callable. Hub built artifacts use compiled CUDA ops for the MiniMax-M3
+Blackwell decode route, FP4 block-score indexer, and swizzled NVFP4 -> BF16
+dequantization path. Source-tree mode keeps reference paths so the API remains
+testable before the extension is built.
 
 ## FlashRT Integration Note
 
@@ -106,6 +108,10 @@ extension using the same source files:
 
 - `torch-ext/torch_binding.cpp`
 - `csrc/msa_topk_from_scores.cu`
+- `csrc/msa_decode_attn.cu`
+- `csrc/msa_decode_attn_mma.cu`
+- `csrc/msa_indexer_block_scores.cu`
+- `csrc/msa_nvfp4_dequant.cu`
 
 Environment:
 
@@ -121,6 +127,8 @@ Result:
 | Check | Shape | Reference | Verdict |
 |---|---:|---|---|
 | Native score -> top-k | heads 64, batch 1, blocks 256, topk 16 | PyTorch top-k set | PASS |
+| Native FP4 block-score indexer | official `[Hq, blocks, total_q]` score layout | PyTorch block-score reference | PASS |
+| Native NVFP4 swizzled -> BF16 dequant | rows/cols `(1,128)`, `(257,128)`, `(64,4096)` | Python NVFP4 reference | PASS |
 
 ## Blackwell Package Validation
 
@@ -166,6 +174,9 @@ Result:
 | Official decode wrapper | ctx4096 | 1.000000 | 0.0000e+00 | PASS |
 | Official decode wrapper | ctx65536 | 1.000000 | 0.0000e+00 | PASS |
 | Official decode wrapper | ctx131072 | 1.000000 | 0.0000e+00 | PASS |
+| Native CUDA NVFP4 dequant | rows1_cols128 | 1.000000 | 0.0000e+00 | PASS |
+| Native CUDA NVFP4 dequant | rows257_cols128 | 1.000000 | 0.0000e+00 | PASS |
+| Native CUDA NVFP4 dequant | rows64_cols4096 | 1.000000 | 0.0000e+00 | PASS |
 
 Installed-artifact native top-k validation on RTX 5090 / torch 2.11 / CUDA
 12.8:
@@ -179,17 +190,17 @@ Installed-artifact native top-k validation on RTX 5090 / torch 2.11 / CUDA
 The warning `tl.make_block_ptr is deprecated` appears with Triton 3.7.0. It is
 a deprecation warning, not a correctness failure.
 
-## Native/CUTE Alignment Status
+## Native Alignment Status
 
-The upstream `MiniMaxAI/msa` package is an SM100 package with native helper ops
-and CUTE-DSL attention kernels. This Blackwell package is being upgraded in stages:
+The upstream `MiniMaxAI/msa` package targets SM100. This Blackwell package
+keeps the same public API surface where practical and provides native CUDA
+implementations for the hot paths needed by the FlashRT MiniMax-Spark runtime:
 
-1. Initial source-level Triton CUDA decode path.
-2. Current v1 package: native CUDA score-to-top-k helper plus Blackwell Triton
-   decode attention.
-3. planned: Blackwell CUTE/native decode attention path aligned with upstream
-   `MiniMaxAI/msa` public APIs.
+- score-to-top-k sparse block selection;
+- tensor-core sparse decode for the MiniMax-M3 Blackwell shape;
+- FP4 block-score indexing;
+- swizzled NVFP4 -> BF16 dequantization for the W4A16 path.
 
-Do not describe this package as a full native-CUTE attention replacement. It is
-a real native package, but the attention body still uses the Blackwell Triton
-fallback.
+The CSR prefill wrapper remains part of the public compatibility surface and is
+validated against the package reference path. Shape and parameter restrictions
+are explicit errors rather than silent wrong results.
