@@ -32,10 +32,38 @@ Expected full coverage:
 
 | Area | Shapes | Reference | Required |
 |---|---:|---|---|
+| API surface | official `MiniMaxAI/msa` public names | `api_status.py` | complete status table; no unvalidated official name exported |
 | Native CUDA top-k helper | heads 64, batch 1-2, blocks 1-256 | PyTorch top-k over valid blocks | exact set match |
 | Decode sparse GQA attention | ctx 128, 2048, 4096, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Decode sparse GQA attention with sink | ctx 2048, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Decode lightning indexer | ctx 2048, 4096, 32768 | PyTorch blockmax top-k set | overlap >= 0.99 |
+
+API surface validation:
+
+```bash
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  python -m pytest MiniMaxAI-msa-blackwell/tests/test_api_surface.py -q
+```
+
+The test tracks every official `MiniMaxAI/msa` public API name:
+
+- `sparse_atten_func`
+- `sparse_atten_nvfp4_kv_func`
+- `sparse_decode_atten_func`
+- `SparseDecodePagedAttentionWrapper`
+- `fp4_indexer_block_scores`
+- `build_k2q_csr`
+- `SparseK2qCsrBuilderSm100`
+- `Nvfp4QuantizedTensor`
+- `quantize_bf16_to_nvfp4_128x4`
+- `quantize_kv_bf16_to_nvfp4_128x4`
+- `dequantize_nvfp4_128x4_to_bf16`
+- `swizzle_nvfp4_scale_to_128x4`
+- `nvfp4_global_scale_from_amax`
+
+For v1 these are explicitly tracked as planned or SM100-specific, and are not
+exported as callable functions until their Blackwell implementation and
+correctness tests are added.
 
 ## FlashRT Integration Note
 

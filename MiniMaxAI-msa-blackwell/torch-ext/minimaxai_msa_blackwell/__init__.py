@@ -40,6 +40,15 @@ from .decode.topk_sparse import flash_decode_with_gqa_share_sparse
 from ._native import has_native_ops, native_topk_from_scores
 from .naive.flash_with_topk_idx import naive_flash_decode_with_topk_idx
 from .naive.topk_sparse import naive_flash_decode_with_gqa_share_sparse
+from .api_status import (
+    OFFICIAL_API_STATUS,
+    OFFICIAL_MINIMAX_MSA_FUNCTIONS,
+    V1_AVAILABLE_FUNCTIONS,
+    available_functions,
+    official_api_status,
+    official_minimax_msa_functions,
+    unsupported_official_functions,
+)
 
 __all__ = [
     "flash_decode_with_topk_idx",
@@ -50,4 +59,11 @@ __all__ = [
     "naive_flash_decode_with_topk_idx",
     "get_cu_seqblocks",
     "robust_allocator",
+    "OFFICIAL_API_STATUS",
+    "OFFICIAL_MINIMAX_MSA_FUNCTIONS",
+    "V1_AVAILABLE_FUNCTIONS",
+    "available_functions",
+    "official_api_status",
+    "official_minimax_msa_functions",
+    "unsupported_official_functions",
 ]
