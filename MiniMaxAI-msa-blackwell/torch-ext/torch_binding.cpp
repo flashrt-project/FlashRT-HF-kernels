@@ -75,7 +75,7 @@ void msa_topk_from_scores(torch::Tensor const& score,
       checked_positive_int(topk, "topk"),
       stream);
 #else
-  TORCH_CHECK(false, "minimaxai-msa-sm121 was not built with CUDA support");
+  TORCH_CHECK(false, "minimaxai-msa-blackwell was not built with CUDA support");
 #endif
 }
 

@@ -3,10 +3,11 @@
 ## Target
 
 - Kernel family: MiniMax M3 sparse attention (MSA)
-- Package: `flashrt/MiniMaxAI-msa-sm121`
-- HF Jobs package selector: `MiniMaxAI-msa-sm121`
-- Package version: v2 native-helper package
-- Target GPU: SM121 / GB10 / consumer Blackwell
+- Package: `flashrt/MiniMaxAI-msa-blackwell`
+- HF Jobs package selector: `MiniMaxAI-msa-blackwell`
+- Package version: v1 Blackwell native-helper package
+- Target GPU family: Blackwell CUDA compute capability 12.x
+- Validated GPU: SM121 / GB10 / DGX Spark
 - Dtype: BF16 inputs with FP32 accumulation references
 - Layout: paged KV cache
 - Model path: FlashRT MiniMax-Spark runtime on DGX Spark / GB10
@@ -16,15 +17,15 @@
 Run quick validation:
 
 ```bash
-PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
-  python MiniMaxAI-msa-sm121/tests/test_msa_sm121.py --quick
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py --quick
 ```
 
 Run full validation:
 
 ```bash
-PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
-  python MiniMaxAI-msa-sm121/tests/test_msa_sm121.py
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py
 ```
 
 Expected full coverage:
@@ -70,9 +71,9 @@ Result:
 |---|---:|---|---|
 | Native score -> top-k | heads 64, batch 1, blocks 256, topk 16 | PyTorch top-k set | PASS |
 
-## SM121 Package Validation
+## Blackwell Package Validation
 
-Remote SM121 validation environment:
+Remote Blackwell validation environment:
 
 | Field | Value |
 |---|---|
@@ -88,8 +89,8 @@ Command:
 
 ```bash
 PY=/home/leadtek/jax/bin/python
-PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
-  $PY MiniMaxAI-msa-sm121/tests/test_msa_sm121.py
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  $PY MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py
 ```
 
 Result:
@@ -113,12 +114,14 @@ a deprecation warning, not a correctness failure.
 ## Native/CUTE Alignment Status
 
 The upstream `MiniMaxAI/msa` package is an SM100 package with native helper ops
-and CUTE-DSL attention kernels. This SM121 package is being upgraded in stages:
+and CUTE-DSL attention kernels. This Blackwell package is being upgraded in stages:
 
-1. v1: pure source-level Triton CUDA decode path.
-2. v2: native CUDA score-to-top-k helper plus SM121 Triton decode attention.
-3. planned: SM121 CUTE/native decode attention path aligned with upstream
+1. Initial source-level Triton CUDA decode path.
+2. Current v1 package: native CUDA score-to-top-k helper plus Blackwell Triton
+   decode attention.
+3. planned: Blackwell CUTE/native decode attention path aligned with upstream
    `MiniMaxAI/msa` public APIs.
 
-Do not describe v2 as a full native-CUTE attention replacement. It is a real
-native package, but the attention body still uses the SM121 Triton fallback.
+Do not describe this package as a full native-CUTE attention replacement. It is
+a real native package, but the attention body still uses the Blackwell Triton
+fallback.

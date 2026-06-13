@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""FlashRT SM121 extension of MiniMax MSA decode sparse attention.
+"""FlashRT Blackwell extension of MiniMax MSA decode sparse attention.
 
-This package targets NVIDIA GB10 / consumer Blackwell (SM121). It exposes the
+This package targets NVIDIA Blackwell-family CUDA 12.x GPUs and is validated on
+DGX Spark / GB10 / SM121. It exposes the
 MiniMax-M3 decode-sparse attention path used by FlashRT's MiniMax Spark runtime.
 
 Implementation status:
   * native CUDA helper: score -> top-k sparse block ids;
-  * Triton CUDA attention/index-score kernels: SM121-validated decode fallback.
+  * Triton CUDA attention/index-score kernels: Blackwell-validated decode fallback.
 
-The upstream MiniMaxAI/msa package is SM100-only; this package is the SM121
+The upstream MiniMaxAI/msa package is SM100-only; this package is the Blackwell
 extension path. The public API is Tensor-oriented and independent from
 FlashRT's serving runtime.
 

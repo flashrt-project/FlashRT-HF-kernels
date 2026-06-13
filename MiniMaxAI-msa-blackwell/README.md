@@ -1,24 +1,25 @@
-# MiniMaxAI MSA SM121
+# MiniMaxAI MSA Blackwell
 
-`MiniMaxAI-msa-sm121` is FlashRT's SM121 / GB10 extension package for the
-MiniMax MSA decode-sparse path.
+`MiniMaxAI-msa-blackwell` is FlashRT's Blackwell-family extension package for
+the MiniMax MSA decode-sparse path.
 
 Upstream reference:
 
 - MiniMaxAI MSA Hub package: <https://huggingface.co/kernels/MiniMaxAI/msa>
 - MiniMaxAI MSA source: <https://github.com/MiniMax-AI/MSA>
 
-The upstream Hub package targets SM100. This package targets consumer
-Blackwell / GB10 (`sm_121`) and is validated in FlashRT's MiniMax-Spark model
-path. The current v2 package is a native CUDA package, but the native port is
+The upstream Hub package targets SM100. This package targets Blackwell-family
+CUDA compute capability 12.x GPUs and is validated in FlashRT's MiniMax-Spark
+model path on DGX Spark / GB10 (`sm_121`). The current package is a native CUDA
+package, but the native port is
 not yet complete:
 
 - native CUDA helper: score tensor -> top-k sparse block ids
-- Triton CUDA fallback: SM121-validated decode score and sparse GQA attention
+- Triton CUDA fallback: Blackwell-validated decode score and sparse GQA attention
 
 The next native alignment step is to port the upstream CUTE-DSL attention path
-itself to SM121. Until that lands, this package is best described as a native
-helper + SM121 Triton attention package, not as a full native-CUTE replacement
+itself to Blackwell. Until that lands, this package is best described as a native
+helper + Blackwell Triton attention package, not as a full native-CUTE replacement
 for `MiniMaxAI/msa`.
 
 ## Load From Kernel Hub
@@ -27,8 +28,8 @@ for `MiniMaxAI/msa`.
 from kernels import get_kernel
 
 msa = get_kernel(
-    "flashrt/MiniMaxAI-msa-sm121",
-    version=2,
+    "flashrt/MiniMaxAI-msa-blackwell",
+    version=1,
     trust_remote_code=True,
 )
 ```
@@ -68,7 +69,7 @@ runtime already computes MiniMax MSA block scores.
 import torch
 from kernels import get_kernel
 
-msa = get_kernel("flashrt/MiniMaxAI-msa-sm121", version=2, trust_remote_code=True)
+msa = get_kernel("flashrt/MiniMaxAI-msa-blackwell", version=1, trust_remote_code=True)
 
 score = torch.randn(64, 1, 256, device="cuda", dtype=torch.float32)
 seq_lens = torch.tensor([32768], device="cuda", dtype=torch.int32)
@@ -81,7 +82,7 @@ topk_idx = msa.native_topk_from_scores(score, seq_lens, block_size=128, topk=16)
 import torch
 from kernels import get_kernel
 
-msa = get_kernel("flashrt/MiniMaxAI-msa-sm121", version=2, trust_remote_code=True)
+msa = get_kernel("flashrt/MiniMaxAI-msa-blackwell", version=1, trust_remote_code=True)
 
 batch, hq, hkv, d = 1, 64, 4, 128
 ctx, block, topk = 4096, 128, 16
@@ -132,14 +133,14 @@ selection to the KV heads.
 For a runnable version of the example above:
 
 ```bash
-python MiniMaxAI-msa-sm121/examples/decode_sparse.py
+python MiniMaxAI-msa-blackwell/examples/decode_sparse.py
 ```
 
 Use `--source-tree` when running the package before it is uploaded to the Hub:
 
 ```bash
-PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
-  python MiniMaxAI-msa-sm121/examples/decode_sparse.py --source-tree
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  python MiniMaxAI-msa-blackwell/examples/decode_sparse.py --source-tree
 ```
 
 ## Local Validation
@@ -147,27 +148,27 @@ PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
 Source-tree validation:
 
 ```bash
-PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
-  python MiniMaxAI-msa-sm121/tests/test_msa_sm121.py --quick
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py --quick
 ```
 
 Full context validation:
 
 ```bash
-PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
-  python MiniMaxAI-msa-sm121/tests/test_msa_sm121.py
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py
 ```
 
-After HF Jobs publishes v2, validate the installed Hub artifact rather than the
+After HF Jobs publishes v1, validate the installed Hub artifact rather than the
 source tree.
 
 ## Provenance
 
-This package is a FlashRT community package for the MiniMax MSA SM121 hardware
+This package is a FlashRT community package for the MiniMax MSA Blackwell hardware
 extension. It uses:
 
 - MiniMaxAI/msa as the native package/API reference
-- SGLang/vLLM MiniMax sparse attention Triton paths as the SM121 fallback and
+- SGLang/vLLM MiniMax sparse attention Triton paths as the Blackwell fallback and
   correctness baseline
 - FlashRT MiniMax-Spark runtime validation on DGX Spark / GB10
 

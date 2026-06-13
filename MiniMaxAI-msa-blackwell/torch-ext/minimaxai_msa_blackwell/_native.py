@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Optional native CUDA helpers for the FlashRT SM121 MSA package."""
+"""Optional native CUDA helpers for the FlashRT Blackwell MSA package."""
 
 from __future__ import annotations
 

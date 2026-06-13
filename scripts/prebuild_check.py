@@ -31,7 +31,7 @@ V2_CANDIDATE_PACKAGES = [
     "flashrt-vla-residual-gates",
     "flashrt-adaptive-norms",
     "flashrt-spatiotemporal-layout",
-    "MiniMaxAI-msa-sm121",
+    "MiniMaxAI-msa-blackwell",
 ]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",

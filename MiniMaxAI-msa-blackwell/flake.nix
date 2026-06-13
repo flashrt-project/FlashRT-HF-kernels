@@ -1,5 +1,5 @@
 {
-  description = "Flake for MiniMaxAI MSA SM121 kernels";
+  description = "Flake for MiniMaxAI MSA Blackwell kernels";
 
   inputs = {
     kernel-builder.url = "github:huggingface/kernels";

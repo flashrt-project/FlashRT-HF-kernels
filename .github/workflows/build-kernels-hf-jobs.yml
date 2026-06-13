@@ -17,7 +17,7 @@ on:
       - "flashrt-nvfp4/**"
       - "flashrt-smallm-gemm/**"
       - "flashrt-vla-video/**"
-      - "MiniMaxAI-msa-sm121/**"
+      - "MiniMaxAI-msa-blackwell/**"
   workflow_dispatch:
     inputs:
       package:
@@ -39,7 +39,7 @@ on:
           - flashrt-nvfp4
           - flashrt-smallm-gemm
           - flashrt-vla-video
-          - MiniMaxAI-msa-sm121
+          - MiniMaxAI-msa-blackwell
 
 permissions:
   contents: read
@@ -68,7 +68,7 @@ jobs:
           - flashrt-nvfp4
           - flashrt-smallm-gemm
           - flashrt-vla-video
-          - MiniMaxAI-msa-sm121
+          - MiniMaxAI-msa-blackwell
 
     steps:
       - uses: actions/checkout@v4

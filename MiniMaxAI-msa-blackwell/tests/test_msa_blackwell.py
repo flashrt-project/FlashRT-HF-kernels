@@ -42,7 +42,7 @@ import sys
 import pytest
 import torch
 
-from minimaxai_msa_sm121 import (  # noqa: E402
+from minimaxai_msa_blackwell import (  # noqa: E402
     flash_decode_with_gqa_share_sparse,
     flash_decode_with_topk_idx,
     has_native_ops,

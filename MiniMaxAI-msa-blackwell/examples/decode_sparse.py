@@ -1,4 +1,4 @@
-"""Minimal example for flashrt/MiniMaxAI-msa-sm121.
+"""Minimal example for flashrt/MiniMaxAI-msa-blackwell.
 
 By default this loads the uploaded Hub artifact. Use --source-tree for local
 source validation before the native extension is built; source-tree mode can
@@ -16,14 +16,14 @@ from kernels import get_kernel
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repo", default="flashrt/MiniMaxAI-msa-sm121")
-    parser.add_argument("--version", type=int, default=2)
+    parser.add_argument("--repo", default="flashrt/MiniMaxAI-msa-blackwell")
+    parser.add_argument("--version", type=int, default=1)
     parser.add_argument("--ctx", type=int, default=4096)
     parser.add_argument("--source-tree", action="store_true")
     args = parser.parse_args()
 
     if args.source_tree:
-        msa = importlib.import_module("minimaxai_msa_sm121")
+        msa = importlib.import_module("minimaxai_msa_blackwell")
     else:
         msa = get_kernel(args.repo, version=args.version, trust_remote_code=True)
 

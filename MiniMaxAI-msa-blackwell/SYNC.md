@@ -2,7 +2,7 @@
 
 ## Package Scope
 
-`MiniMaxAI-msa-sm121` is a decode-sparse SM121 hardware-extension package for
+`MiniMaxAI-msa-blackwell` is a decode-sparse Blackwell hardware-extension package for
 MiniMax M3 sparse attention. It intentionally exposes only the decode paths that
 FlashRT validated on GB10 / SM121.
 
@@ -15,7 +15,7 @@ The original MiniMaxAI Hub kernel is:
 - <https://huggingface.co/kernels/MiniMaxAI/msa>
 
 That package is SM100-only and is based on MiniMaxAI's CuTe-DSL MSA
-implementation. This package provides a staged SM121 port for consumer
+implementation. This package provides a staged Blackwell port for consumer
 Blackwell / GB10: a native CUDA helper for score-to-top-k block selection plus
 the FlashRT-validated Triton decode sparse attention fallback.
 
@@ -47,16 +47,16 @@ FlashRT-added native source files:
 - `csrc/msa_topk_from_scores.cuh`
 - `torch-ext/torch_binding.cpp`
 - `torch-ext/torch_binding.h`
-- `torch-ext/minimaxai_msa_sm121/_native.py`
+- `torch-ext/minimaxai_msa_blackwell/_native.py`
 
 Package-local destination:
 
-- `torch-ext/minimaxai_msa_sm121/`
+- `torch-ext/minimaxai_msa_blackwell/`
 
 ## Local Edits
 
 - Renamed import package from the FlashRT staging name `kernels` to
-  `minimaxai_msa_sm121`.
+  `minimaxai_msa_blackwell`.
 - Kept the SGLang framework-coupling removal already done in FlashRT:
   `_compat.py` provides CUDA-only `is_hip()` and environment stubs.
 - Public `__all__` exposes only validated decode/native APIs:

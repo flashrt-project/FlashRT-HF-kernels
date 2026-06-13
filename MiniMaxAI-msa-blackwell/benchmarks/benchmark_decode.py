@@ -3,7 +3,7 @@ import time
 
 import torch
 
-from minimaxai_msa_sm121 import (
+from minimaxai_msa_blackwell import (
     flash_decode_with_gqa_share_sparse,
     has_native_ops,
     native_topk_from_scores,
