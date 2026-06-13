@@ -22,7 +22,7 @@ backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
 cuda-minver = "12.8"
-cuda-capabilities = ["12.0"]
+cuda-capabilities = ["12.0", "12.1"]
 src = [
   "csrc/msa_topk_from_scores.cu",
   "csrc/msa_topk_from_scores.cuh",

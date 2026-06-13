@@ -150,7 +150,7 @@ out = msa.flash_decode_with_gqa_share_sparse(
 ## Scope
 
 - Target family: NVIDIA Blackwell CUDA compute capability 12.x.
-- Builder target: CUDA 12.8+ with `cuda-capabilities = ["12.0"]`.
+- Builder target: CUDA 12.8+ with `cuda-capabilities = ["12.0", "12.1"]`.
 - Validated hardware: DGX Spark / GB10 / SM121.
 - Validated MiniMax shape: query heads `64`, KV heads `4`, head dim `128`,
   sparse block `128`, top-k blocks `16`.
