@@ -13,6 +13,10 @@ on:
       - "flashrt-vla-residual-gates/**"
       - "flashrt-adaptive-norms/**"
       - "flashrt-spatiotemporal-layout/**"
+      - "flashrt-fused-quant/**"
+      - "flashrt-nvfp4/**"
+      - "flashrt-smallm-gemm/**"
+      - "flashrt-vla-video/**"
       - "MiniMaxAI-msa-sm121/**"
   workflow_dispatch:
     inputs:
@@ -31,6 +35,10 @@ on:
           - flashrt-vla-residual-gates
           - flashrt-adaptive-norms
           - flashrt-spatiotemporal-layout
+          - flashrt-fused-quant
+          - flashrt-nvfp4
+          - flashrt-smallm-gemm
+          - flashrt-vla-video
           - MiniMaxAI-msa-sm121
 
 permissions:
@@ -56,6 +64,10 @@ jobs:
           - flashrt-vla-residual-gates
           - flashrt-adaptive-norms
           - flashrt-spatiotemporal-layout
+          - flashrt-fused-quant
+          - flashrt-nvfp4
+          - flashrt-smallm-gemm
+          - flashrt-vla-video
           - MiniMaxAI-msa-sm121
 
     steps:
