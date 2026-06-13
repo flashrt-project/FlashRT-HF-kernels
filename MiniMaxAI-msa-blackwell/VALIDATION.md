@@ -32,10 +32,11 @@ Expected full coverage:
 
 | Area | Shapes | Reference | Required |
 |---|---:|---|---|
-| API surface | official `MiniMaxAI/msa` public names | `api_status.py` | complete status table; no unvalidated official name exported |
+| API surface | official `MiniMaxAI/msa` public names | `api_status.py` | all official root names exported; unsupported Blackwell paths fail explicitly |
 | Native CUDA top-k helper | heads 64, batch 1-2, blocks 1-256 | PyTorch top-k over valid blocks | exact set match |
 | Decode sparse GQA attention | ctx 128, 2048, 4096, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Decode sparse GQA attention with sink | ctx 2048, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
+| Official decode API wrapper | ctx 2048, 4096 | direct Blackwell decode kernel | cos = 1.0, max_abs = 0 |
 | Decode lightning indexer | ctx 2048, 4096, 32768 | PyTorch blockmax top-k set | overlap >= 0.99 |
 
 API surface validation:
@@ -61,9 +62,10 @@ The test tracks every official `MiniMaxAI/msa` public API name:
 - `swizzle_nvfp4_scale_to_128x4`
 - `nvfp4_global_scale_from_amax`
 
-For v1 these are explicitly tracked as planned or SM100-specific, and are not
-exported as callable functions until their Blackwell implementation and
-correctness tests are added.
+The root module exports every official public name. Decode, CSR, and NVFP4
+helper names are implemented where they map to this Blackwell package. The
+SM100 CSR prefill and FP4 CUTE indexer names are callable but fail explicitly
+with `NotImplementedError` because returning fake results would be unsafe.
 
 ## FlashRT Integration Note
 
@@ -135,6 +137,8 @@ Result:
 | Decode top-k indexer | ctx2048 | n/a | overlap 1.000 | PASS |
 | Decode top-k indexer | ctx4096 | n/a | overlap 1.000 | PASS |
 | Decode top-k indexer | ctx32768 | n/a | overlap 1.000 | PASS |
+| Official decode wrapper | ctx2048 | 1.000000 | 0.0000e+00 | PASS |
+| Official decode wrapper | ctx4096 | 1.000000 | 0.0000e+00 | PASS |
 
 The warning `tl.make_block_ptr is deprecated` appears with Triton 3.7.0. It is
 a deprecation warning, not a correctness failure.

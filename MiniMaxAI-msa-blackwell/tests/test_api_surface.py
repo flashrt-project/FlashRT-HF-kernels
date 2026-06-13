@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import minimaxai_msa_blackwell as msa
+import pytest
 
 
 OFFICIAL_NAMES = {
@@ -36,13 +37,42 @@ def test_official_api_status_is_complete() -> None:
     status = msa.official_api_status()
     assert set(status) == OFFICIAL_NAMES
     for name, item in status.items():
-        assert item["status"] in {"available", "planned", "not_applicable_name"}
+        assert item["status"] in {
+            "available",
+            "available_optional_te",
+            "unsupported_callable",
+        }
         assert item["target"]
         assert item["reason"]
 
 
-def test_v1_does_not_export_unvalidated_official_names() -> None:
-    unsupported = set(msa.unsupported_official_functions())
-    assert unsupported == OFFICIAL_NAMES
-    for name in unsupported:
-        assert not hasattr(msa, name), f"{name} must not be exported until validated"
+def test_official_names_are_exported_at_root() -> None:
+    for name in OFFICIAL_NAMES:
+        assert hasattr(msa, name), f"{name} must be exported for API compatibility"
+
+
+def test_unsupported_blackwell_paths_fail_explicitly() -> None:
+    for name in {
+        "sparse_atten_func",
+        "sparse_atten_nvfp4_kv_func",
+        "fp4_indexer_block_scores",
+    }:
+        with pytest.raises(NotImplementedError, match=name):
+            getattr(msa, name)()
+
+
+def test_pure_python_compat_helpers() -> None:
+    import torch
+
+    scale = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+    swizzled = msa.swizzle_nvfp4_scale_to_128x4(scale, rows=2, cols=4)
+    assert swizzled.shape == (128, 4)
+    assert msa.nvfp4_global_scale_from_amax(torch.tensor([2688.0])).item() == 1.0
+
+    q2k = torch.tensor([[[0, 1], [1, -1]]], dtype=torch.int32)
+    cu_q = torch.tensor([0, 2], dtype=torch.int32)
+    cu_k = torch.tensor([0, 256], dtype=torch.int32)
+    row_ptr, q_idx = msa.build_k2q_csr(q2k, cu_q, cu_k, 128, total_k=256)
+    assert row_ptr.dtype == torch.int32
+    assert q_idx.dtype == torch.int32
+    assert row_ptr.shape == (1, 3)

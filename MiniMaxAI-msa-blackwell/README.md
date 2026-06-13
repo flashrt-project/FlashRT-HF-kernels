@@ -12,16 +12,14 @@ tags:
 
 # MiniMaxAI MSA Blackwell
 
-FlashRT-packaged Blackwell-family extension for MiniMaxAI MSA decode sparse
-attention. The upstream MiniMaxAI package is
+Blackwell-family package for MiniMax MSA decode sparse attention, maintained by
+FlashRT. The upstream package is
 [`MiniMaxAI/msa`](https://huggingface.co/kernels/MiniMaxAI/msa), which targets
-SM100. This package keeps the MiniMax MSA Tensor API style and extends the
-decode-sparse path to CUDA compute capability 12.x Blackwell targets.
+SM100. This package extends the decode-sparse path to NVIDIA Blackwell
+compute capability 12.x and has been validated in the FlashRT MiniMax-Spark
+runtime on DGX Spark / GB10 / SM121.
 
-The package is validated in the FlashRT MiniMax-Spark runtime on DGX Spark /
-GB10 and exposes standalone Tensor APIs for use from Python.
-
-## Install and Load
+## Load
 
 ```python
 from kernels import get_kernel
@@ -33,110 +31,44 @@ msa = get_kernel(
 )
 ```
 
-## Current v1 Functions
+## What You Can Call
 
-This v1 Blackwell package intentionally exposes the subset that has already
-been ported and validated on FlashRT's MiniMax-Spark decode path. It is not yet
-a drop-in mirror of every public function exported by the upstream
-[`MiniMaxAI/msa`](https://huggingface.co/kernels/MiniMaxAI/msa) SM100 package.
+### Official MiniMaxAI/msa names
 
-### `has_native_ops() -> bool`
+| Function/class | Status in this Blackwell package |
+|---|---|
+| `sparse_decode_atten_func` | Available. Blackwell paged BF16/FP16 single-token decode wrapper. |
+| `SparseDecodePagedAttentionWrapper` | Available. `plan(...).run(...)` wrapper for the same decode path. |
+| `build_k2q_csr` | Available. Torch CSR construction fallback. |
+| `SparseK2qCsrBuilderSm100` | Available compatibility class; `build()` delegates to `build_k2q_csr`. |
+| `Nvfp4QuantizedTensor` | Available metadata dataclass. |
+| `quantize_bf16_to_nvfp4_128x4` | Available when Transformer Engine NVFP4 support is installed. |
+| `quantize_kv_bf16_to_nvfp4_128x4` | Available when Transformer Engine NVFP4 support is installed. |
+| `dequantize_nvfp4_128x4_to_bf16` | Available reference dequantizer. |
+| `swizzle_nvfp4_scale_to_128x4` | Available scale-layout helper. |
+| `nvfp4_global_scale_from_amax` | Available scale helper. |
+| `sparse_atten_func` | Exported, but raises `NotImplementedError`: SM100 CSR prefill kernel is not ported here yet. |
+| `sparse_atten_nvfp4_kv_func` | Exported, but raises `NotImplementedError`: SM100 NVFP4 CSR prefill kernel is not ported here yet. |
+| `fp4_indexer_block_scores` | Exported, but raises `NotImplementedError`: SM100 FP4 CUTE indexer is not ported here yet. |
 
-Returns whether the native CUDA helper extension was loaded.
+### FlashRT Blackwell helper names
 
-```python
-assert msa.has_native_ops()
-```
+These are the direct low-level APIs used by the FlashRT MiniMax-Spark decode
+path:
 
-### `native_topk_from_scores(score, seq_lens, block_size, topk) -> topk_idx`
+- `flash_decode_with_topk_idx`
+- `flash_decode_with_gqa_share_sparse`
+- `native_topk_from_scores`
+- `has_native_ops`
+- `naive_flash_decode_with_topk_idx`
+- `naive_flash_decode_with_gqa_share_sparse`
+- `get_cu_seqblocks`
+- `robust_allocator`
 
-Native CUDA helper that converts precomputed MiniMax MSA block scores to sparse
-block ids.
+## Decode Example
 
-- `score`: CUDA `float32`, shape `[heads, batch, max_blocks]`
-- `seq_lens`: CUDA `int32`, shape `[batch]`
-- `block_size`: currently validated with `128`
-- `topk`: currently validated with `16`
-- return: CUDA `int32`, shape `[heads, batch, topk]`
-
-```python
-import torch
-
-score = torch.randn(64, 1, 256, device="cuda", dtype=torch.float32)
-seq_lens = torch.tensor([32768], device="cuda", dtype=torch.int32)
-topk_idx = msa.native_topk_from_scores(score, seq_lens, block_size=128, topk=16)
-```
-
-### `flash_decode_with_topk_idx(...) -> (index_value, topk_idx, real_seq_lens)`
-
-MiniMax decode indexer. In the common sparse-indexing mode, pass
-`disable_index_value=True` and the function returns `(None, topk_idx,
-real_seq_lens)`.
-
-Typical indexer inputs:
-
-- `q`: CUDA `bfloat16`, shape `[batch, 1, 128]`
-- `k_cache`: CUDA `bfloat16`, shape `[ctx, 1, 128]`
-- `req_to_token`: CUDA `int32`, shape `[batch, ctx]`
-- `seq_lens`: CUDA `int32`, shape `[batch]`
-- `slot_ids`: CUDA integer, shape `[batch]`
-- output `topk_idx`: CUDA `int32`, shape `[1, batch, topk]`
-
-### `flash_decode_with_gqa_share_sparse(...) -> out`
-
-Block-sparse GQA decode attention. This consumes `topk_idx` from the indexer
-and applies the selected sparse blocks to the full GQA attention path.
-
-Typical MiniMax M3 decode inputs:
-
-- `q`: CUDA `bfloat16`, shape `[batch, 64, 128]`
-- `k_cache`: CUDA `bfloat16`, shape `[ctx, 4, 128]`
-- `v_cache`: CUDA `bfloat16`, shape `[ctx, 4, 128]`
-- `topk_idx`: CUDA `int32`, shape `[4, batch, 16]`
-- return: CUDA `bfloat16`, shape `[batch, 64, 128]`
-
-### Reference Functions
-
-These are provided for local correctness checks:
-
-- `naive_flash_decode_with_topk_idx(...)`
-- `naive_flash_decode_with_gqa_share_sparse(...)`
-
-## Upstream API Compatibility Plan
-
-The upstream `MiniMaxAI/msa` package currently exposes a broader SM100 API
-surface:
-
-| Official `MiniMaxAI/msa` name | v1 status | Planned target |
-|---|---|---|
-| `sparse_atten_func` | planned | v2+ |
-| `sparse_atten_nvfp4_kv_func` | planned | v2+ |
-| `sparse_decode_atten_func` | planned | v2 |
-| `SparseDecodePagedAttentionWrapper` | planned | v2 |
-| `fp4_indexer_block_scores` | planned | v2+ |
-| `build_k2q_csr` | planned | v2+ |
-| `SparseK2qCsrBuilderSm100` | SM100-specific name; not exported in v1 | v2+ alias decision |
-| `Nvfp4QuantizedTensor` | planned | v2+ |
-| `quantize_bf16_to_nvfp4_128x4` | planned | v2+ |
-| `quantize_kv_bf16_to_nvfp4_128x4` | planned | v2+ |
-| `dequantize_nvfp4_128x4_to_bf16` | planned | v2+ |
-| `swizzle_nvfp4_scale_to_128x4` | planned | v2+ |
-| `nvfp4_global_scale_from_amax` | planned | v2+ |
-
-Those names are intentionally not exported in v1. The v2 goal is to add a
-compatibility layer for the official MiniMaxAI API names where the Blackwell
-implementation is ready, starting with the decode path
-(`sparse_decode_atten_func` and `SparseDecodePagedAttentionWrapper`), then
-expanding to indexing/CSR and NVFP4 helpers after separate correctness
-validation.
-
-Source tracking note: the package source tree includes an `api_status.py`
-matrix and tests that keep this v1/v2 boundary explicit. This is a
-documentation/introspection aid; it does not make planned official API names
-callable before their Blackwell implementations and correctness tests are
-added.
-
-## Minimal Decode Example
+This example uses the official MiniMax decode-facing name
+`sparse_decode_atten_func`.
 
 ```python
 import torch
@@ -144,45 +76,68 @@ from kernels import get_kernel
 
 msa = get_kernel("flashrt/MiniMaxAI-msa-blackwell", version=1, trust_remote_code=True)
 
-batch, hq, hkv, d = 1, 64, 4, 128
-ctx, block, topk = 4096, 128, 16
-device, dtype = "cuda", torch.bfloat16
+B, Hq, Hkv, D = 1, 64, 4, 128
+page_size = 128
+num_pages = 32
+topk = 16
+device = "cuda"
+dtype = torch.bfloat16
 
-q = torch.randn(batch, hq, d, device=device, dtype=dtype)
-k_cache = torch.randn(ctx, hkv, d, device=device, dtype=dtype)
-v_cache = torch.randn(ctx, hkv, d, device=device, dtype=dtype)
-q_index = torch.randn(batch, 1, d, device=device, dtype=dtype)
-k_index = torch.randn(ctx, 1, d, device=device, dtype=dtype)
-req_to_token = torch.arange(ctx, device=device, dtype=torch.int32).view(1, -1)
-seq_lens = torch.tensor([ctx], device=device, dtype=torch.int32)
-slot_ids = torch.zeros(batch, device=device, dtype=torch.int64)
+q = torch.randn(B, Hq, D, device=device, dtype=dtype)
+k = torch.randn(num_pages, Hkv, page_size, D, device=device, dtype=dtype)
+v = torch.randn_like(k)
+page_table = torch.arange(num_pages, device=device, dtype=torch.int32).view(B, -1)
+seqused_k = torch.tensor([num_pages * page_size], device=device, dtype=torch.int32)
+q2k_indices = torch.arange(topk, device=device, dtype=torch.int32).view(1, 1, topk)
+q2k_indices = q2k_indices.expand(Hkv, B, topk).contiguous()
 
-_, topk_idx, _ = msa.flash_decode_with_topk_idx(
-    q_index,
-    None,
-    k_index,
-    None,
-    req_to_token,
-    seq_lens,
-    max_seqlen=ctx,
-    slot_ids=slot_ids,
-    block_size=block,
-    topk=topk,
-    init_blocks=0,
-    local_blocks=1,
-    disable_index_value=True,
+out = msa.sparse_decode_atten_func(
+    q,
+    k,
+    v,
+    q2k_indices,
+    page_table=page_table,
+    seqused_k=seqused_k,
+    seqlen_q=1,
+    max_seqlen_k=num_pages * page_size,
+    blk_kv=page_size,
 )
+```
+
+## Wrapper Example
+
+```python
+wrapper = msa.SparseDecodePagedAttentionWrapper(blk_kv=128)
+wrapper.plan(
+    page_table=page_table,
+    seqused_k=seqused_k,
+    seqlen_q=1,
+    max_seqlen_k=num_pages * page_size,
+    q2k_indices=q2k_indices,
+    num_qo_heads=Hq,
+    num_kv_heads=Hkv,
+    head_dim=D,
+)
+out = wrapper.run(q, k, v)
+```
+
+## Direct FlashRT Decode Path
+
+Use this lower-level path if you already have `topk_idx` in FlashRT's paged KV
+layout.
+
+```python
+q = torch.randn(B, Hq, D, device=device, dtype=dtype)
+k_cache = torch.randn(num_pages * page_size, Hkv, D, device=device, dtype=dtype)
+v_cache = torch.randn_like(k_cache)
+req_to_token = torch.arange(num_pages * page_size, device=device, dtype=torch.int32).view(B, -1)
+seq_lens = torch.tensor([num_pages * page_size], device=device, dtype=torch.int32)
+slot_ids = torch.zeros(B, device=device, dtype=torch.int64)
+topk_idx = torch.arange(topk, device=device, dtype=torch.int32).view(1, 1, topk)
+topk_idx = topk_idx.expand(Hkv, B, topk).contiguous()
 
 out = msa.flash_decode_with_gqa_share_sparse(
-    q,
-    None,
-    k_cache,
-    v_cache,
-    req_to_token,
-    seq_lens,
-    slot_ids,
-    block,
-    topk_idx.expand(hkv, batch, topk).contiguous(),
+    q, None, k_cache, v_cache, req_to_token, seq_lens, slot_ids, page_size, topk_idx
 )
 ```
 
@@ -190,20 +145,25 @@ out = msa.flash_decode_with_gqa_share_sparse(
 
 - Target family: NVIDIA Blackwell CUDA compute capability 12.x.
 - Builder target: CUDA 12.8+ with `cuda-capabilities = ["12.0", "12.1"]`.
-- Published artifact metadata: CUDA 12.8 variants currently list `12.0`;
-  CUDA 13.0/13.2 variants list both `12.0` and `12.1`.
 - Validated hardware: DGX Spark / GB10 / SM121.
 - Validated MiniMax shape: query heads `64`, KV heads `4`, head dim `128`,
-  sparse block `128`, top-k blocks `16`.
+  sparse block/page size `128`, top-k blocks `16`.
 - Validated context lengths: `128`, `2048`, `4096`, `32768`.
 - Correctness gate: cosine similarity `>= 0.999` against paged FP32 PyTorch
-  references; native score-to-top-k selection matches PyTorch blockmax top-k
-  set semantics.
+  references; official decode wrapper output matches the direct Blackwell
+  decode kernel.
 
-Implementation note: this package includes a native CUDA top-k helper and a
-Blackwell-validated Triton CUDA decode sparse attention fallback. A full native
-CUTE/CUDA attention body aligned with upstream `MiniMaxAI/msa` is the next
-implementation step.
+## Implementation Notes
+
+This package contains:
+
+- native CUDA score-to-top-k helper;
+- Blackwell-validated Triton CUDA sparse decode attention;
+- MiniMaxAI/msa-compatible Python API layer for decode, CSR, and NVFP4 helpers.
+
+The upstream SM100 CSR prefill attention and FP4 CUTE indexer are not claimed as
+ported in this package yet. Their root names are exported so callers see a clear
+`NotImplementedError` instead of silently getting wrong behavior.
 
 Source provenance and validation details are documented in `SYNC.md` and
 `VALIDATION.md`.

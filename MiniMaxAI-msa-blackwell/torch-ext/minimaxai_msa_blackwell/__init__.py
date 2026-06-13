@@ -37,9 +37,25 @@ See VENDOR_NOTES.md for full shape/dtype/layout contracts.
 from .common.utils import get_cu_seqblocks, robust_allocator
 from .decode.flash_with_topk_idx import flash_decode_with_topk_idx
 from .decode.topk_sparse import flash_decode_with_gqa_share_sparse
+from .interface import (
+    SparseDecodePagedAttentionWrapper,
+    fp4_indexer_block_scores,
+    sparse_atten_func,
+    sparse_atten_nvfp4_kv_func,
+    sparse_decode_atten_func,
+)
 from ._native import has_native_ops, native_topk_from_scores
 from .naive.flash_with_topk_idx import naive_flash_decode_with_topk_idx
 from .naive.topk_sparse import naive_flash_decode_with_gqa_share_sparse
+from .quantize import (
+    Nvfp4QuantizedTensor,
+    dequantize_nvfp4_128x4_to_bf16,
+    nvfp4_global_scale_from_amax,
+    quantize_bf16_to_nvfp4_128x4,
+    quantize_kv_bf16_to_nvfp4_128x4,
+    swizzle_nvfp4_scale_to_128x4,
+)
+from .sparse_index_utils import SparseK2qCsrBuilderSm100, build_k2q_csr
 from .api_status import (
     OFFICIAL_API_STATUS,
     OFFICIAL_MINIMAX_MSA_FUNCTIONS,
@@ -51,6 +67,19 @@ from .api_status import (
 )
 
 __all__ = [
+    "sparse_atten_func",
+    "sparse_atten_nvfp4_kv_func",
+    "sparse_decode_atten_func",
+    "SparseDecodePagedAttentionWrapper",
+    "fp4_indexer_block_scores",
+    "build_k2q_csr",
+    "SparseK2qCsrBuilderSm100",
+    "Nvfp4QuantizedTensor",
+    "quantize_bf16_to_nvfp4_128x4",
+    "quantize_kv_bf16_to_nvfp4_128x4",
+    "dequantize_nvfp4_128x4_to_bf16",
+    "swizzle_nvfp4_scale_to_128x4",
+    "nvfp4_global_scale_from_amax",
     "flash_decode_with_topk_idx",
     "flash_decode_with_gqa_share_sparse",
     "has_native_ops",

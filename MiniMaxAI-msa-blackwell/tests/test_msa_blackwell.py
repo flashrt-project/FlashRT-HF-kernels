@@ -47,6 +47,7 @@ from minimaxai_msa_blackwell import (  # noqa: E402
     flash_decode_with_topk_idx,
     has_native_ops,
     native_topk_from_scores,
+    sparse_decode_atten_func,
 )
 
 DEVICE = "cuda"
@@ -248,6 +249,42 @@ def _run_decode_case(seq_lens_list, paged, with_sink):
     return cos_sim(o_kernel, o_ref), max_abs_err(o_kernel, o_ref)
 
 
+def _run_official_decode_wrapper_case(seq_len):
+    batch_size = 1
+    q, _sink, k_cache, v_cache, req_to_token, seq_lens, slot_ids, topk_idx = (
+        build_decode_inputs(
+            batch_size=batch_size,
+            num_q_heads=M3_HQ,
+            num_kv_heads=M3_HKV,
+            head_dim=M3_D,
+            seq_lens_list=[seq_len],
+            block_size=M3_BLOCK,
+            topk=M3_TOPK,
+            with_sink=False,
+            paged=False,
+        )
+    )
+    direct = flash_decode_with_gqa_share_sparse(
+        q, None, k_cache, v_cache, req_to_token, seq_lens, slot_ids, M3_BLOCK, topk_idx
+    )
+    num_pages = (seq_len + M3_BLOCK - 1) // M3_BLOCK
+    k_paged = k_cache[: num_pages * M3_BLOCK].reshape(num_pages, M3_BLOCK, M3_HKV, M3_D).transpose(1, 2).contiguous()
+    v_paged = v_cache[: num_pages * M3_BLOCK].reshape(num_pages, M3_BLOCK, M3_HKV, M3_D).transpose(1, 2).contiguous()
+    page_table = torch.arange(num_pages, device=DEVICE, dtype=torch.int32).view(1, -1)
+    official = sparse_decode_atten_func(
+        q,
+        k_paged,
+        v_paged,
+        topk_idx,
+        page_table=page_table,
+        seqused_k=seq_lens,
+        seqlen_q=1,
+        max_seqlen_k=seq_len,
+        blk_kv=M3_BLOCK,
+    )
+    return cos_sim(official, direct), max_abs_err(official, direct)
+
+
 def _run_indexer_decode_case(seq_len):
     """Lightning indexer (decode): score blocks, return top-k block ids.
 
@@ -358,6 +395,16 @@ def test_indexer_decode_topk(seq_len):
     assert overlap >= 0.99, f"[indexer {seq_len}] block-set overlap {overlap:.3f}"
 
 
+@pytest.mark.parametrize("seq_len", [2048, 4096])
+def test_official_sparse_decode_wrapper_matches_direct_kernel(seq_len):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    torch.manual_seed(0)
+    cos, err = _run_official_decode_wrapper_case(seq_len)
+    assert cos >= 0.99999, f"[official wrapper {seq_len}] cos {cos:.6f}"
+    assert err == 0.0, f"[official wrapper {seq_len}] max_abs_err {err:.4e}"
+
+
 @pytest.mark.parametrize(
     "heads,batch_size,max_blocks,seq_lens_list,topk",
     [
@@ -409,6 +456,15 @@ def main():
         good = overlap >= 0.99
         ok &= good
         print(f"{sl:<22}{overlap:>12.3f}{n:>16d}{'PASS' if good else 'FAIL':>10}")
+
+    print("\n== official MiniMax decode API wrapper (vs direct Blackwell kernel) ==")
+    print(f"{'seq_len':<22}{'cos':>12}{'max_abs_err':>16}{'verdict':>10}")
+    wrapper_lens = [2048] if args.quick else [2048, 4096]
+    for sl in wrapper_lens:
+        cos, err = _run_official_decode_wrapper_case(sl)
+        good = cos >= 0.99999 and err == 0.0
+        ok &= good
+        print(f"{sl:<22}{cos:>12.6f}{err:>16.4e}{'PASS' if good else 'FAIL':>10}")
 
     print("\n== native CUDA score->top-k helper ==")
     if has_native_ops():
