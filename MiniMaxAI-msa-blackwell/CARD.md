@@ -33,7 +33,12 @@ msa = get_kernel(
 )
 ```
 
-## Functions
+## Current v1 Functions
+
+This v1 Blackwell package intentionally exposes the subset that has already
+been ported and validated on FlashRT's MiniMax-Spark decode path. It is not yet
+a drop-in mirror of every public function exported by the upstream
+[`MiniMaxAI/msa`](https://huggingface.co/kernels/MiniMaxAI/msa) SM100 package.
 
 ### `has_native_ops() -> bool`
 
@@ -96,6 +101,32 @@ These are provided for local correctness checks:
 
 - `naive_flash_decode_with_topk_idx(...)`
 - `naive_flash_decode_with_gqa_share_sparse(...)`
+
+## Upstream API Compatibility Plan
+
+The upstream `MiniMaxAI/msa` package currently exposes a broader SM100 API
+surface:
+
+- `sparse_atten_func`
+- `sparse_atten_nvfp4_kv_func`
+- `sparse_decode_atten_func`
+- `SparseDecodePagedAttentionWrapper`
+- `fp4_indexer_block_scores`
+- `build_k2q_csr`
+- `SparseK2qCsrBuilderSm100`
+- `Nvfp4QuantizedTensor`
+- `quantize_bf16_to_nvfp4_128x4`
+- `quantize_kv_bf16_to_nvfp4_128x4`
+- `dequantize_nvfp4_128x4_to_bf16`
+- `swizzle_nvfp4_scale_to_128x4`
+- `nvfp4_global_scale_from_amax`
+
+Those names are not advertised as available in this v1 package unless they are
+listed in the previous section. The v2 goal is to add a compatibility layer for
+the official MiniMaxAI API names where the Blackwell implementation is ready,
+starting with the decode path (`sparse_decode_atten_func` and
+`SparseDecodePagedAttentionWrapper`), then expanding to indexing/CSR and NVFP4
+helpers after separate correctness validation.
 
 ## Minimal Decode Example
 

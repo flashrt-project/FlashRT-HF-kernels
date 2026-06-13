@@ -1,28 +1,27 @@
+---
+library_name: kernels
+license: apache-2.0
+tags:
+  - cuda
+  - triton
+  - native-cuda
+  - minimax
+  - sparse-attention
+  - blackwell
+---
+
 # MiniMaxAI MSA Blackwell
 
-`MiniMaxAI-msa-blackwell` is FlashRT's Blackwell-family extension package for
-the MiniMax MSA decode-sparse path.
+FlashRT-packaged Blackwell-family extension for MiniMaxAI MSA decode sparse
+attention. The upstream MiniMaxAI package is
+[`MiniMaxAI/msa`](https://huggingface.co/kernels/MiniMaxAI/msa), which targets
+SM100. This package keeps the MiniMax MSA Tensor API style and extends the
+decode-sparse path to CUDA compute capability 12.x Blackwell targets.
 
-Upstream reference:
+The package is validated in the FlashRT MiniMax-Spark runtime on DGX Spark /
+GB10 and exposes standalone Tensor APIs for use from Python.
 
-- MiniMaxAI MSA Hub package: <https://huggingface.co/kernels/MiniMaxAI/msa>
-- MiniMaxAI MSA source: <https://github.com/MiniMax-AI/MSA>
-
-The upstream Hub package targets SM100. This package targets Blackwell-family
-CUDA compute capability 12.x GPUs and is validated in FlashRT's MiniMax-Spark
-model path on DGX Spark / GB10 (`sm_121`). The current package is a native CUDA
-package, but the native port is
-not yet complete:
-
-- native CUDA helper: score tensor -> top-k sparse block ids
-- Triton CUDA fallback: Blackwell-validated decode score and sparse GQA attention
-
-The next native alignment step is to port the upstream CUTE-DSL attention path
-itself to Blackwell. Until that lands, this package is best described as a native
-helper + Blackwell Triton attention package, not as a full native-CUTE replacement
-for `MiniMaxAI/msa`.
-
-## Load From Kernel Hub
+## Install and Load
 
 ```python
 from kernels import get_kernel
@@ -34,49 +33,102 @@ msa = get_kernel(
 )
 ```
 
-## Public APIs
+## Current v1 Functions
 
-The package exports:
+This v1 Blackwell package intentionally exposes the subset that has already
+been ported and validated on FlashRT's MiniMax-Spark decode path. It is not yet
+a drop-in mirror of every public function exported by the upstream
+[`MiniMaxAI/msa`](https://huggingface.co/kernels/MiniMaxAI/msa) SM100 package.
 
-- `native_topk_from_scores(score, seq_lens, block_size, topk)`: native CUDA
-  helper that converts an already-computed `[heads, batch, max_blocks]` FP32
-  score tensor to `[heads, batch, topk]` sparse block ids.
-- `flash_decode_with_topk_idx(...)`: MiniMax decode indexer. With
-  `disable_index_value=True`, returns `(None, topk_idx, real_seq_lens)`.
-- `flash_decode_with_gqa_share_sparse(...)`: block-sparse GQA decode attention
-  consuming `topk_idx`.
-- `naive_flash_decode_with_topk_idx(...)` and
-  `naive_flash_decode_with_gqa_share_sparse(...)`: PyTorch references for
-  correctness checks.
+### `has_native_ops() -> bool`
 
-MiniMax-M3 production decode shape:
+Returns whether the native CUDA helper extension was loaded.
 
-| Field | Value |
-|---|---:|
-| Query heads | 64 |
-| KV heads | 4 |
-| Head dim | 128 |
-| Sparse block | 128 |
-| Top-k blocks | 16 |
-| Input dtype | BF16 |
+```python
+assert msa.has_native_ops()
+```
 
-## Minimal Native Helper Example
+### `native_topk_from_scores(score, seq_lens, block_size, topk) -> topk_idx`
 
-This is the smallest native-CUDA call in the package. It is useful when another
-runtime already computes MiniMax MSA block scores.
+Native CUDA helper that converts precomputed MiniMax MSA block scores to sparse
+block ids.
+
+- `score`: CUDA `float32`, shape `[heads, batch, max_blocks]`
+- `seq_lens`: CUDA `int32`, shape `[batch]`
+- `block_size`: currently validated with `128`
+- `topk`: currently validated with `16`
+- return: CUDA `int32`, shape `[heads, batch, topk]`
 
 ```python
 import torch
-from kernels import get_kernel
-
-msa = get_kernel("flashrt/MiniMaxAI-msa-blackwell", version=1, trust_remote_code=True)
 
 score = torch.randn(64, 1, 256, device="cuda", dtype=torch.float32)
 seq_lens = torch.tensor([32768], device="cuda", dtype=torch.int32)
 topk_idx = msa.native_topk_from_scores(score, seq_lens, block_size=128, topk=16)
 ```
 
-## Minimal Decode Attention Example
+### `flash_decode_with_topk_idx(...) -> (index_value, topk_idx, real_seq_lens)`
+
+MiniMax decode indexer. In the common sparse-indexing mode, pass
+`disable_index_value=True` and the function returns `(None, topk_idx,
+real_seq_lens)`.
+
+Typical indexer inputs:
+
+- `q`: CUDA `bfloat16`, shape `[batch, 1, 128]`
+- `k_cache`: CUDA `bfloat16`, shape `[ctx, 1, 128]`
+- `req_to_token`: CUDA `int32`, shape `[batch, ctx]`
+- `seq_lens`: CUDA `int32`, shape `[batch]`
+- `slot_ids`: CUDA integer, shape `[batch]`
+- output `topk_idx`: CUDA `int32`, shape `[1, batch, topk]`
+
+### `flash_decode_with_gqa_share_sparse(...) -> out`
+
+Block-sparse GQA decode attention. This consumes `topk_idx` from the indexer
+and applies the selected sparse blocks to the full GQA attention path.
+
+Typical MiniMax M3 decode inputs:
+
+- `q`: CUDA `bfloat16`, shape `[batch, 64, 128]`
+- `k_cache`: CUDA `bfloat16`, shape `[ctx, 4, 128]`
+- `v_cache`: CUDA `bfloat16`, shape `[ctx, 4, 128]`
+- `topk_idx`: CUDA `int32`, shape `[4, batch, 16]`
+- return: CUDA `bfloat16`, shape `[batch, 64, 128]`
+
+### Reference Functions
+
+These are provided for local correctness checks:
+
+- `naive_flash_decode_with_topk_idx(...)`
+- `naive_flash_decode_with_gqa_share_sparse(...)`
+
+## Upstream API Compatibility Plan
+
+The upstream `MiniMaxAI/msa` package currently exposes a broader SM100 API
+surface:
+
+- `sparse_atten_func`
+- `sparse_atten_nvfp4_kv_func`
+- `sparse_decode_atten_func`
+- `SparseDecodePagedAttentionWrapper`
+- `fp4_indexer_block_scores`
+- `build_k2q_csr`
+- `SparseK2qCsrBuilderSm100`
+- `Nvfp4QuantizedTensor`
+- `quantize_bf16_to_nvfp4_128x4`
+- `quantize_kv_bf16_to_nvfp4_128x4`
+- `dequantize_nvfp4_128x4_to_bf16`
+- `swizzle_nvfp4_scale_to_128x4`
+- `nvfp4_global_scale_from_amax`
+
+Those names are not advertised as available in this v1 package unless they are
+listed in the previous section. The v2 goal is to add a compatibility layer for
+the official MiniMaxAI API names where the Blackwell implementation is ready,
+starting with the decode path (`sparse_decode_atten_func` and
+`SparseDecodePagedAttentionWrapper`), then expanding to indexing/CSR and NVFP4
+helpers after separate correctness validation.
+
+## Minimal Decode Example
 
 ```python
 import torch
@@ -86,15 +138,16 @@ msa = get_kernel("flashrt/MiniMaxAI-msa-blackwell", version=1, trust_remote_code
 
 batch, hq, hkv, d = 1, 64, 4, 128
 ctx, block, topk = 4096, 128, 16
+device, dtype = "cuda", torch.bfloat16
 
-q = torch.randn(batch, hq, d, device="cuda", dtype=torch.bfloat16)
-k_cache = torch.randn(ctx, hkv, d, device="cuda", dtype=torch.bfloat16)
-v_cache = torch.randn(ctx, hkv, d, device="cuda", dtype=torch.bfloat16)
-q_index = torch.randn(batch, 1, d, device="cuda", dtype=torch.bfloat16)
-k_index = torch.randn(ctx, 1, d, device="cuda", dtype=torch.bfloat16)
-req_to_token = torch.arange(ctx, device="cuda", dtype=torch.int32).view(1, -1)
-seq_lens = torch.tensor([ctx], device="cuda", dtype=torch.int32)
-slot_ids = torch.zeros(batch, device="cuda", dtype=torch.int64)
+q = torch.randn(batch, hq, d, device=device, dtype=dtype)
+k_cache = torch.randn(ctx, hkv, d, device=device, dtype=dtype)
+v_cache = torch.randn(ctx, hkv, d, device=device, dtype=dtype)
+q_index = torch.randn(batch, 1, d, device=device, dtype=dtype)
+k_index = torch.randn(ctx, 1, d, device=device, dtype=dtype)
+req_to_token = torch.arange(ctx, device=device, dtype=torch.int32).view(1, -1)
+seq_lens = torch.tensor([ctx], device=device, dtype=torch.int32)
+slot_ids = torch.zeros(batch, device=device, dtype=torch.int64)
 
 _, topk_idx, _ = msa.flash_decode_with_topk_idx(
     q_index,
@@ -125,51 +178,24 @@ out = msa.flash_decode_with_gqa_share_sparse(
 )
 ```
 
-The example intentionally uses a separate 1-head indexer Q/K path. MiniMax M3
-does not select sparse blocks by running the 64 query heads directly as the
-attention heads; it produces a compact sparse block set and broadcasts that
-selection to the KV heads.
+## Scope
 
-For a runnable version of the example above:
+- Target family: NVIDIA Blackwell CUDA compute capability 12.x.
+- Builder target: CUDA 12.8+ with `cuda-capabilities = ["12.0", "12.1"]`.
+- Published artifact metadata: CUDA 12.8 variants currently list `12.0`;
+  CUDA 13.0/13.2 variants list both `12.0` and `12.1`.
+- Validated hardware: DGX Spark / GB10 / SM121.
+- Validated MiniMax shape: query heads `64`, KV heads `4`, head dim `128`,
+  sparse block `128`, top-k blocks `16`.
+- Validated context lengths: `128`, `2048`, `4096`, `32768`.
+- Correctness gate: cosine similarity `>= 0.999` against paged FP32 PyTorch
+  references; native score-to-top-k selection matches PyTorch blockmax top-k
+  set semantics.
 
-```bash
-python MiniMaxAI-msa-blackwell/examples/decode_sparse.py
-```
+Implementation note: this package includes a native CUDA top-k helper and a
+Blackwell-validated Triton CUDA decode sparse attention fallback. A full native
+CUTE/CUDA attention body aligned with upstream `MiniMaxAI/msa` is the next
+implementation step.
 
-Use `--source-tree` when running the package before it is uploaded to the Hub:
-
-```bash
-PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
-  python MiniMaxAI-msa-blackwell/examples/decode_sparse.py --source-tree
-```
-
-## Local Validation
-
-Source-tree validation:
-
-```bash
-PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
-  python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py --quick
-```
-
-Full context validation:
-
-```bash
-PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
-  python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py
-```
-
-After HF Jobs publishes v1, validate the installed Hub artifact rather than the
-source tree.
-
-## Provenance
-
-This package is a FlashRT community package for the MiniMax MSA Blackwell hardware
-extension. It uses:
-
-- MiniMaxAI/msa as the native package/API reference
-- SGLang/vLLM MiniMax sparse attention Triton paths as the Blackwell fallback and
-  correctness baseline
-- FlashRT MiniMax-Spark runtime validation on DGX Spark / GB10
-
-See `SYNC.md` and `VALIDATION.md` for details.
+Source provenance and validation details are documented in `SYNC.md` and
+`VALIDATION.md`.
