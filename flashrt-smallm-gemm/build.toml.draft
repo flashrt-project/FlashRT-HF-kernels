@@ -1,0 +1,26 @@
+[general]
+name = "flashrt-smallm-gemm"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.hub]
+repo-id = "flashrt/flashrt-smallm-gemm"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.flashrt_smallm_gemm]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+# Restrict cuda-capabilities after builder support for SM120-only packages is
+# confirmed with Hugging Face.
+src = [
+  "csrc/fp4_w4a4_matvec_sm120.cu",
+  "csrc/fp4_w4a4_matvec_sm120.cuh",
+]
