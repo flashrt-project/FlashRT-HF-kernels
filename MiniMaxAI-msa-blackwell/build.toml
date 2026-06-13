@@ -26,4 +26,8 @@ cuda-capabilities = ["12.0", "12.1"]
 src = [
   "csrc/msa_topk_from_scores.cu",
   "csrc/msa_topk_from_scores.cuh",
+  "csrc/msa_decode_attn.cu",
+  "csrc/msa_decode_attn.cuh",
+  "csrc/msa_decode_attn_mma.cu",
+  "csrc/msa_decode_attn_mma.cuh",
 ]

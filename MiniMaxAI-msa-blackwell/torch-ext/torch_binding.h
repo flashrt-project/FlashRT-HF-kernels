@@ -8,3 +8,22 @@ void msa_topk_from_scores(torch::Tensor const& score,
                           int64_t block_size,
                           int64_t topk,
                           torch::Tensor& topk_idx);
+
+void msa_decode_sparse_attn(torch::Tensor const& q,
+                            torch::Tensor const& kv_cache,
+                            torch::Tensor const& seq_lens,
+                            torch::Tensor const& slot_ids,
+                            torch::Tensor const& topk_idx,
+                            int64_t block_size,
+                            double sm_scale,
+                            torch::Tensor& out);
+
+// Tensor-core (mma) fragment-resident variant; requires D=128, Hq/Hkv=16.
+void msa_decode_sparse_attn_mma(torch::Tensor const& q,
+                                torch::Tensor const& kv_cache,
+                                torch::Tensor const& seq_lens,
+                                torch::Tensor const& slot_ids,
+                                torch::Tensor const& topk_idx,
+                                int64_t block_size,
+                                double sm_scale,
+                                torch::Tensor& out);

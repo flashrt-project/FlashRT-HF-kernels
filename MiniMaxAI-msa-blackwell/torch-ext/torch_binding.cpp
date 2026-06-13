@@ -10,6 +10,8 @@
 #include <c10/cuda/CUDAGuard.h>
 #endif
 
+#include "msa_decode_attn.cuh"
+#include "msa_decode_attn_mma.cuh"
 #include "msa_topk_from_scores.cuh"
 #include "registration.h"
 #include "torch_binding.h"
@@ -79,11 +81,123 @@ void msa_topk_from_scores(torch::Tensor const& score,
 #endif
 }
 
+void msa_decode_sparse_attn(torch::Tensor const& q,
+                            torch::Tensor const& kv_cache,
+                            torch::Tensor const& seq_lens,
+                            torch::Tensor const& slot_ids,
+                            torch::Tensor const& topk_idx,
+                            int64_t block_size,
+                            double sm_scale,
+                            torch::Tensor& out) {
+  check_cuda_contiguous(q, "q");
+  check_cuda_contiguous(kv_cache, "kv_cache");
+  check_int32(seq_lens, "seq_lens");
+  check_int32(topk_idx, "topk_idx");
+  check_cuda_contiguous(out, "out");
+  TORCH_CHECK(q.scalar_type() == torch::kBFloat16 &&
+              kv_cache.scalar_type() == torch::kBFloat16 &&
+              out.scalar_type() == torch::kBFloat16,
+              "q, kv_cache, out must be bf16");
+  TORCH_CHECK(slot_ids.scalar_type() == torch::kInt64, "slot_ids int64");
+  TORCH_CHECK(q.dim() == 3, "q must be (B, Hq, D)");
+  TORCH_CHECK(kv_cache.dim() == 5,
+              "kv_cache must be (max_slots, 2, max_len, Hkv, D)");
+  const int64_t B = q.size(0), Hq = q.size(1), D = q.size(2);
+  const int64_t max_slots = kv_cache.size(0), max_len = kv_cache.size(2);
+  const int64_t Hkv = kv_cache.size(3);
+  TORCH_CHECK(kv_cache.size(1) == 2 && kv_cache.size(4) == D,
+              "kv_cache dims mismatch");
+  TORCH_CHECK(Hq % Hkv == 0, "Hq must be a multiple of Hkv");
+  TORCH_CHECK(D % 32 == 0 && D <= 256, "D must be a multiple of 32, <= 256");
+  TORCH_CHECK(topk_idx.dim() == 3 && topk_idx.size(0) == Hkv &&
+              topk_idx.size(1) == B, "topk_idx must be (Hkv, B, topk)");
+  const int64_t topk = topk_idx.size(2);
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard device_guard(q.device());
+  auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
+  flashrt_minimax_msa::msa_decode_sparse_attn_cuda(
+      q.data_ptr(), kv_cache.data_ptr(),
+      seq_lens.data_ptr<int>(), slot_ids.data_ptr<int64_t>(),
+      topk_idx.data_ptr<int>(), out.data_ptr(),
+      checked_positive_int(B, "B"), checked_positive_int(Hq, "Hq"),
+      checked_positive_int(Hkv, "Hkv"), checked_positive_int(D, "D"),
+      checked_positive_int(max_slots, "max_slots"),
+      checked_positive_int(max_len, "max_len"),
+      checked_positive_int(block_size, "block_size"),
+      checked_positive_int(topk, "topk"),
+      static_cast<float>(sm_scale), stream);
+#else
+  TORCH_CHECK(false, "minimaxai-msa-blackwell was not built with CUDA support");
+#endif
+}
+
+void msa_decode_sparse_attn_mma(torch::Tensor const& q,
+                                torch::Tensor const& kv_cache,
+                                torch::Tensor const& seq_lens,
+                                torch::Tensor const& slot_ids,
+                                torch::Tensor const& topk_idx,
+                                int64_t block_size,
+                                double sm_scale,
+                                torch::Tensor& out) {
+  check_cuda_contiguous(q, "q");
+  check_cuda_contiguous(kv_cache, "kv_cache");
+  check_int32(seq_lens, "seq_lens");
+  check_int32(topk_idx, "topk_idx");
+  check_cuda_contiguous(out, "out");
+  TORCH_CHECK(q.scalar_type() == torch::kBFloat16 &&
+              kv_cache.scalar_type() == torch::kBFloat16 &&
+              out.scalar_type() == torch::kBFloat16,
+              "q, kv_cache, out must be bf16");
+  TORCH_CHECK(slot_ids.scalar_type() == torch::kInt64, "slot_ids int64");
+  TORCH_CHECK(q.dim() == 3, "q must be (B, Hq, D)");
+  TORCH_CHECK(kv_cache.dim() == 5,
+              "kv_cache must be (max_slots, 2, max_len, Hkv, D)");
+  const int64_t B = q.size(0), Hq = q.size(1), D = q.size(2);
+  const int64_t max_slots = kv_cache.size(0), max_len = kv_cache.size(2);
+  const int64_t Hkv = kv_cache.size(3);
+  TORCH_CHECK(kv_cache.size(1) == 2 && kv_cache.size(4) == D,
+              "kv_cache dims mismatch");
+  TORCH_CHECK(Hq % Hkv == 0, "Hq must be a multiple of Hkv");
+  // The tensor-core variant is specialized for the M3 MSA shape.
+  TORCH_CHECK(D == 128, "mma variant requires head_dim == 128");
+  TORCH_CHECK(Hq / Hkv == 16, "mma variant requires GQA group (Hq/Hkv) == 16");
+  TORCH_CHECK(block_size % 64 == 0, "mma variant requires block_size % 64 == 0");
+  TORCH_CHECK(topk_idx.dim() == 3 && topk_idx.size(0) == Hkv &&
+              topk_idx.size(1) == B, "topk_idx must be (Hkv, B, topk)");
+  const int64_t topk = topk_idx.size(2);
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard device_guard(q.device());
+  auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
+  flashrt_minimax_msa::msa_decode_sparse_attn_mma_cuda(
+      q.data_ptr(), kv_cache.data_ptr(),
+      seq_lens.data_ptr<int>(), slot_ids.data_ptr<int64_t>(),
+      topk_idx.data_ptr<int>(), out.data_ptr(),
+      checked_positive_int(B, "B"), checked_positive_int(Hq, "Hq"),
+      checked_positive_int(Hkv, "Hkv"), checked_positive_int(D, "D"),
+      checked_positive_int(max_slots, "max_slots"),
+      checked_positive_int(max_len, "max_len"),
+      checked_positive_int(block_size, "block_size"),
+      checked_positive_int(topk, "topk"),
+      static_cast<float>(sm_scale), stream);
+#else
+  TORCH_CHECK(false, "minimaxai-msa-blackwell was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("msa_topk_from_scores(Tensor score, Tensor seq_lens, int block_size, "
           "int topk, Tensor! topk_idx) -> ()");
+  ops.def("msa_decode_sparse_attn(Tensor q, Tensor kv_cache, Tensor seq_lens, "
+          "Tensor slot_ids, Tensor topk_idx, int block_size, float sm_scale, "
+          "Tensor! out) -> ()");
+  ops.def("msa_decode_sparse_attn_mma(Tensor q, Tensor kv_cache, Tensor "
+          "seq_lens, Tensor slot_ids, Tensor topk_idx, int block_size, "
+          "float sm_scale, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("msa_topk_from_scores", torch::kCUDA, &msa_topk_from_scores);
+  ops.impl("msa_decode_sparse_attn", torch::kCUDA, &msa_decode_sparse_attn);
+  ops.impl("msa_decode_sparse_attn_mma", torch::kCUDA,
+           &msa_decode_sparse_attn_mma);
 #endif
 }
 
