@@ -20,7 +20,7 @@ Environment:
 Source-tree command:
 
 ```bash
-PY=python
+PY=/home/leadtek/jax/bin/python
 PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
   $PY MiniMaxAI-msa-blackwell/benchmarks/benchmark_decode.py \
     --ctx 2048 4096 32768 --warmup 3 --iters 10

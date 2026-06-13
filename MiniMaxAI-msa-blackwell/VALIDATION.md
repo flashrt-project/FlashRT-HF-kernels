@@ -147,7 +147,7 @@ Remote Blackwell validation environment:
 Command:
 
 ```bash
-PY=python
+PY=/home/leadtek/jax/bin/python
 PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
   $PY MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py
 ```
