@@ -11,6 +11,10 @@ That package targets SM100 with CuTe-DSL kernels. This package is a hardware
 extension path for SM121, keeping the MiniMax MSA semantics while using
 architecture-portable Triton kernels validated by FlashRT on GB10 / SM121.
 
+FlashRT also validated this decode-sparse path inside the MiniMax-Spark model
+runtime on DGX Spark / GB10. The Hub package keeps only the standalone Tensor
+API needed by the community; the full model runtime remains in FlashRT.
+
 ## Scope
 
 Public APIs are exported from `minimaxai_msa_sm121`:
@@ -25,6 +29,7 @@ Primary release focus:
 - BF16 inputs
 - context lengths 128 to 32768
 - SM121 validation
+- FlashRT MiniMax-Spark model-path validation on DGX Spark / GB10
 
 The package does not require SGLang, vLLM, or FlashRT at runtime. It requires
 PyTorch, Triton, CUDA, and a compatible NVIDIA GPU.

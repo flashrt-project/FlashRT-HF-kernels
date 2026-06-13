@@ -7,6 +7,7 @@
 - Target GPU: SM121 / GB10 / consumer Blackwell
 - Dtype: BF16 inputs with FP32 accumulation references
 - Layout: paged KV cache
+- Model path: FlashRT MiniMax-Spark runtime on DGX Spark / GB10
 
 ## Correctness Gate
 
@@ -37,6 +38,11 @@ Expected full coverage:
 FlashRT has validated the decode sparse path on SM121 over context lengths
 128 to 32768 with cosine similarity >= 0.999. The package tests are standalone
 and do not require FlashRT, SGLang, or vLLM.
+
+The same decode sparse path has also been exercised in FlashRT's MiniMax-Spark
+model runtime on DGX Spark / GB10. That end-to-end validation is intentionally
+kept as a FlashRT runtime validation item, while this Hub package exposes the
+standalone kernel API for community use.
 
 ## SM121 Package Validation
 

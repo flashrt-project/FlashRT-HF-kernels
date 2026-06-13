@@ -6,6 +6,10 @@
 MiniMax M3 sparse attention. It intentionally exposes only the decode paths that
 FlashRT validated on GB10 / SM121.
 
+FlashRT also validated this decode-sparse implementation inside the
+MiniMax-Spark runtime on DGX Spark / GB10. The package here is the standalone
+Hub-facing extraction of that validated model-path kernel.
+
 The original MiniMaxAI Hub kernel is:
 
 - <https://huggingface.co/kernels/MiniMaxAI/msa>
@@ -84,3 +88,8 @@ FlashRT validated the decode sparse path on SM121 over context lengths
 128 to 32768 with cosine similarity >= 0.999. The package-local test harness
 uses standalone PyTorch references and does not require FlashRT, SGLang, or
 vLLM.
+
+Model-path validation was done in the FlashRT `minimax-spark` work, where the
+decode sparse MSA implementation is integrated into the MiniMax-Spark runtime
+on DGX Spark / GB10. This is documented separately from package-local tests so
+that the Hub package remains runtime-independent.
