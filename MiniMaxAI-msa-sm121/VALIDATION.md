@@ -4,6 +4,7 @@
 
 - Kernel family: MiniMax M3 sparse attention (MSA)
 - Package: `flashrt/MiniMaxAI-msa-sm121`
+- HF Jobs package selector: `MiniMaxAI-msa-sm121`
 - Target GPU: SM121 / GB10 / consumer Blackwell
 - Dtype: BF16 inputs with FP32 accumulation references
 - Layout: paged KV cache
