@@ -48,14 +48,14 @@ OFFICIAL_MINIMAX_MSA_FUNCTIONS = (
 
 _OFFICIAL_API_STATUS = {
     "sparse_atten_func": {
-        "status": "unsupported_callable",
+        "status": "available",
         "target": "blackwell-prefill",
-        "reason": "Root API is present and raises NotImplementedError; SM100 CSR/CUTE prefill is not ported to Blackwell yet.",
+        "reason": "Official CSR sparse prefill API maps to the Blackwell Triton BF16/FP16 prefill wrapper.",
     },
     "sparse_atten_nvfp4_kv_func": {
-        "status": "unsupported_callable",
+        "status": "available",
         "target": "blackwell-prefill-nvfp4",
-        "reason": "Root API is present and raises NotImplementedError; SM100 NVFP4 CSR/CUTE prefill is not ported to Blackwell yet.",
+        "reason": "Official NVFP4 KV prefill API is available via NVFP4 dequantization followed by the Blackwell prefill wrapper.",
     },
     "sparse_decode_atten_func": {
         "status": "available",
@@ -68,9 +68,9 @@ _OFFICIAL_API_STATUS = {
         "reason": "Official wrapper name is available for the Blackwell single-token paged sparse decode path.",
     },
     "fp4_indexer_block_scores": {
-        "status": "unsupported_callable",
+        "status": "available",
         "target": "blackwell-fp4-indexer",
-        "reason": "Root API is present and raises NotImplementedError; SM100 FP4 CUTE indexer is not ported to Blackwell yet.",
+        "reason": "Official FP4 block-score API is available as a correctness-first PyTorch fallback.",
     },
     "build_k2q_csr": {
         "status": "available",

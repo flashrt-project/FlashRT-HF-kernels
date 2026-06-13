@@ -39,11 +39,15 @@ Expected full coverage:
 
 | Area | Shapes | Reference | Required |
 |---|---:|---|---|
-| API surface | official `MiniMaxAI/msa` public names | `api_status.py` | all official root names exported; unsupported Blackwell paths fail explicitly |
+| API surface | official `MiniMaxAI/msa` public names | `api_status.py` | all official root names exported; no unsupported public root API entries |
 | Native CUDA top-k helper | heads 64, batch 1-2, blocks 1-256 | PyTorch top-k over valid blocks | exact set match |
 | Decode sparse GQA attention | ctx 128, 2048, 4096, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
+| Prefill sparse GQA attention | ctx 512, 4096 | paged causal FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Decode sparse GQA attention with sink | ctx 2048, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Official decode API wrapper | ctx 2048, 4096 | direct Blackwell decode kernel | cos = 1.0, max_abs = 0 |
+| Official CSR prefill API wrapper | ctx 512, 2048 | direct Blackwell prefill kernel | cos = 1.0, max_abs = 0 under CSR-preserved block order |
+| Official NVFP4 prefill API wrapper | ctx 512 BF16 fallback path | `sparse_atten_func` | cos = 1.0, max_abs = 0 |
+| Official FP4 indexer API fallback | tiny FP4 packed tensors | shape/finite-score check | returns official score layout |
 | Decode lightning indexer | ctx 2048, 4096, 32768 | PyTorch blockmax top-k set | overlap >= 0.99 |
 | Standalone long-context decode | ctx 65536, 131072 | paged FP32 PyTorch / direct kernel | cos >= 0.999; wrapper max_abs = 0 |
 | Installed-artifact native long top-k | blocks 512, 1024 | PyTorch top-k over valid blocks | exact set match |
@@ -71,10 +75,11 @@ The test tracks every official `MiniMaxAI/msa` public API name:
 - `swizzle_nvfp4_scale_to_128x4`
 - `nvfp4_global_scale_from_amax`
 
-The root module exports every official public name. Decode, CSR, and NVFP4
-helper names are implemented where they map to this Blackwell package. The
-SM100 CSR prefill and FP4 CUTE indexer names are callable but fail explicitly
-with `NotImplementedError` because returning fake results would be unsafe.
+The root module exports every official public name. Decode, CSR prefill, NVFP4
+prefill compatibility, FP4 block scoring, CSR, and NVFP4 helper names are all
+callable. The optimized SM100 CUTE bodies are not claimed as ported here; where
+that matters, this package uses Blackwell Triton kernels or correctness-first
+fallbacks instead of returning fake results.
 
 ## FlashRT Integration Note
 

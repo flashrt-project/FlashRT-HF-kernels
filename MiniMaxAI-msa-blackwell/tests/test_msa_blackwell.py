@@ -44,12 +44,16 @@ import pytest
 import torch
 
 from minimaxai_msa_blackwell import (  # noqa: E402
+    build_k2q_csr,
     flash_decode_with_gqa_share_sparse,
     flash_decode_with_topk_idx,
     has_native_ops,
     native_topk_from_scores,
+    sparse_atten_func,
+    sparse_atten_nvfp4_kv_func,
     sparse_decode_atten_func,
 )
+from minimaxai_msa_blackwell.prefill.topk_sparse import flash_prefill_with_gqa_share_sparse  # noqa: E402
 
 DEVICE = "cuda"
 DTYPE = torch.bfloat16
@@ -291,6 +295,123 @@ def _run_official_decode_wrapper_case(seq_len):
     return cos_sim(official, direct), max_abs_err(official, direct)
 
 
+def _build_prefill_inputs(seq_len, with_sink=False):
+    batch_size = 1
+    g = torch.Generator(device=DEVICE).manual_seed(7)
+    total_q = seq_len
+    max_kv_len = seq_len
+    max_slots = max_kv_len
+    q = torch.randn(total_q, M3_HQ, M3_D, dtype=DTYPE, device=DEVICE, generator=g)
+    k_cache = torch.randn(max_slots, M3_HKV, M3_D, dtype=DTYPE, device=DEVICE,
+                          generator=g)
+    v_cache = torch.randn(max_slots, M3_HKV, M3_D, dtype=DTYPE, device=DEVICE,
+                          generator=g)
+    req_to_token = torch.arange(max_kv_len, dtype=torch.int32,
+                                device=DEVICE).view(1, -1)
+    slot_ids = torch.zeros(batch_size, dtype=torch.int64, device=DEVICE)
+    seq_lens = torch.tensor([seq_len], dtype=torch.int32, device=DEVICE)
+    prefix_lens = torch.zeros(batch_size, dtype=torch.int32, device=DEVICE)
+    cu_seqlens = torch.tensor([0, seq_len], dtype=torch.int32, device=DEVICE)
+
+    num_blocks = (seq_len + M3_BLOCK - 1) // M3_BLOCK
+    topk_idx = torch.full((M3_HKV, total_q, M3_TOPK), -1, dtype=torch.int32,
+                          device=DEVICE)
+    for qi in range(total_q):
+        qb = qi // M3_BLOCK
+        avail = min(num_blocks, qb + 1)
+        ak = min(M3_TOPK, avail)
+        perm = torch.randperm(avail, device=DEVICE, generator=g)[:ak].to(torch.int32)
+        for kh in range(M3_HKV):
+            topk_idx[kh, qi, :ak] = perm
+    sink = (
+        torch.randn(M3_HQ, M3_D, dtype=DTYPE, device=DEVICE, generator=g)
+        if with_sink else None
+    )
+    return q, sink, k_cache, v_cache, req_to_token, slot_ids, seq_lens, prefix_lens, cu_seqlens, topk_idx
+
+
+def _run_official_prefill_wrapper_case(seq_len):
+    q, _sink, k_cache, v_cache, req_to_token, slot_ids, seq_lens, prefix_lens, cu_seqlens, topk_idx = (
+        _build_prefill_inputs(seq_len, with_sink=False)
+    )
+    sentinel = torch.full_like(topk_idx, 2**30)
+    topk_sorted = torch.where(topk_idx >= 0, topk_idx, sentinel).sort(dim=-1).values
+    topk_sorted = torch.where(topk_sorted == 2**30, torch.full_like(topk_sorted, -1), topk_sorted)
+    direct = flash_prefill_with_gqa_share_sparse(
+        q, k_cache, v_cache, None, req_to_token, slot_ids, topk_sorted,
+        block_size_q=8, block_size_k=M3_BLOCK,
+        cu_seqlens=cu_seqlens, seq_lens=seq_lens, prefix_lens=prefix_lens,
+        max_seqlen_q=seq_len,
+    )
+    row_ptr, q_idx = build_k2q_csr(
+        topk_sorted,
+        cu_seqlens,
+        cu_seqlens,
+        M3_BLOCK,
+        total_k=seq_len,
+    )
+    official = sparse_atten_func(
+        q,
+        k_cache,
+        v_cache,
+        row_ptr,
+        q_idx,
+        M3_TOPK,
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_k=cu_seqlens,
+        max_seqlen_q=seq_len,
+        max_seqlen_k=seq_len,
+        blk_kv=M3_BLOCK,
+    )
+    return cos_sim(official, direct), max_abs_err(official, direct)
+
+
+def _run_official_nvfp4_prefill_bf16_fallback_case(seq_len):
+    q, _sink, k_cache, v_cache, _req_to_token, _slot_ids, _seq_lens, _prefix_lens, cu_seqlens, topk_idx = (
+        _build_prefill_inputs(seq_len, with_sink=False)
+    )
+    row_ptr, q_idx = build_k2q_csr(
+        topk_idx,
+        cu_seqlens,
+        cu_seqlens,
+        M3_BLOCK,
+        total_k=seq_len,
+    )
+    direct = sparse_atten_func(
+        q,
+        k_cache,
+        v_cache,
+        row_ptr,
+        q_idx,
+        M3_TOPK,
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_k=cu_seqlens,
+        max_seqlen_q=seq_len,
+        max_seqlen_k=seq_len,
+        blk_kv=M3_BLOCK,
+    )
+    dummy_scale = torch.empty(0, device=DEVICE, dtype=torch.uint8)
+    dummy_global = torch.ones(1, device=DEVICE, dtype=torch.float32)
+    official = sparse_atten_nvfp4_kv_func(
+        q,
+        k_cache,
+        v_cache,
+        dummy_scale,
+        dummy_scale,
+        dummy_global,
+        dummy_global,
+        row_ptr,
+        q_idx,
+        M3_TOPK,
+        cu_seqlens_q=cu_seqlens,
+        cu_seqlens_k=cu_seqlens,
+        max_seqlen_q=seq_len,
+        max_seqlen_k=seq_len,
+        blk_kv=M3_BLOCK,
+    )
+    return cos_sim(official, direct), max_abs_err(official, direct)
+
+
 def _run_indexer_decode_case(seq_len):
     """Lightning indexer (decode): score blocks, return top-k block ids.
 
@@ -443,6 +564,25 @@ def test_official_sparse_decode_wrapper_matches_direct_kernel(seq_len):
     assert err == 0.0, f"[official wrapper {seq_len}] max_abs_err {err:.4e}"
 
 
+@pytest.mark.parametrize("seq_len", [512, 2048])
+def test_official_sparse_prefill_wrapper_matches_direct_kernel(seq_len):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    torch.manual_seed(0)
+    cos, err = _run_official_prefill_wrapper_case(seq_len)
+    assert cos >= 0.99999, f"[official prefill wrapper {seq_len}] cos {cos:.6f}"
+    assert err == 0.0, f"[official prefill wrapper {seq_len}] max_abs_err {err:.4e}"
+
+
+def test_official_nvfp4_prefill_bf16_fallback_matches_sparse_prefill():
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    torch.manual_seed(0)
+    cos, err = _run_official_nvfp4_prefill_bf16_fallback_case(512)
+    assert cos >= 0.99999, f"[official nvfp4 bf16 fallback] cos {cos:.6f}"
+    assert err == 0.0, f"[official nvfp4 bf16 fallback] max_abs_err {err:.4e}"
+
+
 @pytest.mark.parametrize(
     "heads,batch_size,max_blocks,seq_lens_list,topk",
     [
@@ -509,6 +649,22 @@ def main():
         good = cos >= 0.99999 and err == 0.0
         ok &= good
         print(f"{sl:<22}{cos:>12.6f}{err:>16.4e}{'PASS' if good else 'FAIL':>10}")
+
+    print("\n== official MiniMax CSR prefill API wrapper (vs direct Blackwell kernel) ==")
+    print(f"{'seq_len':<22}{'cos':>12}{'max_abs_err':>16}{'verdict':>10}")
+    prefill_lens = [512] if args.quick else [512, 2048]
+    for sl in prefill_lens:
+        cos, err = _run_official_prefill_wrapper_case(sl)
+        good = cos >= 0.99999 and err == 0.0
+        ok &= good
+        print(f"{sl:<22}{cos:>12.6f}{err:>16.4e}{'PASS' if good else 'FAIL':>10}")
+
+    print("\n== official MiniMax NVFP4 prefill API fallback (BF16 dispatch check) ==")
+    print(f"{'seq_len':<22}{'cos':>12}{'max_abs_err':>16}{'verdict':>10}")
+    cos, err = _run_official_nvfp4_prefill_bf16_fallback_case(512)
+    good = cos >= 0.99999 and err == 0.0
+    ok &= good
+    print(f"{512:<22}{cos:>12.6f}{err:>16.4e}{'PASS' if good else 'FAIL':>10}")
 
     print("\n== native CUDA score->top-k helper ==")
     if has_native_ops():

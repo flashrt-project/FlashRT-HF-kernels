@@ -7,7 +7,9 @@ MiniMax-M3 decode-sparse attention path used by FlashRT's MiniMax Spark runtime.
 
 Implementation status:
   * native CUDA helper: score -> top-k sparse block ids;
-  * Triton CUDA attention/index-score kernels: Blackwell-validated decode fallback.
+  * Triton CUDA attention kernels: Blackwell-validated decode and prefill paths;
+  * MiniMaxAI/msa compatibility wrappers for CSR prefill, decode, NVFP4 helpers,
+    and FP4 block-score fallback.
 
 The upstream MiniMaxAI/msa package is SM100-only; this package is the Blackwell
 extension path. The public API is Tensor-oriented and independent from
@@ -20,6 +22,8 @@ Lightning indexer (q.k blockmax score -> top-k block select), paged KV:
 
 Block-sparse GQA attention (consumes block_indices from the indexer):
     flash_decode_with_gqa_share_sparse    (decode, split-K over top-k blocks)
+    sparse_atten_func                     (official CSR prefill wrapper)
+    sparse_decode_atten_func              (official paged decode wrapper)
 
 PyTorch naive references (for correctness checks):
     naive_flash_decode_with_gqa_share_sparse   (attention given topk_idx)

@@ -47,9 +47,9 @@ msa = get_kernel(
 | `dequantize_nvfp4_128x4_to_bf16` | Available reference dequantizer. |
 | `swizzle_nvfp4_scale_to_128x4` | Available scale-layout helper. |
 | `nvfp4_global_scale_from_amax` | Available scale helper. |
-| `sparse_atten_func` | Exported, but raises `NotImplementedError`: SM100 CSR prefill kernel is not ported here yet. |
-| `sparse_atten_nvfp4_kv_func` | Exported, but raises `NotImplementedError`: SM100 NVFP4 CSR prefill kernel is not ported here yet. |
-| `fp4_indexer_block_scores` | Exported, but raises `NotImplementedError`: SM100 FP4 CUTE indexer is not ported here yet. |
+| `sparse_atten_func` | Available. Official CSR sparse prefill API backed by the Blackwell Triton BF16/FP16 prefill kernel. |
+| `sparse_atten_nvfp4_kv_func` | Available. NVFP4 KV compatibility path: dequantizes KV with 128x4 metadata, then calls Blackwell sparse prefill. |
+| `fp4_indexer_block_scores` | Available. Correctness-first FP4 block-score fallback returning the official `[Hq, ceil(max_seqlen_k/128), total_q]` score layout. |
 
 ### FlashRT Blackwell helper names
 
@@ -121,6 +121,51 @@ wrapper.plan(
 out = wrapper.run(q, k, v)
 ```
 
+## Prefill Example
+
+This example uses the official MiniMax CSR prefill-facing name
+`sparse_atten_func`.
+
+```python
+import torch
+from kernels import get_kernel
+
+msa = get_kernel("flashrt/MiniMaxAI-msa-blackwell", version=1, trust_remote_code=True)
+
+T, Hq, Hkv, D = 512, 64, 4, 128
+page_size = 128
+topk = 16
+device = "cuda"
+dtype = torch.bfloat16
+
+q = torch.randn(T, Hq, D, device=device, dtype=dtype)
+k = torch.randn(T, Hkv, D, device=device, dtype=dtype)
+v = torch.randn_like(k)
+cu = torch.tensor([0, T], device=device, dtype=torch.int32)
+
+q2k = torch.full((Hkv, T, topk), -1, device=device, dtype=torch.int32)
+for qi in range(T):
+    blocks = torch.arange(qi // page_size + 1, device=device, dtype=torch.int32)
+    q2k[:, qi, : min(topk, blocks.numel())] = blocks[:topk]
+
+k2q_row_ptr, k2q_q_indices = msa.build_k2q_csr(
+    q2k, cu, cu, page_size, total_k=T
+)
+out = msa.sparse_atten_func(
+    q,
+    k,
+    v,
+    k2q_row_ptr,
+    k2q_q_indices,
+    topk,
+    cu_seqlens_q=cu,
+    cu_seqlens_k=cu,
+    max_seqlen_q=T,
+    max_seqlen_k=T,
+    blk_kv=page_size,
+)
+```
+
 ## Direct FlashRT Decode Path
 
 Use this lower-level path if you already have `topk_idx` in FlashRT's paged KV
@@ -161,12 +206,14 @@ out = msa.flash_decode_with_gqa_share_sparse(
 This package contains:
 
 - native CUDA score-to-top-k helper;
-- Blackwell-validated Triton CUDA sparse decode attention;
-- MiniMaxAI/msa-compatible Python API layer for decode, CSR, and NVFP4 helpers.
+- Blackwell-validated Triton CUDA sparse decode and prefill attention;
+- MiniMaxAI/msa-compatible Python API layer for decode, prefill, CSR, NVFP4,
+  and FP4 block-score helpers.
 
-The upstream SM100 CSR prefill attention and FP4 CUTE indexer are not claimed as
-ported in this package yet. Their root names are exported so callers see a clear
-`NotImplementedError` instead of silently getting wrong behavior.
+The optimized SM100 CUTE prefill/indexer bodies are not claimed as ported here.
+For Blackwell, this package provides a validated Triton sparse prefill path and
+correctness-first compatibility fallbacks where the original API requires SM100
+FP4/NVFP4-specific machinery.
 
 Source provenance and validation details are documented in `SYNC.md` and
 `VALIDATION.md`.
