@@ -1,6 +1,8 @@
 # Benchmark Results
 
 Initial package validation focuses on correctness and SM121 enablement.
+Numbers below are from the v1 source-level Triton path; v2 native-helper
+artifact benchmark must be refreshed after HF Jobs publishes the v2 build.
 
 Environment:
 
@@ -14,7 +16,7 @@ Environment:
 | PyTorch | 2.12.0+cu130 |
 | Triton | 3.7.0 |
 
-Command:
+Source-tree command:
 
 ```bash
 PY=/home/leadtek/jax/bin/python
@@ -25,11 +27,13 @@ PYTHONPATH=MiniMaxAI-msa-sm121/torch-ext \
 
 Source-level decode sparse benchmark:
 
-| Context | Mean us |
-|---:|---:|
-| 2048 | 60.292 |
-| 4096 | 57.642 |
-| 32768 | 58.654 |
+| Context | Attention mean us | Native top-k mean us |
+|---:|---:|---:|
+| 2048 | 60.292 | n/a |
+| 4096 | 57.642 | n/a |
+| 32768 | 58.654 | n/a |
 
 These are source-level package smoke benchmarks on SM121. Public performance
-claims should be refreshed from the uploaded Hub artifact after HF Jobs publish.
+claims should be refreshed from the uploaded v2 Hub artifact after HF Jobs
+publish. In source-tree mode the native CUDA extension is not built, so the
+native top-k helper column is intentionally `n/a`.

@@ -3,7 +3,11 @@ import time
 
 import torch
 
-from minimaxai_msa_sm121 import flash_decode_with_gqa_share_sparse
+from minimaxai_msa_sm121 import (
+    flash_decode_with_gqa_share_sparse,
+    has_native_ops,
+    native_topk_from_scores,
+)
 
 
 def make_case(ctx: int, seed: int = 0):
@@ -35,6 +39,23 @@ def bench(ctx: int, warmup: int, iters: int) -> float:
     return (time.perf_counter() - start) * 1e6 / iters
 
 
+def bench_native_topk(ctx: int, warmup: int, iters: int) -> float | None:
+    if not has_native_ops():
+        return None
+    heads, batch, block, topk = 64, 1, 128, 16
+    blocks = (ctx + block - 1) // block
+    score = torch.randn(heads, batch, blocks, device="cuda", dtype=torch.float32)
+    seq_lens = torch.tensor([ctx], device="cuda", dtype=torch.int32)
+    for _ in range(warmup):
+        native_topk_from_scores(score, seq_lens, block, topk)
+    torch.cuda.synchronize()
+    start = time.perf_counter()
+    for _ in range(iters):
+        native_topk_from_scores(score, seq_lens, block, topk)
+    torch.cuda.synchronize()
+    return (time.perf_counter() - start) * 1e6 / iters
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ctx", type=int, nargs="+", default=[2048, 4096, 32768])
@@ -43,9 +64,12 @@ def main() -> None:
     args = ap.parse_args()
 
     print("gpu:", torch.cuda.get_device_name())
-    print("ctx,mean_us")
+    print("ctx,attention_mean_us,native_topk_mean_us")
     for ctx in args.ctx:
-        print(f"{ctx},{bench(ctx, args.warmup, args.iters):.3f}")
+        attn_us = bench(ctx, args.warmup, args.iters)
+        topk_us = bench_native_topk(ctx, args.warmup, args.iters)
+        topk_text = "NA" if topk_us is None else f"{topk_us:.3f}"
+        print(f"{ctx},{attn_us:.3f},{topk_text}")
 
 
 if __name__ == "__main__":

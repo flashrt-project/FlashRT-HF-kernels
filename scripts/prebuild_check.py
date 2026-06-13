@@ -31,6 +31,7 @@ V2_CANDIDATE_PACKAGES = [
     "flashrt-vla-residual-gates",
     "flashrt-adaptive-norms",
     "flashrt-spatiotemporal-layout",
+    "MiniMaxAI-msa-sm121",
 ]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",
@@ -126,8 +127,9 @@ def check_package(pkg: str, errors: list[str], warnings: list[str]) -> None:
         return
 
     name = config.get("general", {}).get("name")
-    if name != pkg:
-        fail(errors, f"{pkg}: general.name is {name!r}, expected {pkg!r}")
+    expected_names = {pkg, pkg.lower()}
+    if name not in expected_names:
+        fail(errors, f"{pkg}: general.name is {name!r}, expected one of {sorted(expected_names)!r}")
 
     source_entries: list[str] = []
     source_entries.extend(config.get("torch", {}).get("src", []))

@@ -9,6 +9,7 @@ import triton.language as tl
 from .._compat import envs  # vendored: was `from sglang.srt.environ import envs`
 
 from ..common.utils import robust_allocator
+from .._native import has_native_ops, native_topk_from_scores
 
 
 @triton.heuristics(
@@ -1045,6 +1046,8 @@ def flash_decode_with_topk_idx(
             "uses the 2-stage Triton fallback (keep "
             "SGLANG_OPT_USE_MINIMAX_DECODE_TOPK_RADIX off)."
         )
+    elif has_native_ops() and topk <= 64:
+        topk_idx = native_topk_from_scores(score, seq_lens, block_size, topk)
     else:
         # 2-stage split-K Triton fallback.
         # Choose NUM_TOPK_CHUNKS to add parallelism over the seqblock dim.

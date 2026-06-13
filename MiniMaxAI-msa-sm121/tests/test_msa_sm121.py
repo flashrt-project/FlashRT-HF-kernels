@@ -45,6 +45,8 @@ import torch
 from minimaxai_msa_sm121 import (  # noqa: E402
     flash_decode_with_gqa_share_sparse,
     flash_decode_with_topk_idx,
+    has_native_ops,
+    native_topk_from_scores,
 )
 
 DEVICE = "cuda"
@@ -297,6 +299,39 @@ def _run_indexer_decode_case(seq_len):
     return overlap, len(got_set)
 
 
+def _run_native_topk_case(heads, batch_size, max_blocks, seq_lens_list, topk):
+    """Native score->top-k helper check against PyTorch topk set semantics."""
+    g = torch.Generator(device=DEVICE).manual_seed(123)
+    score = torch.randn(
+        heads,
+        batch_size,
+        max_blocks,
+        dtype=torch.float32,
+        device=DEVICE,
+        generator=g,
+    )
+    seq_lens = torch.tensor(seq_lens_list, dtype=torch.int32, device=DEVICE)
+    got = native_topk_from_scores(score, seq_lens, M3_BLOCK, topk)
+
+    min_overlap = 1.0
+    for h in range(heads):
+        for b in range(batch_size):
+            valid = min(max_blocks, (int(seq_lens_list[b]) + M3_BLOCK - 1) // M3_BLOCK)
+            ak = min(topk, valid)
+            ref_set = set()
+            if ak > 0:
+                ref = torch.topk(score[h, b, :valid], ak).indices.tolist()
+                ref_set = set(int(x) for x in ref)
+            got_set = set(int(x) for x in got[h, b].tolist() if int(x) >= 0)
+            overlap = len(ref_set & got_set) / max(1, len(ref_set))
+            min_overlap = min(min_overlap, overlap)
+            if valid < topk:
+                pad = got[h, b, valid:].tolist()
+                if any(int(x) != -1 for x in pad):
+                    min_overlap = 0.0
+    return min_overlap
+
+
 # ===========================================================================
 # pytest entrypoints
 # ===========================================================================
@@ -321,6 +356,23 @@ def test_indexer_decode_topk(seq_len):
     overlap, n = _run_indexer_decode_case(seq_len)
     # selection is order-independent; require exact set match (ties aside)
     assert overlap >= 0.99, f"[indexer {seq_len}] block-set overlap {overlap:.3f}"
+
+
+@pytest.mark.parametrize(
+    "heads,batch_size,max_blocks,seq_lens_list,topk",
+    [
+        (1, 1, 1, [128], 16),
+        (4, 2, 32, [2048, 1536], 16),
+        (64, 1, 256, [32768], 16),
+    ],
+)
+def test_native_topk_from_scores(heads, batch_size, max_blocks, seq_lens_list, topk):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    if not has_native_ops():
+        pytest.skip("native extension is not available in source-tree mode")
+    overlap = _run_native_topk_case(heads, batch_size, max_blocks, seq_lens_list, topk)
+    assert overlap >= 0.999, f"[native topk] set overlap {overlap:.3f}"
 
 
 # ===========================================================================
@@ -357,6 +409,22 @@ def main():
         good = overlap >= 0.99
         ok &= good
         print(f"{sl:<22}{overlap:>12.3f}{n:>16d}{'PASS' if good else 'FAIL':>10}")
+
+    print("\n== native CUDA score->top-k helper ==")
+    if has_native_ops():
+        print(f"{'case':<22}{'set_overlap':>12}{'verdict':>10}")
+        native_cases = [
+            ("tiny_pad", 1, 1, 1, [128], 16),
+            ("m3_32blocks_b2", 4, 2, 32, [2048, 1536], 16),
+            ("m3_256blocks_b1", 64, 1, 256, [32768], 16),
+        ]
+        for tag, heads, batch, max_blocks, seq_lens, topk in native_cases:
+            overlap = _run_native_topk_case(heads, batch, max_blocks, seq_lens, topk)
+            good = overlap >= 0.999
+            ok &= good
+            print(f"{tag:<22}{overlap:>12.3f}{'PASS' if good else 'FAIL':>10}")
+    else:
+        print("SKIP: native extension is not available in source-tree mode")
 
     print("\nRESULT:", "ALL PASS" if ok else "SOME FAILED")
     return 0 if ok else 1

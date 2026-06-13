@@ -1,7 +1,7 @@
 [general]
 name = "minimaxai-msa-sm121"
 license = "Apache-2.0"
-version = 1
+version = 2
 backends = ["cuda"]
 
 [general.cuda]
@@ -10,6 +10,20 @@ minver = "12.8"
 [general.hub]
 repo-id = "flashrt/MiniMaxAI-msa-sm121"
 
-[torch-noarch]
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
 
-[kernel]
+[kernel.minimaxai_msa_sm121]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0"]
+src = [
+  "csrc/msa_topk_from_scores.cu",
+  "csrc/msa_topk_from_scores.cuh",
+]

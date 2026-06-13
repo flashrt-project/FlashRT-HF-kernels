@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Standalone MiniMax-M3 decode sparse attention Triton kernels (vendored).
+"""FlashRT SM121 extension of MiniMax MSA decode sparse attention.
 
-Provenance: SGLang PR #27944 (JustinTong0323/sglang @ minimax-m3-upstream,
-commit cbe1ffd...), files under
-python/sglang/srt/layers/attention/minimax_sparse_ops/. Author XunhaoLai
-(NSA-triton). Framework coupling stripped via `._compat`; see VENDOR_NOTES.md.
+This package targets NVIDIA GB10 / consumer Blackwell (SM121). It exposes the
+MiniMax-M3 decode-sparse attention path used by FlashRT's MiniMax Spark runtime.
+
+Implementation status:
+  * native CUDA helper: score -> top-k sparse block ids;
+  * Triton CUDA attention/index-score kernels: SM121-validated decode fallback.
+
+The upstream MiniMaxAI/msa package is SM100-only; this package is the SM121
+extension path. The public API is Tensor-oriented and independent from
+FlashRT's serving runtime.
 
 Public API
 ----------
@@ -30,12 +36,15 @@ See VENDOR_NOTES.md for full shape/dtype/layout contracts.
 from .common.utils import get_cu_seqblocks, robust_allocator
 from .decode.flash_with_topk_idx import flash_decode_with_topk_idx
 from .decode.topk_sparse import flash_decode_with_gqa_share_sparse
+from ._native import has_native_ops, native_topk_from_scores
 from .naive.flash_with_topk_idx import naive_flash_decode_with_topk_idx
 from .naive.topk_sparse import naive_flash_decode_with_gqa_share_sparse
 
 __all__ = [
     "flash_decode_with_topk_idx",
     "flash_decode_with_gqa_share_sparse",
+    "has_native_ops",
+    "native_topk_from_scores",
     "naive_flash_decode_with_gqa_share_sparse",
     "naive_flash_decode_with_topk_idx",
     "get_cu_seqblocks",

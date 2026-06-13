@@ -5,6 +5,7 @@
 - Kernel family: MiniMax M3 sparse attention (MSA)
 - Package: `flashrt/MiniMaxAI-msa-sm121`
 - HF Jobs package selector: `MiniMaxAI-msa-sm121`
+- Package version: v2 native-helper package
 - Target GPU: SM121 / GB10 / consumer Blackwell
 - Dtype: BF16 inputs with FP32 accumulation references
 - Layout: paged KV cache
@@ -30,6 +31,7 @@ Expected full coverage:
 
 | Area | Shapes | Reference | Required |
 |---|---:|---|---|
+| Native CUDA top-k helper | heads 64, batch 1-2, blocks 1-256 | PyTorch top-k over valid blocks | exact set match |
 | Decode sparse GQA attention | ctx 128, 2048, 4096, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Decode sparse GQA attention with sink | ctx 2048, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Decode lightning indexer | ctx 2048, 4096, 32768 | PyTorch blockmax top-k set | overlap >= 0.99 |
@@ -44,6 +46,29 @@ The same decode sparse path has also been exercised in FlashRT's MiniMax-Spark
 model runtime on DGX Spark / GB10. That end-to-end validation is intentionally
 kept as a FlashRT runtime validation item, while this Hub package exposes the
 standalone kernel API for community use.
+
+## Native Helper Compile Smoke
+
+Before HF Jobs publish, the native helper was compiled locally as a PyTorch
+extension using the same source files:
+
+- `torch-ext/torch_binding.cpp`
+- `csrc/msa_topk_from_scores.cu`
+
+Environment:
+
+| Field | Value |
+|---|---|
+| GPU | NVIDIA GeForce RTX 5090 |
+| PyTorch | 2.9.1+cu128 |
+| nvcc | CUDA 13.0 |
+| Target arch | sm_120 |
+
+Result:
+
+| Check | Shape | Reference | Verdict |
+|---|---:|---|---|
+| Native score -> top-k | heads 64, batch 1, blocks 256, topk 16 | PyTorch top-k set | PASS |
 
 ## SM121 Package Validation
 
@@ -84,3 +109,16 @@ Result:
 
 The warning `tl.make_block_ptr is deprecated` appears with Triton 3.7.0. It is
 a deprecation warning, not a correctness failure.
+
+## Native/CUTE Alignment Status
+
+The upstream `MiniMaxAI/msa` package is an SM100 package with native helper ops
+and CUTE-DSL attention kernels. This SM121 package is being upgraded in stages:
+
+1. v1: pure source-level Triton CUDA decode path.
+2. v2: native CUDA score-to-top-k helper plus SM121 Triton decode attention.
+3. planned: SM121 CUTE/native decode attention path aligned with upstream
+   `MiniMaxAI/msa` public APIs.
+
+Do not describe v2 as a full native-CUTE attention replacement. It is a real
+native package, but the attention body still uses the SM121 Triton fallback.
