@@ -4,7 +4,8 @@ attention Triton kernels.
 
 Runs the Triton kernels against PyTorch naive references at M3 production shapes
 (Hq=64, Hkv=4, D=128, block=128, topk=16) over a range of context lengths
-(incl. 4096 and 32768), checking cosine similarity and max-abs-error.
+(incl. 4096 and 32768 by default, with optional 65536/131072 long-context
+coverage), checking cosine similarity and max-abs-error.
 
 Requires only torch + triton (CUDA). NO sglang / vllm. Run with:
 
@@ -210,7 +211,10 @@ def pytorch_sparse_gqa_decode_reference(
 # ===========================================================================
 # Context-length sweep (M3 shapes)
 # ===========================================================================
-def m3_decode_cases(quick: bool):
+LONG_CONTEXTS = (65536, 131072)
+
+
+def m3_decode_cases(quick: bool, long_context: bool = False):
     """(tag, seq_lens_list, paged, with_sink)."""
     cases = [
         ("ctx128_b1", [128], False, False),
@@ -222,6 +226,8 @@ def m3_decode_cases(quick: bool):
     if not quick:
         cases.append(("ctx32768_b1", [32768], True, False))
         cases.append(("ctx32768_b1_sink", [32768], True, True))
+    if long_context:
+        cases.extend((f"ctx{ctx}_b1", [ctx], True, False) for ctx in LONG_CONTEXTS)
     return cases
 
 
@@ -395,6 +401,38 @@ def test_indexer_decode_topk(seq_len):
     assert overlap >= 0.99, f"[indexer {seq_len}] block-set overlap {overlap:.3f}"
 
 
+@pytest.mark.long_context
+@pytest.mark.parametrize("seq_len", LONG_CONTEXTS)
+def test_decode_sparse_attn_long_context(seq_len):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    torch.manual_seed(0)
+    cos, err = _run_decode_case([seq_len], paged=True, with_sink=False)
+    assert cos >= COS_FLOOR, f"[long ctx {seq_len}] cos {cos:.6f} < {COS_FLOOR}"
+    assert err <= MAXERR_CEIL, f"[long ctx {seq_len}] max_abs_err {err:.4e} > {MAXERR_CEIL}"
+
+
+@pytest.mark.long_context
+@pytest.mark.parametrize("seq_len", LONG_CONTEXTS)
+def test_indexer_decode_topk_long_context(seq_len):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    torch.manual_seed(0)
+    overlap, _ = _run_indexer_decode_case(seq_len)
+    assert overlap >= 0.99, f"[long indexer {seq_len}] block-set overlap {overlap:.3f}"
+
+
+@pytest.mark.long_context
+@pytest.mark.parametrize("seq_len", LONG_CONTEXTS)
+def test_official_sparse_decode_wrapper_long_context(seq_len):
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA required")
+    torch.manual_seed(0)
+    cos, err = _run_official_decode_wrapper_case(seq_len)
+    assert cos >= 0.99999, f"[official wrapper long {seq_len}] cos {cos:.6f}"
+    assert err == 0.0, f"[official wrapper long {seq_len}] max_abs_err {err:.4e}"
+
+
 @pytest.mark.parametrize("seq_len", [2048, 4096])
 def test_official_sparse_decode_wrapper_matches_direct_kernel(seq_len):
     if not torch.cuda.is_available():
@@ -429,6 +467,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--quick", action="store_true",
                     help="skip the 32768-ctx cases")
+    ap.add_argument("--long-context", action="store_true",
+                    help="also run 65536/131072 standalone long-context cases")
     args = ap.parse_args()
 
     if not torch.cuda.is_available():
@@ -442,7 +482,7 @@ def main():
 
     print("\n== decode block-sparse GQA attention (vs paged fp32 ref) ==")
     print(f"{'case':<22}{'cos':>12}{'max_abs_err':>16}{'verdict':>10}")
-    for tag, sl, paged, sink in m3_decode_cases(args.quick):
+    for tag, sl, paged, sink in m3_decode_cases(args.quick, args.long_context):
         cos, err = _run_decode_case(sl, paged, sink)
         good = cos >= COS_FLOOR and err <= MAXERR_CEIL
         ok &= good
@@ -451,6 +491,8 @@ def main():
     print("\n== lightning indexer decode (top-k block selection set match) ==")
     print(f"{'seq_len':<22}{'set_overlap':>12}{'n_blocks':>16}{'verdict':>10}")
     idx_lens = [2048, 4096] if args.quick else [2048, 4096, 32768]
+    if args.long_context:
+        idx_lens += list(LONG_CONTEXTS)
     for sl in idx_lens:
         overlap, n = _run_indexer_decode_case(sl)
         good = overlap >= 0.99
@@ -460,6 +502,8 @@ def main():
     print("\n== official MiniMax decode API wrapper (vs direct Blackwell kernel) ==")
     print(f"{'seq_len':<22}{'cos':>12}{'max_abs_err':>16}{'verdict':>10}")
     wrapper_lens = [2048] if args.quick else [2048, 4096]
+    if args.long_context:
+        wrapper_lens += list(LONG_CONTEXTS)
     for sl in wrapper_lens:
         cos, err = _run_official_decode_wrapper_case(sl)
         good = cos >= 0.99999 and err == 0.0
@@ -474,6 +518,11 @@ def main():
             ("m3_32blocks_b2", 4, 2, 32, [2048, 1536], 16),
             ("m3_256blocks_b1", 64, 1, 256, [32768], 16),
         ]
+        if args.long_context:
+            native_cases.extend([
+                ("m3_512blocks_b1", 64, 1, 512, [65536], 16),
+                ("m3_1024blocks_b1", 64, 1, 1024, [131072], 16),
+            ])
         for tag, heads, batch, max_blocks, seq_lens, topk in native_cases:
             overlap = _run_native_topk_case(heads, batch, max_blocks, seq_lens, topk)
             good = overlap >= 0.999

@@ -28,6 +28,13 @@ PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
   python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py
 ```
 
+Run standalone long-context validation:
+
+```bash
+PYTHONPATH=MiniMaxAI-msa-blackwell/torch-ext \
+  python MiniMaxAI-msa-blackwell/tests/test_msa_blackwell.py --long-context
+```
+
 Expected full coverage:
 
 | Area | Shapes | Reference | Required |
@@ -38,6 +45,8 @@ Expected full coverage:
 | Decode sparse GQA attention with sink | ctx 2048, 32768 | paged FP32 PyTorch | cos >= 0.999, max_abs <= 5e-2 |
 | Official decode API wrapper | ctx 2048, 4096 | direct Blackwell decode kernel | cos = 1.0, max_abs = 0 |
 | Decode lightning indexer | ctx 2048, 4096, 32768 | PyTorch blockmax top-k set | overlap >= 0.99 |
+| Standalone long-context decode | ctx 65536, 131072 | paged FP32 PyTorch / direct kernel | cos >= 0.999; wrapper max_abs = 0 |
+| Installed-artifact native long top-k | blocks 512, 1024 | PyTorch top-k over valid blocks | exact set match |
 
 API surface validation:
 
@@ -70,8 +79,15 @@ with `NotImplementedError` because returning fake results would be unsafe.
 ## FlashRT Integration Note
 
 FlashRT has validated the decode sparse path on SM121 over context lengths
-128 to 32768 with cosine similarity >= 0.999. The package tests are standalone
-and do not require FlashRT, SGLang, or vLLM.
+128 to 32768 with cosine similarity >= 0.999. The 32768 context length has
+also been exercised in the FlashRT MiniMax-Spark model runtime on DGX Spark /
+GB10, so it is the current end-to-end model validation boundary.
+
+The standalone package kernel tests additionally cover 65536 and 131072
+context lengths. These long-context rows validate the kernel and API wrapper
+contract outside the full model runtime; they should not be described as
+MiniMax-Spark end-to-end model validation until the full runtime path is rerun
+at those lengths.
 
 The same decode sparse path has also been exercised in FlashRT's MiniMax-Spark
 model runtime on DGX Spark / GB10. That end-to-end validation is intentionally
@@ -134,11 +150,26 @@ Result:
 | Decode sparse GQA | ctx4096_b2_mixed | 0.999996 | 7.3129e-04 | PASS |
 | Decode sparse GQA | ctx32768_b1 | 0.999996 | 6.9451e-04 | PASS |
 | Decode sparse GQA | ctx32768_b1_sink | 0.999996 | 5.6115e-04 | PASS |
+| Decode sparse GQA | ctx65536_b1 | 0.999996 | 4.3470e-04 | PASS |
+| Decode sparse GQA | ctx131072_b1 | 0.999996 | 7.1825e-04 | PASS |
 | Decode top-k indexer | ctx2048 | n/a | overlap 1.000 | PASS |
 | Decode top-k indexer | ctx4096 | n/a | overlap 1.000 | PASS |
 | Decode top-k indexer | ctx32768 | n/a | overlap 1.000 | PASS |
+| Decode top-k indexer | ctx65536 | n/a | overlap 1.000 | PASS |
+| Decode top-k indexer | ctx131072 | n/a | overlap 1.000 | PASS |
 | Official decode wrapper | ctx2048 | 1.000000 | 0.0000e+00 | PASS |
 | Official decode wrapper | ctx4096 | 1.000000 | 0.0000e+00 | PASS |
+| Official decode wrapper | ctx65536 | 1.000000 | 0.0000e+00 | PASS |
+| Official decode wrapper | ctx131072 | 1.000000 | 0.0000e+00 | PASS |
+
+Installed-artifact native top-k validation on RTX 5090 / torch 2.11 / CUDA
+12.8:
+
+| Context | Blocks | Overlap | Verdict |
+|---:|---:|---:|---|
+| 32768 | 256 | 1.000 | PASS |
+| 65536 | 512 | 1.000 | PASS |
+| 131072 | 1024 | 1.000 | PASS |
 
 The warning `tl.make_block_ptr is deprecated` appears with Triton 3.7.0. It is
 a deprecation warning, not a correctness failure.

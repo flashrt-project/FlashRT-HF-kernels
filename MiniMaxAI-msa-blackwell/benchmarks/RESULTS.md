@@ -38,3 +38,12 @@ These are source-level package smoke benchmarks on GB10 / SM121. Public
 performance claims should be refreshed from the uploaded v1 Hub artifact after
 HF Jobs publish. In source-tree mode the native CUDA extension is not built, so
 the native top-k helper column is intentionally `n/a`.
+
+Long-context correctness has since been extended to standalone kernel rows at
+65536 and 131072 context length. Performance tables for those rows should be
+refreshed from the installed Hub artifact before quoting latency numbers:
+
+```bash
+python MiniMaxAI-msa-blackwell/benchmarks/benchmark_decode.py \
+  --ctx 2048 4096 32768 65536 131072 --warmup 10 --iters 50
+```

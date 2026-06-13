@@ -148,7 +148,10 @@ out = msa.flash_decode_with_gqa_share_sparse(
 - Validated hardware: DGX Spark / GB10 / SM121.
 - Validated MiniMax shape: query heads `64`, KV heads `4`, head dim `128`,
   sparse block/page size `128`, top-k blocks `16`.
-- Validated context lengths: `128`, `2048`, `4096`, `32768`.
+- End-to-end model validation: MiniMax-Spark runtime on GB10 through `32768`
+  context length.
+- Standalone kernel long-context validation: `128`, `2048`, `4096`, `32768`,
+  `65536`, `131072`.
 - Correctness gate: cosine similarity `>= 0.999` against paged FP32 PyTorch
   references; official decode wrapper output matches the direct Blackwell
   decode kernel.

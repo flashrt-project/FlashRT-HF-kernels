@@ -58,7 +58,7 @@ def bench_native_topk(ctx: int, warmup: int, iters: int) -> float | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ctx", type=int, nargs="+", default=[2048, 4096, 32768])
+    ap.add_argument("--ctx", type=int, nargs="+", default=[2048, 4096, 32768, 65536, 131072])
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--iters", type=int, default=50)
     args = ap.parse_args()
