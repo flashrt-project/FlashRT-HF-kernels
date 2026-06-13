@@ -8,6 +8,10 @@ import triton.language as tl
 
 from .._compat import is_hip  # vendored: was `from sglang.srt.utils import is_hip`
 
+from .._native import (
+    native_decode_mma_supported,
+    native_decode_sparse_attn_mma_paged,
+)
 from ..common.utils import robust_allocator
 
 _is_hip = is_hip()
@@ -341,6 +345,22 @@ def flash_decode_with_gqa_share_sparse(
     # sm scale
     if sm_scale is None:
         sm_scale = head_dim**-0.5
+    # Fast path: native tensor-core decode for the M3 MSA shape. Falls through
+    # to the Triton kernel for other shapes, sink, or fp8 caches.
+    if sink is None and not is_fp8 and native_decode_mma_supported(
+        q, k_cache, block_size=block_size
+    ):
+        return native_decode_sparse_attn_mma_paged(
+            q,
+            k_cache,
+            v_cache,
+            req_to_token,
+            seq_lens,
+            slot_ids,
+            block_size,
+            topk_idx,
+            sm_scale,
+        )
     # Pick NUM_TOPK_CHUNKS so total grid ≈ TARGET_GRID. Same constraints as
     # flash_decode_with_topk_idx: must be power of 2 (Triton arange) and must
     # only depend on shape constants (so grid is fixed within a cuda graph).

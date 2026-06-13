@@ -27,3 +27,15 @@ void msa_decode_sparse_attn_mma(torch::Tensor const& q,
                                 int64_t block_size,
                                 double sm_scale,
                                 torch::Tensor& out);
+
+// Paged tensor-core variant (separate k/v caches + req_to_token indirection).
+void msa_decode_sparse_attn_mma_paged(torch::Tensor const& q,
+                                      torch::Tensor const& k_cache,
+                                      torch::Tensor const& v_cache,
+                                      torch::Tensor const& req_to_token,
+                                      torch::Tensor const& seq_lens,
+                                      torch::Tensor const& slot_ids,
+                                      torch::Tensor const& topk_idx,
+                                      int64_t block_size,
+                                      double sm_scale,
+                                      torch::Tensor& out);

@@ -62,4 +62,94 @@ def native_topk_from_scores(
     return out
 
 
-__all__ = ["has_native_ops", "native_topk_from_scores"]
+if _HAS_NATIVE_OPS:
+
+    @torch.library.register_fake(
+        add_op_namespace_prefix("msa_decode_sparse_attn_mma_paged")
+    )
+    def _msa_decode_sparse_attn_mma_paged_fake(
+        q: torch.Tensor,
+        k_cache: torch.Tensor,
+        v_cache: torch.Tensor,
+        req_to_token: torch.Tensor,
+        seq_lens: torch.Tensor,
+        slot_ids: torch.Tensor,
+        topk_idx: torch.Tensor,
+        block_size: int,
+        sm_scale: float,
+        out: torch.Tensor,
+    ) -> None:
+        return None
+
+
+def native_decode_mma_supported(
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    *,
+    block_size: int,
+) -> bool:
+    """Whether the tensor-core decode kernel applies to these inputs.
+
+    The mma kernel is specialized for the M3 MSA shape: head_dim 128, GQA
+    group (Hq/Hkv) 16, bf16, and a block size that is a multiple of 64.
+    """
+
+    if not _HAS_NATIVE_OPS:
+        return False
+    if q.dtype is not torch.bfloat16 or k_cache.dtype is not torch.bfloat16:
+        return False
+    if q.dim() != 3 or k_cache.dim() != 3:
+        return False
+    head_dim = int(q.shape[-1])
+    num_q_heads = int(q.shape[1])
+    num_kv_heads = int(k_cache.shape[1])
+    if head_dim != 128 or num_kv_heads <= 0:
+        return False
+    if num_q_heads % num_kv_heads != 0 or num_q_heads // num_kv_heads != 16:
+        return False
+    if int(block_size) % 64 != 0:
+        return False
+    return True
+
+
+def native_decode_sparse_attn_mma_paged(
+    q: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+    req_to_token: torch.Tensor,
+    seq_lens: torch.Tensor,
+    slot_ids: torch.Tensor,
+    block_size: int,
+    topk_idx: torch.Tensor,
+    sm_scale: float,
+) -> torch.Tensor:
+    """Paged tensor-core block-sparse GQA decode. Returns [B, Hq, D] bf16."""
+
+    if not _HAS_NATIVE_OPS:
+        raise RuntimeError("native MiniMax MSA ops are not available in source-tree mode")
+    out = torch.empty(
+        (int(q.shape[0]), int(q.shape[1]), int(q.shape[2])),
+        device=q.device,
+        dtype=q.dtype,
+    )
+    ops.msa_decode_sparse_attn_mma_paged(
+        q.contiguous(),
+        k_cache.contiguous(),
+        v_cache.contiguous(),
+        req_to_token.contiguous(),
+        seq_lens.contiguous(),
+        slot_ids.contiguous(),
+        topk_idx.contiguous(),
+        int(block_size),
+        float(sm_scale),
+        out,
+    )
+    return out
+
+
+__all__ = [
+    "has_native_ops",
+    "native_topk_from_scores",
+    "native_decode_mma_supported",
+    "native_decode_sparse_attn_mma_paged",
+]

@@ -24,4 +24,13 @@ void msa_decode_sparse_attn_mma_cuda(const void* q, const void* kv_cache,
                                      int block_size, int topk,
                                      float sm_scale, cudaStream_t stream);
 
+// Paged variant: K/V in separate [max_slots, Hkv, D] caches, logical token ->
+// physical slot via req_to_token [max_reqs, max_kv_len]. Same M3 shape limits.
+void msa_decode_sparse_attn_mma_paged_cuda(
+    const void* q, const void* k_cache, const void* v_cache,
+    const int* req_to_token, const int* seq_lens, const int64_t* slot_ids,
+    const int* topk_idx, void* out, int B, int Hq, int Hkv, int D,
+    int max_slots, int max_kv_len, int block_size, int topk, float sm_scale,
+    cudaStream_t stream);
+
 }  // namespace flashrt_minimax_msa

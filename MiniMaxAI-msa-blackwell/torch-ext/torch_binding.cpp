@@ -184,6 +184,64 @@ void msa_decode_sparse_attn_mma(torch::Tensor const& q,
 #endif
 }
 
+void msa_decode_sparse_attn_mma_paged(torch::Tensor const& q,
+                                      torch::Tensor const& k_cache,
+                                      torch::Tensor const& v_cache,
+                                      torch::Tensor const& req_to_token,
+                                      torch::Tensor const& seq_lens,
+                                      torch::Tensor const& slot_ids,
+                                      torch::Tensor const& topk_idx,
+                                      int64_t block_size,
+                                      double sm_scale,
+                                      torch::Tensor& out) {
+  check_cuda_contiguous(q, "q");
+  check_cuda_contiguous(k_cache, "k_cache");
+  check_cuda_contiguous(v_cache, "v_cache");
+  check_int32(req_to_token, "req_to_token");
+  check_int32(seq_lens, "seq_lens");
+  check_int32(topk_idx, "topk_idx");
+  check_cuda_contiguous(out, "out");
+  TORCH_CHECK(q.scalar_type() == torch::kBFloat16 &&
+              k_cache.scalar_type() == torch::kBFloat16 &&
+              v_cache.scalar_type() == torch::kBFloat16 &&
+              out.scalar_type() == torch::kBFloat16,
+              "q, k_cache, v_cache, out must be bf16");
+  TORCH_CHECK(slot_ids.scalar_type() == torch::kInt64, "slot_ids int64");
+  TORCH_CHECK(q.dim() == 3, "q must be (B, Hq, D)");
+  TORCH_CHECK(k_cache.dim() == 3 && v_cache.dim() == 3,
+              "k_cache/v_cache must be (max_slots, Hkv, D)");
+  TORCH_CHECK(req_to_token.dim() == 2, "req_to_token must be (max_reqs, max_kv_len)");
+  const int64_t B = q.size(0), Hq = q.size(1), D = q.size(2);
+  const int64_t max_slots = k_cache.size(0), Hkv = k_cache.size(1);
+  const int64_t max_kv_len = req_to_token.size(1);
+  TORCH_CHECK(k_cache.size(2) == D && v_cache.sizes() == k_cache.sizes(),
+              "k/v cache dims mismatch");
+  TORCH_CHECK(Hq % Hkv == 0, "Hq must be a multiple of Hkv");
+  TORCH_CHECK(D == 128, "mma variant requires head_dim == 128");
+  TORCH_CHECK(Hq / Hkv == 16, "mma variant requires GQA group (Hq/Hkv) == 16");
+  TORCH_CHECK(block_size % 64 == 0, "mma variant requires block_size % 64 == 0");
+  TORCH_CHECK(topk_idx.dim() == 3 && topk_idx.size(0) == Hkv &&
+              topk_idx.size(1) == B, "topk_idx must be (Hkv, B, topk)");
+  const int64_t topk = topk_idx.size(2);
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard device_guard(q.device());
+  auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
+  flashrt_minimax_msa::msa_decode_sparse_attn_mma_paged_cuda(
+      q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
+      req_to_token.data_ptr<int>(), seq_lens.data_ptr<int>(),
+      slot_ids.data_ptr<int64_t>(), topk_idx.data_ptr<int>(), out.data_ptr(),
+      checked_positive_int(B, "B"), checked_positive_int(Hq, "Hq"),
+      checked_positive_int(Hkv, "Hkv"), checked_positive_int(D, "D"),
+      checked_positive_int(max_slots, "max_slots"),
+      checked_positive_int(max_kv_len, "max_kv_len"),
+      checked_positive_int(block_size, "block_size"),
+      checked_positive_int(topk, "topk"),
+      static_cast<float>(sm_scale), stream);
+#else
+  TORCH_CHECK(false, "minimaxai-msa-blackwell was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("msa_topk_from_scores(Tensor score, Tensor seq_lens, int block_size, "
           "int topk, Tensor! topk_idx) -> ()");
@@ -193,11 +251,16 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("msa_decode_sparse_attn_mma(Tensor q, Tensor kv_cache, Tensor "
           "seq_lens, Tensor slot_ids, Tensor topk_idx, int block_size, "
           "float sm_scale, Tensor! out) -> ()");
+  ops.def("msa_decode_sparse_attn_mma_paged(Tensor q, Tensor k_cache, Tensor "
+          "v_cache, Tensor req_to_token, Tensor seq_lens, Tensor slot_ids, "
+          "Tensor topk_idx, int block_size, float sm_scale, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("msa_topk_from_scores", torch::kCUDA, &msa_topk_from_scores);
   ops.impl("msa_decode_sparse_attn", torch::kCUDA, &msa_decode_sparse_attn);
   ops.impl("msa_decode_sparse_attn_mma", torch::kCUDA,
            &msa_decode_sparse_attn_mma);
+  ops.impl("msa_decode_sparse_attn_mma_paged", torch::kCUDA,
+           &msa_decode_sparse_attn_mma_paged);
 #endif
 }
 
