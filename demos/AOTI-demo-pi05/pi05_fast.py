@@ -355,7 +355,8 @@ def apply_sync_free_loop(policy) -> None:
     copying the cache up front, the step lets it append and then slices each layer
     back to the prefix length afterwards (a traceable tensor op, not a Python
     object copy). That keeps the whole 10-step loop a single graph (no graph
-    break) and is what lets the loop export with AOTI.
+    break) -- a prerequisite for AOTI-exporting the loop, though full export still
+    needs the dynamic prefix length and mask resolved.
 
     Applied as a runtime monkeypatch (LeRobot source is untouched). Covers the
     non-RTC inference path.

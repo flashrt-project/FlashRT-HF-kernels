@@ -65,9 +65,10 @@ accumulating CUDA-graph memory.
   kernel from `flashrt/flashrt-fp8-swiglu-ffn`, quantizing input with
   `flashrt/flashrt-gemm-epilogues`. Static scales are calibrated on a **real
   observation** (random inputs break pi05's wide-magnitude prefix), in **eager**
-  mode (a compiled graph does not fire the calibration hooks). Attention
-  projections stay in BF16 — they are small per-token GEMMs where a per-projection
-  FP8 swap loses to cuBLAS.
+  mode (a compiled graph does not fire the calibration hooks). The attention
+  projections are handled separately: a per-projection FP8 swap of q/k/v loses to
+  cuBLAS at these small token counts, so they are only worth FP8 once fused (see
+  fused FP8 QKV below).
 - **FlashRT fused FP8 GELU MLP** — replaces the SigLIP vision-tower MLP
   (`fc1` → gelu_tanh → `fc2`, with bias) with `fp8_gelu_mlp_bf16` from
   `flashrt/flashrt-fp8-ffn`. The vision tower is large-token, where FP8 pays off;
@@ -82,9 +83,10 @@ accumulating CUDA-graph memory.
   forward appends the suffix K/V to the shared cache, so the step lets it append
   and then slices each layer back to the prefix length (a traceable tensor op, no
   Python copy). That removes the loop's last graph break — the 10 steps now
-  compile as a single graph — and is what lets the loop export with AOTI. It is a
-  runtime monkeypatch of the policy's methods (LeRobot source is untouched), so it
-  is slightly more than a module swap; it covers the non-RTC path.
+  compile as a single graph (a prerequisite for exporting the loop with AOTI;
+  full-loop export still needs the dynamic prefix length and mask handled, see
+  Notes). It is a runtime monkeypatch of the policy's methods (LeRobot source is
+  untouched), so it is slightly more than a module swap; it covers the non-RTC path.
 - **fused FP8 QKV** (`--fp8-attn`) — packs the attention `q/k/v` projections into a
   single FP8 GEMM (one quantize, one wider GEMM) instead of three separate ones,
   and optionally runs `o_proj` in FP8. This is the only way FP8 pays off on the
@@ -101,17 +103,19 @@ accumulating CUDA-graph memory.
   SigLIP vision embed to a standalone `.pt2` that loads without re-tuning, then
   compiles the denoise loop. AOTI is the route to fast cold starts and ZeroGPU
   Spaces (where each request forks a fresh process and JIT caches do not carry
-  over). The 10-step denoise loop does not yet export as one graph (a per-step
-  KV-cache `deepcopy`, a dynamic prefix length, and a fake-tensor mask broadcast
-  break `torch.export`); compiling the full loop with AOTI is future work.
+  over). The 10-step denoise loop is not AOTI-exported yet: `--sync-free` removes
+  the per-step KV-cache copy (so it's a single `torch.compile` graph), but a
+  dynamic prefix length and a fake-tensor mask broadcast still break
+  `torch.export`; compiling the full loop with AOTI is future work.
 - **Inductor tuning flags** — `coordinate_descent_tuning`,
   `coordinate_descent_check_all_directions`, `epilogue_fusion=False`.
 
 ## Files
 
-- `pi05_fast.py` — the optimization library (`optimize()` + the FP8 MLP swap and
-  calibration).
-- `pi05_aoti.py` — the `torch.export` + AOTInductor route.
+- `pi05_fast.py` — the optimization library: `optimize()` plus the FP8 MLP/vision
+  swaps, the sync-free denoise loop, the fused FP8 QKV, and real-observation
+  calibration.
+- `pi05_aoti.py` — the `torch.export` + AOTInductor route (vision embed).
 - `run_benchmark.py` — the ladder benchmark.
 
 ## Notes
@@ -119,8 +123,10 @@ accumulating CUDA-graph memory.
 - This is the LeRobot-integration recipe. For FlashRT's own hand-built static hot
   path (manual CUDA graph, lower latency), see `demos/runtime-demo`.
 - After the sync-free pass the whole `sample_actions` compiles as a single graph
-  (0 breaks — the KV-cache slice-back replaces the per-step copy), which is what
-  unblocks full-loop AOTI export for ZeroGPU Spaces. Full-model compile beats
+  (0 breaks — the KV-cache slice-back replaces the per-step copy). That's a
+  prerequisite for AOTI-exporting the loop, though full-loop `torch.export` still
+  needs the dynamic prefix length and mask resolved (the `export-aoti` mode
+  currently AOTIs only the vision embed). Full-model compile beats
   regional compilation here: ~54 ms (full, `max-autotune`) vs ~66 ms (regional, no
   FP8) — full-model keeps the whole denoise loop under CUDA graphs, while a block
   compiled and called in a Python loop can't stably use CUDA graphs (output

@@ -6,13 +6,14 @@ loads without re-tuning -- the key to fast cold starts and to ZeroGPU Spaces,
 where every request forks a fresh process and JIT ``torch.compile`` caches do
 not carry over (see the HF "ZeroGPU + AOTI" guide).
 
-pi05's 10-step denoise loop does not export cleanly as one graph (a per-step
-``copy.deepcopy`` of the KV cache, a dynamic prefix length, and a fake-tensor
-attention-mask broadcast all break ``torch.export``). So this AOTI route
-compiles the cleanly-exportable, static-shape SigLIP vision embed -- which runs
-on every inference -- to a ``.pt2`` artifact, and keeps the denoise loop on
-``torch.compile``. Extending AOTI to the denoise loop (remove the deepcopy,
-freeze the prefix length) is future work toward a ZeroGPU Space.
+pi05's 10-step denoise loop does not export cleanly as one graph: the sync-free
+pass removes the per-step KV-cache copy (so it's a single ``torch.compile``
+graph), but a dynamic prefix length and a fake-tensor attention-mask broadcast
+still break ``torch.export``. So this AOTI route compiles the cleanly-exportable,
+static-shape SigLIP vision embed -- which runs on every inference -- to a
+``.pt2`` artifact, and keeps the denoise loop on ``torch.compile``. Extending
+AOTI to the denoise loop (freeze the prefix length, resolve the mask) is future
+work toward a ZeroGPU Space.
 
 On a warm persistent process AOTI and compile reach the same speed; AOTI's win
 is the portable artifact, not extra throughput.
