@@ -13,6 +13,7 @@ bf16 eager (baseline)
   + FlashRT fused FP8 GeGLU MLP   (action expert + prefix language model)
   + FlashRT fused FP8 GELU MLP    (SigLIP vision tower)
   + sync-free denoise loop        (hoist per-step tensor builds out of the loop)
+  + fused FP8 QKV                 (pack q/k/v into one FP8 GEMM, + FP8 o_proj)
   + torch.compile  OR  torch.export + AOTInductor
 ```
 
@@ -27,14 +28,16 @@ Full hot path = SigLIP vision (×2 views) + projector + PaliGemma prefix +
 | + torch.compile | 61.7 ms | 1.81× | 1.0 |
 | + FlashRT FP8 GeGLU MLP | 53.0 ms | 2.11× | 0.9999 |
 | + FlashRT FP8 vision MLP | 48.9 ms | 2.28× | 0.9999 |
-| **+ sync-free denoise loop (full)** | **40.7 ms** | **2.75×** | 0.9999 |
+| + sync-free denoise loop | 40.7 ms | 2.75× | 0.9999 |
+| **+ fused FP8 QKV (full)** | **37.0 ms** | **3.03×** | 0.9999 |
 
 Latencies are warm steady-state medians (the first call is ~2.5× higher, a
 one-time cost). `torch.compile` carries the first 1.81×; the FlashRT fused FP8
 kernels add the GeGLU MLP in both Gemma stacks and the GELU MLP in the SigLIP
 vision tower; the sync-free pass removes the per-step CPU↔GPU syncs and the
-per-step KV-cache copy. `export-aoti` matches warm compile speed — its value is
-the portable artifact, not extra throughput.
+per-step KV-cache copy; fused FP8 QKV packs q/k/v into one GEMM. `export-aoti`
+matches warm compile speed — its value is the portable artifact, not extra
+throughput.
 
 ## Run
 
@@ -43,9 +46,9 @@ pip install kernels
 pip install "lerobot[pi,dataset]"
 huggingface-cli login        # the PaliGemma tokenizer is gated
 
-python run_benchmark.py                                    # the full ladder above
-python run_benchmark.py --single --sync-free --vision-fp8  # one config only
-python run_benchmark.py --single --no-fp8                  # compile-only rung
+python run_benchmark.py                                                # the full ladder above
+python run_benchmark.py --single --sync-free --vision-fp8 --fp8-attn  # full stack, one config
+python run_benchmark.py --single --no-fp8                             # compile-only rung
 ```
 
 The demo loads the published FlashRT Hub packages
@@ -82,6 +85,16 @@ accumulating CUDA-graph memory.
   compile as a single graph — and is what lets the loop export with AOTI. It is a
   runtime monkeypatch of the policy's methods (LeRobot source is untouched), so it
   is slightly more than a module swap; it covers the non-RTC path.
+- **fused FP8 QKV** (`--fp8-attn`) — packs the attention `q/k/v` projections into a
+  single FP8 GEMM (one quantize, one wider GEMM) instead of three separate ones,
+  and optionally runs `o_proj` in FP8. This is the only way FP8 pays off on the
+  attention at pi05's small token counts: a per-projection FP8 drop-in actually
+  *regresses* (3 tiny GEMMs + 3 quantizes lose to cuBLAS BF16), but the fused
+  packed GEMM wins — ~1.5× on the QKV projection at the decode shape, ~−2.5 ms
+  end to end. The `o_proj` FP8 part is ~neutral on latency (one small GEMM); it
+  just completes FP8 coverage of the attention. It is a runtime monkeypatch of
+  `GemmaAttention.forward` (LeRobot source untouched), so like sync-free it is more
+  than a module swap. (This mirrors diffusers' `fuse_qkv_projections()` + FP8.)
 - **torch.compile** — `max-autotune` on the denoise hot path (the runtime layer;
   no manual CUDA graph needed).
 - **torch.export + AOTInductor** (`export-aoti`) — compiles the cleanly-exportable
@@ -112,8 +125,9 @@ accumulating CUDA-graph memory.
   FP8) — full-model keeps the whole denoise loop under CUDA graphs, while a block
   compiled and called in a Python loop can't stably use CUDA graphs (output
   buffer reuse), so it falls back to no-cudagraphs and pays the launch overhead.
-  The remaining headroom is compute — attention and the QKV/O projections still
-  run in BF16 — which needs FP8 with a fused norm→FP8 producer (more than a
-  drop-in, it edits the attention path). Faster than that means attacking the 10
-  steps themselves (step caching / fewer steps), which changes the action output
-  and must be validated on task success, not cosine.
+  With `--fp8-attn` the QKV/O projections are FP8 too (fused), so the GEMMs are now
+  FP8 across MLP + attention; what's left in BF16 is the attention score/softmax
+  itself, which is a small fraction at pi05's short sequences (a flash-attention
+  swap measured neutral-to-slower here). Faster than that means attacking the 10
+  denoise steps themselves (step caching / fewer steps), which changes the action
+  output and must be validated on task success, not cosine.

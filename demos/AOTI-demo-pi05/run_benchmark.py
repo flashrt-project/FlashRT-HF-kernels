@@ -103,6 +103,7 @@ def main() -> None:
     parser.add_argument("--no-fp8", action="store_true")
     parser.add_argument("--vision-fp8", action="store_true", help="also swap the SigLIP vision MLP to FP8")
     parser.add_argument("--sync-free", action="store_true", help="hoist per-step tensor builds out of the denoise loop")
+    parser.add_argument("--fp8-attn", action="store_true", help="fuse q/k/v into one packed FP8 GEMM (+ FP8 o_proj)")
     parser.add_argument("--no-inductor-flags", action="store_true")
     parser.add_argument("--safety", type=float, default=1.0)
     parser.add_argument("--single", action="store_true", help="run only the configured rung, not the full ladder")
@@ -113,8 +114,8 @@ def main() -> None:
 
     if args.single:
         rungs = [(
-            f"fp8={'off' if args.no_fp8 else 'on'} vision={'on' if args.vision_fp8 else 'off'} sync_free={args.sync_free} compile={args.compile_mode}",
-            dict(fp8=not args.no_fp8, vision_fp8=args.vision_fp8, sync_free=args.sync_free,
+            f"fp8={'off' if args.no_fp8 else 'on'} vision={args.vision_fp8} attn={args.fp8_attn} sync_free={args.sync_free} compile={args.compile_mode}",
+            dict(fp8=not args.no_fp8, vision_fp8=args.vision_fp8, fp8_attn=args.fp8_attn, sync_free=args.sync_free,
                  inductor_flags=not args.no_inductor_flags, compile_mode=args.compile_mode, safety=args.safety),
         )]
     else:
@@ -123,7 +124,8 @@ def main() -> None:
             ("+ torch.compile", dict(fp8=False, inductor_flags=True, compile_mode="compile")),
             ("+ FlashRT fp8 MLP", dict(fp8=True, inductor_flags=True, compile_mode="compile", safety=args.safety)),
             ("+ vision fp8", dict(fp8=True, vision_fp8=True, inductor_flags=True, compile_mode="compile", safety=args.safety)),
-            ("+ sync-free loop (full stack)", dict(fp8=True, vision_fp8=True, sync_free=True, inductor_flags=True, compile_mode="compile", safety=args.safety)),
+            ("+ sync-free loop", dict(fp8=True, vision_fp8=True, sync_free=True, inductor_flags=True, compile_mode="compile", safety=args.safety)),
+            ("+ fused QKV fp8 (full stack)", dict(fp8=True, vision_fp8=True, fp8_attn=True, sync_free=True, inductor_flags=True, compile_mode="compile", safety=args.safety)),
         ]
 
     results = []

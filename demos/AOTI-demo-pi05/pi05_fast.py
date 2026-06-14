@@ -234,6 +234,99 @@ def apply_fp8_mlp(policy, batch, ffn_ops, quant_ops, safety: float = 1.0) -> Non
         layer.mlp = FlashRTGeGLU(layer.mlp, in_amax, hid_amax, ffn_ops, quant_ops, safety).to(device)
 
 
+def gemma_attentions(model) -> list:
+    """The Gemma self-attention modules in pi05: action expert + prefix LM."""
+    expert = [layer.self_attn for layer in model.paligemma_with_expert.gemma_expert.model.layers]
+    prefix = [layer.self_attn for layer in model.paligemma_with_expert.paligemma.model.language_model.layers]
+    return expert + prefix
+
+
+def _fp8_attn_forward(self, hidden_states, position_embeddings=None, attention_mask=None,
+                      past_key_values=None, cache_position=None, **kwargs):
+    """GemmaAttention.forward with q/k/v fused into one packed FP8 GEMM (and an
+    optional FP8 o_proj). Everything else (RoPE, cache, attention, reshape) is the
+    stock path. Fusing q/k/v is what makes FP8 on attention pay off at pi05's small
+    token counts -- one quantize + one wider GEMM instead of three tiny ones."""
+    from transformers.models.gemma.modeling_gemma import (
+        ALL_ATTENTION_FUNCTIONS, apply_rotary_pos_emb, eager_attention_forward)
+
+    input_shape = hidden_states.shape[:-1]
+    hd = self.head_dim
+    flat = hidden_states.reshape(-1, self._fused_in).to(torch.bfloat16)
+    xf = self._quant_ops.channel_scale_quantize_fp8_static_bf16(flat, self._fused_ones, self._fused_in_scale)
+    qkv = self._ffn_ops.fp8_gemm_bf16(xf, self._fused_w_fp8, self._fused_in_scale, self._fused_w_scale)
+    nq, nkv = self._nq, self._nkv
+    q = qkv[:, :nq].reshape(*input_shape, -1, hd).transpose(1, 2)
+    k = qkv[:, nq:nq + nkv].reshape(*input_shape, -1, hd).transpose(1, 2)
+    v = qkv[:, nq + nkv:].reshape(*input_shape, -1, hd).transpose(1, 2)
+    cos, sin = position_embeddings
+    q, k = apply_rotary_pos_emb(q, k, cos, sin)
+    if past_key_values is not None:
+        k, v = past_key_values.update(k, v, self.layer_idx,
+                                      {"sin": sin, "cos": cos, "cache_position": cache_position})
+    ai = ALL_ATTENTION_FUNCTIONS.get_interface(self.config._attn_implementation, eager_attention_forward)
+    out, attn_w = ai(self, q, k, v, attention_mask, dropout=0.0, scaling=self.scaling, **kwargs)
+    out = out.reshape(*input_shape, -1).contiguous()
+    if getattr(self, "_o_fp8", None) is not None:
+        of = self._quant_ops.channel_scale_quantize_fp8_static_bf16(
+            out.reshape(-1, self._o_in).to(torch.bfloat16), self._o_ones, self._o_in_scale)
+        return self._ffn_ops.fp8_gemm_bf16(of, self._o_fp8, self._o_in_scale, self._o_scale).reshape(*input_shape, -1), attn_w
+    return self.o_proj(out), attn_w
+
+
+def apply_fp8_attention(policy, batch, ffn_ops, quant_ops, safety: float = 1.0, fuse_o: bool = True) -> None:
+    """Fuse q/k/v into one packed FP8 GEMM in every Gemma attention (optionally
+    FP8 o_proj too), calibrated on a real observation. Runtime monkeypatch of
+    GemmaAttention.forward -- LeRobot source untouched. fused QKV is the speedup
+    (~-2.5 ms e2e); o_proj FP8 is ~neutral and just completes FP8 attention."""
+    import types
+
+    model = policy.model
+    attns = gemma_attentions(model)
+    in_amax = [0.0] * len(attns)
+    o_amax = [0.0] * len(attns)
+    handles = []
+    for i, a in enumerate(attns):
+        def hk(mod, inp, i=i):
+            in_amax[i] = max(in_amax[i], inp[0].float().abs().max().item())
+
+        def ok(mod, inp, i=i):
+            o_amax[i] = max(o_amax[i], inp[0].float().abs().max().item())
+
+        handles.append(a.register_forward_pre_hook(hk))
+        handles.append(a.o_proj.register_forward_pre_hook(ok))
+    saved = {n: vars(model).pop(n) for n in ("sample_actions", "forward") if n in vars(model)}
+    with torch.inference_mode():
+        policy.predict_action_chunk(dict(batch))
+    torch.cuda.synchronize()
+    vars(model).update(saved)
+    for h in handles:
+        h.remove()
+
+    device = next(policy.parameters()).device
+    for a, ia, oa in zip(attns, in_amax, o_amax):
+        qkv_w = torch.cat([a.q_proj.weight, a.k_proj.weight, a.v_proj.weight], dim=0).contiguous()
+        wf, ws = quantize_fp8(qkv_w)
+        a._fused_w_fp8 = wf.to(device)
+        a._fused_w_scale = ws.to(device)
+        a._fused_in = a.q_proj.weight.shape[1]
+        a._nq = a.q_proj.weight.shape[0]
+        a._nkv = a.k_proj.weight.shape[0]
+        a._fused_in_scale = static_scale(ia, safety).to(device)
+        a._fused_ones = torch.ones(a._fused_in, device=device, dtype=torch.bfloat16)
+        a._ffn_ops = ffn_ops
+        a._quant_ops = quant_ops
+        a._o_fp8 = None
+        if fuse_o:
+            owf, ows = quantize_fp8(a.o_proj.weight.contiguous())
+            a._o_fp8 = owf.to(device)
+            a._o_scale = ows.to(device)
+            a._o_in = a.o_proj.weight.shape[1]
+            a._o_in_scale = static_scale(oa, safety).to(device)
+            a._o_ones = torch.ones(a._o_in, device=device, dtype=torch.bfloat16)
+        a.forward = types.MethodType(_fp8_attn_forward, a)
+
+
 def apply_inductor_flags() -> None:
     """flux-fast-style inductor tuning flags."""
     import torch._inductor.config as cfg
@@ -361,7 +454,7 @@ def apply_compile(policy, mode: str = "max-autotune") -> None:
 
 
 def optimize(policy, batch, *, fp8: bool = True, vision_fp8: bool = False,
-             sync_free: bool = False, inductor_flags: bool = True,
+             fp8_attn: bool = False, sync_free: bool = False, inductor_flags: bool = True,
              compile_mode: str = "compile", safety: float = 1.0):
     """Apply the optimization ladder in place and return the policy.
 
@@ -371,13 +464,15 @@ def optimize(policy, batch, *, fp8: bool = True, vision_fp8: bool = False,
         apply_inductor_flags()
     if sync_free:
         apply_sync_free_loop(policy)
-    quant_ops = load_kernel(GEMM_REPO) if (fp8 or vision_fp8) else None
+    quant_ops = load_kernel(GEMM_REPO) if (fp8 or vision_fp8 or fp8_attn) else None
+    ffn_ops = load_kernel(FFN_REPO) if (fp8 or fp8_attn) else None
     if fp8:
-        ffn_ops = load_kernel(FFN_REPO)
         apply_fp8_mlp(policy, batch, ffn_ops, quant_ops, safety)
     if vision_fp8:
         gelu_ops = load_kernel(GELU_FFN_REPO)
         apply_fp8_vision_mlp(policy, batch, gelu_ops, quant_ops, safety)
+    if fp8_attn:
+        apply_fp8_attention(policy, batch, ffn_ops, quant_ops, safety)
     if compile_mode == "disabled":
         force_eager(policy)
     elif compile_mode == "compile":
