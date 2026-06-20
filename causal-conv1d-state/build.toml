@@ -1,0 +1,33 @@
+[general]
+name = "causal-conv1d-state"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/causal-conv1d-state"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.causal_conv1d_state]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+src = [
+  "csrc/causal_conv1d_state.cu",
+  "csrc/causal_conv1d_state.cuh",
+]
+cuda-flags = [
+  "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT16_OPERATORS__",
+  "-U__CUDA_NO_BFLOAT162_OPERATORS__",
+]

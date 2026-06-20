@@ -12,6 +12,8 @@
 | `fp4-fused-ops` | `rms_norm_fp4_sfa_fp16`, `residual_add_rms_norm_fp4_sfa_v2_fp16`, `silu_mul_fp4_sfa_v2_fp16`, `silu_mul_two_fp4_to_fp4` | `csrc/fused_fp4`, `csrc/quantize` | FP16 math reference, v1/v2 dequantized parity, producer latency | Native Blackwell FP4 producer/combiner package for continuous low-bit runtime paths |
 | `fp4-gemm` | `quantize_fp4_sfa_fp16`, `dequantize_fp4_sfa_fp16`, `fp4_w4a16_linear_bf16` | `csrc/gemm/fp4`, `csrc/quantize` | PyTorch GEMM over the same dequantized FP4/SFA/SFB inputs | Native Blackwell NVFP4 W4A16 linear package |
 | `fp8-kv-attention` | `xqa_bf16_fp8kv`, `causal_spec_mask`, `default_page_table`, `allocate_workspace` | `csrc/attention/flashinfer_xqa_src`, `csrc/kernels/qwen36_flashinfer_xqa.*` | PyTorch FP8-dequant attention reference with the same speculative mask | Direct BF16-Q + FP8-KV XQA package for Qwen3.6-style decode/verify |
+| `causal-conv1d-state` | `causal_conv1d_bf16`, `causal_conv1d_update_bf16`, `causal_conv1d_update_inout_bf16`, `causal_conv1d_update_chunk_parallel_gqa_bf16` | `csrc/kernels/causal_conv1d_qwen36.*` | PyTorch BF16 causal Conv1D state reference | Qwen3.6-style pre-linear-attention Conv1D state update and GQA split |
+| `gated-delta-attention` | `gated_delta_recurrent_bf16`, `gated_delta_recurrent_inout_bf16`, `gated_delta_recurrent_f32state_bf16io`, `gated_delta_chunk_bf16`, `gated_delta_chunk_smem_bf16` | `csrc/kernels/gated_deltanet_qwen36.*` | PyTorch Gated DeltaNet recurrent/chunk reference with BF16 state contract | Stateful linear-attention recurrence for transformer decode/verify/prefill |
 
 ## V1 Batch Blocks
 
@@ -26,6 +28,7 @@ is not a priority order.
 | Fused quantization | `flashrt-fused-quant` | Activation, residual, norm, and low-bit quantization fusion |
 | Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP16-to-NVFP4 producers, FP4-to-FP4 combiners, and NVFP4 W4A16 GEMM |
 | FP8 KV attention | `fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache for long-context decode/verify |
+| Qwen3.6 linear-attention state | `causal-conv1d-state`, `gated-delta-attention`, `linear-attention-primitives` | Conv1D state update, Gated DeltaNet recurrence/chunks, and staging helpers |
 
 Do not run full builder packaging for one block while the other v1 blocks are
 still missing source-extension tests, benchmark grids, or examples. Full

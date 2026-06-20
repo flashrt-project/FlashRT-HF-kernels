@@ -55,6 +55,9 @@ Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 | `flashrt/flashrt-vla-residual-gates` | Video/action/und joint gated residual updates. | You have multi-segment VLA block glue and want one CUDA launch for the segment residual/gate updates. |
 | `flashrt/flashrt-adaptive-norms` | AdaRMSNorm/style modulation and fused residual/AdaRMSNorm/static-FP8 output. | You need DiT/VLA/world-model adaptive normalization and optional FP8 activation output. |
 | `flashrt/flashrt-spatiotemporal-layout` | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers. | You need world-model/video layout glue to keep the model-demo hot path on CUDA. |
+| `flashrt/linear-attention-primitives` | Small-M BF16 linear, QKV broadcast split, partial RoPE, and gated-delta preparation helpers. | You are assembling a transformer linear-attention block and need graph-friendly staging ops. |
+| `flashrt/causal-conv1d-state` | BF16 causal Conv1D forward/update/chunk kernels with persistent state. | You need the Conv1D state path used before linear-attention recurrence, including Qwen3.6-style GQA split output. |
+| `flashrt/gated-delta-attention` | BF16 Gated DeltaNet recurrent/chunk state kernels. | You need the stateful linear-attention recurrence for decode, verify, or prefill chunks. |
 
 Package-specific hardware claims should use the corresponding built-artifact
 and multi-hardware validation rows. The PI0.5 runtime demo composes these
@@ -81,6 +84,40 @@ For statically calibrated per-tensor FP8, pass
 `alpha = float(input_scale * weight_scale)` from host-side calibration metadata.
 The package targets Blackwell `sm_120a` and exposes `M=1` decode plus
 `2 <= M <= 64` small-M rows in v1.
+
+### Qwen3.6-Style Linear Attention State Path
+
+```python
+from kernels import get_kernel
+import torch
+
+conv = get_kernel("flashrt/causal-conv1d-state", version=1, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=1, trust_remote_code=True)
+
+B, S, C, K = 1, 8, 10240, 4
+x = torch.randn(B, S, C, device="cuda", dtype=torch.bfloat16)
+w = torch.randn(C, K, device="cuda", dtype=torch.bfloat16)
+bias = torch.randn(C, device="cuda", dtype=torch.bfloat16)
+conv_state = torch.zeros(B, C, K - 1, device="cuda", dtype=torch.bfloat16)
+
+q16, k16, v48 = conv.causal_conv1d_update_chunk_parallel_gqa_bf16(
+    x, w, conv_state, bias
+)
+
+# Broadcast q/k outside this snippet or use `linear-attention-primitives`
+# helpers, then run the recurrent/chunk Gated DeltaNet state kernel.
+H, D = 48, 128
+q = torch.randn(S, H, D, device="cuda", dtype=torch.bfloat16)
+k = torch.randn_like(q)
+v = v48.reshape(S, H, D).contiguous()
+g = torch.randn(S, H, device="cuda", dtype=torch.bfloat16)
+beta = torch.sigmoid(torch.randn(S, H, device="cuda")).to(torch.bfloat16)
+state = torch.zeros(H, D, D, device="cuda", dtype=torch.bfloat16)
+out = gdn.gated_delta_chunk_bf16(q, k, v, g, beta, state)
+```
+
+For hot paths, preallocate all outputs and state buffers and pass them through
+the package APIs rather than relying on wrapper allocations.
 
 ### Full FP8 GELU FFN
 

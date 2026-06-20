@@ -27,6 +27,8 @@ on:
       - "fp4-fused-ops/**"
       - "fp4-gemm/**"
       - "fp8-kv-attention/**"
+      - "causal-conv1d-state/**"
+      - "gated-delta-attention/**"
   workflow_dispatch:
     inputs:
       package:
@@ -58,6 +60,8 @@ on:
           - fp4-fused-ops
           - fp4-gemm
           - fp8-kv-attention
+          - causal-conv1d-state
+          - gated-delta-attention
 
 permissions:
   contents: read
@@ -96,6 +100,8 @@ jobs:
           - fp4-fused-ops
           - fp4-gemm
           - fp8-kv-attention
+          - causal-conv1d-state
+          - gated-delta-attention
 
     steps:
       - uses: actions/checkout@v4
