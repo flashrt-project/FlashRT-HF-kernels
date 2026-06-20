@@ -123,6 +123,8 @@ demos:
   and activation-quant blocks.
 - `flashrt-fp8-ffn/benchmarks`: full FP8 GELU MLP sublayers for PI0.5/GROOT
   shapes.
+- `fp8-gemm/benchmarks`: native Blackwell FP8 decode GEMV and small-M GEMM
+  rows for low-latency `Linear` replacements.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
   preallocated buffers and CUDA Graph replay for PI0.5/GROOT-shaped FFN chains.
 - `demos/runtime-demo`: multi-package PI0.5-shaped runtime prototype using
@@ -189,6 +191,19 @@ PI0.5 vision 1/2/3-view shapes, GROOT ViT 1/2/4-view shapes, GROOT DeepStack,
 GROOT VL self-attn sequence lengths up to 2520, and the GROOT action DiT GELU
 FFN shape. All rows pass the p99_abs/p99_rel precision gate; built-artifact and
 multi-hardware rows remain pending until the full release build is regenerated.
+
+Native FP8 GEMM snapshot uses `fp8-gemm`, which exports
+`fp8_linear_bf16` and `fp8_linear_residual_bf16` for FP8 E4M3 inputs and BF16
+outputs. Public v1 scope is Blackwell `sm_120a`, `M=1` decode and
+`2 <= M <= 64` small-M rows.
+
+| Shape | Tile | vs eager | vs compile | Precision gate |
+| --- | --- | ---: | ---: | --- |
+| `M=1,K=4096,N=2048` | `gemv_fp8_m1_w4` | 5.30x | 6.74x | PASS, p99_abs=0 |
+| `M=1,K=4096,N=8192` | `gemv_fp8_m1_w8` | 15.78x | 15.16x | PASS, p99_abs=0 |
+| `M=16,K=4096,N=4096` | `ld_fp8_gemm_16x128x256_w4` | 7.38x | 6.68x | PASS, p99_abs=0 |
+| `M=32,K=4096,N=8192` | `ld_fp8_gemm_32x128x256_w4` | 8.90x | 8.38x | PASS, p99_abs=0 |
+| `M=64,K=512,N=1024` | `ld_fp8_gemm_64x128x256_w4` | 2.19x | 6.05x | PASS, p99_abs=0 |
 
 PI0.5 HF-kernel runtime milestone:
 

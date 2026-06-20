@@ -34,6 +34,7 @@ Published v1 packages:
 
 | Package | What it contains | Use it when |
 | --- | --- | --- |
+| `flashrt/fp8-gemm` | Native Blackwell FP8 GEMV/GEMM linear kernels with BF16 output. | You already have FP8 E4M3 activation/weight tensors and want a low-overhead `Linear` replacement for decode or small-M rows. |
 | `flashrt/flashrt-fp8-ffn` | FP8 GEMM and full GELU FFN/MLP blocks. | You have pre-quantized FP8 activations and weights and want a reusable `FP8 up GEMM -> bias/GELU -> FP8 requant -> FP8 down GEMM -> bias` block. |
 | `flashrt/flashrt-gemm-epilogues` | BF16 GEMM bias/GELU wrappers and BF16-to-FP8 quantization epilogues. | You need post-GEMM activation quantization, channel-scale quantization, or a small fused BF16 GEMM epilogue helper. |
 | `flashrt/flashrt-vla-video` | VLA/video/diffusion Q/K and packed-QKV post-processing. | You need packed QKV split, Q/K RMSNorm, and RoPE staging for video or VLA attention blocks. |
@@ -58,6 +59,25 @@ packages as a fixed-shape hot path with preloaded ops, persistent buffers,
 static calibration, and CUDA Graph replay.
 
 ## Quick Examples
+
+### Native FP8 Linear
+
+```python
+from kernels import get_kernel
+import torch
+
+ops = get_kernel("flashrt/fp8-gemm", version=1, trust_remote_code=True)
+
+x_fp8 = torch.randn((1, 4096), device="cuda", dtype=torch.bfloat16).to(torch.float8_e4m3fn)
+w_fp8 = torch.randn((8192, 4096), device="cuda", dtype=torch.bfloat16).to(torch.float8_e4m3fn)
+
+y_bf16 = ops.fp8_linear_bf16(x_fp8, w_fp8, alpha=1.0)
+```
+
+For statically calibrated per-tensor FP8, pass
+`alpha = float(input_scale * weight_scale)` from host-side calibration metadata.
+The package targets Blackwell `sm_120a` and exposes `M=1` decode plus
+`2 <= M <= 64` small-M rows in v1.
 
 ### Full FP8 GELU FFN
 
