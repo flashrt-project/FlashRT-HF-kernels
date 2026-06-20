@@ -147,7 +147,6 @@ def load_source_ops() -> SourceOps:
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "-DCUDA_KERNEL",
-            "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED",
         ],
         verbose=False,
     )

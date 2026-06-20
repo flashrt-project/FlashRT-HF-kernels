@@ -32,16 +32,6 @@ DEFAULT_CUTLASS_INCLUDE = (
     / "cutlass"
     / "include"
 )
-DEFAULT_CUTLASS_UTIL_INCLUDE = (
-    ROOT.parent
-    / "flashrt_pr31_review"
-    / "third_party"
-    / "cutlass"
-    / "tools"
-    / "util"
-    / "include"
-)
-
 
 SHAPES = {
     "small_m16_n128_k128": (16, 128, 128),
@@ -108,13 +98,10 @@ def load_source_ops() -> SourceOps:
     from torch.utils.cpp_extension import load
 
     cutlass_include = Path(os.environ.get("FLASHRT_CUTLASS_INCLUDE", str(DEFAULT_CUTLASS_INCLUDE)))
-    cutlass_util_include = Path(os.environ.get("FLASHRT_CUTLASS_UTIL_INCLUDE", str(DEFAULT_CUTLASS_UTIL_INCLUDE)))
     if not REGISTRATION_INCLUDE.is_dir():
         raise RuntimeError(f"missing kernel-builder registration include: {REGISTRATION_INCLUDE}")
     if not cutlass_include.is_dir():
         raise RuntimeError(f"missing CUTLASS include path: {cutlass_include}")
-    if not cutlass_util_include.is_dir():
-        raise RuntimeError(f"missing CUTLASS util include path: {cutlass_util_include}")
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _current_arch_list())
     namespace = "fp4_gemm_source_test"
     load(
@@ -128,7 +115,6 @@ def load_source_ops() -> SourceOps:
         extra_include_paths=[
             str(PACKAGE / "csrc"),
             str(cutlass_include),
-            str(cutlass_util_include),
             str(REGISTRATION_INCLUDE),
         ],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -137,7 +123,6 @@ def load_source_ops() -> SourceOps:
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "-DCUDA_KERNEL",
-            "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED",
         ],
         verbose=False,
     )

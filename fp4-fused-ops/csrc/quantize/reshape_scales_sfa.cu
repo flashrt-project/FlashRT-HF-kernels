@@ -7,6 +7,9 @@
 // ============================================================================
 #include "reshape_scales_sfa.cuh"
 
+#ifndef CUTLASS_ARCH_MMA_SM100_SUPPORTED
+#  define CUTLASS_ARCH_MMA_SM100_SUPPORTED 1
+#endif
 #if defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED) || defined(__CUDA_ARCH__)
 #  include "cutlass/cutlass.h"
 #  include "cutlass/detail/sm100_blockscaled_layout.hpp"

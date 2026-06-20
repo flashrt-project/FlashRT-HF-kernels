@@ -7,6 +7,9 @@ Copied source files:
 
 - `csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cu/.cuh`
 - `csrc/quantize/quantize_fp4_sfa.cu/.cuh`
+- `cutlass/util/packed_stride.hpp`, copied from CUTLASS tools util headers
+  into `csrc/cutlass/util/packed_stride.hpp` so the Hub package does not
+  depend on a local `third_party/cutlass/tools/util/include` path.
 
 Packaging helper:
 
@@ -19,6 +22,8 @@ Local packaging edits:
 - Added Tensor-facing PyTorch custom ops in `torch-ext/torch_binding.cpp`.
 - Added Python wrappers and fake registrations in `torch-ext/fp4_gemm`.
 - Public APIs accept CUDA tensors only; no raw pointers or stream arguments.
+- CUTLASS SM100/SM120 block-scaled layout support is treated as package scope,
+  not as a test-only compiler define.
 
 Not included in v1:
 

@@ -19,6 +19,8 @@ Local packaging edits:
 - Added Tensor-facing PyTorch custom ops in `torch-ext/torch_binding.cpp`.
 - Added Python wrappers and fake registrations in `torch-ext/fp4_fused_ops`.
 - Public APIs accept CUDA tensors only; no raw pointers or stream arguments.
+- CUTLASS SM100/SM120 block-scaled layout support is treated as package scope,
+  not as a test-only compiler define.
 
 Architecture and dependency assumptions:
 
