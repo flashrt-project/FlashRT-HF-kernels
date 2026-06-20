@@ -153,6 +153,7 @@ jobs:
             set +x
             export HF_TOKEN="${{ secrets.HF_TOKEN }}"
             export GIT_LFS_SKIP_SMUDGE=1
+            export DEBUG=0
 
             git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
             cd FlashRT-HF-kernels

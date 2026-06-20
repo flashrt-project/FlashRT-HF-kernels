@@ -23,6 +23,12 @@ The package must pass all rows with:
 Installed-artifact validation should be rerun in a Torch version supported by
 the Kernel Hub artifact matrix.
 
+Builder note:
+
+- The generated setuptools path expects `DEBUG` to be numeric (`0` or `1`).
+  `DEBUG=release` is invalid and fails before CMake configure. Repository HF
+  Jobs set `DEBUG=0` explicitly before invoking `kernel-builder`.
+
 ## RTX 5090 Source Results
 
 Command:
@@ -42,3 +48,18 @@ Rows:
 | decode_1024 | 1 | 1024 | 0.000061 | 0.000005 | 0.000031 | 0.99999523 | PASS |
 | verify4_1024 | 4 | 1024 | 0.000061 | 0.000005 | 0.000031 | 0.99999517 | PASS |
 | verify8_4096 | 8 | 4096 | 0.000031 | 0.000003 | 0.000015 | 0.99999541 | PASS |
+
+## Generated Pyproject Build Smoke
+
+Command:
+
+```bash
+DEBUG=0 MAX_JOBS=8 NVCC_THREADS=2 TORCH_CUDA_ARCH_LIST=12.0a \
+  python -m pip wheel . -w /tmp/fp8kv-wheel -v --no-build-isolation
+```
+
+Result:
+
+- Generated CMake project configured with CUDA 13.0 and `sm_120a`.
+- Built `_fp8_kv_attention_cuda_*.abi3.so` successfully.
+- Produced local wheel `fp8_kv_attention-0.1.0-cp313-cp313-linux_x86_64.whl`.
