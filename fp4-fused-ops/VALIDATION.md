@@ -35,7 +35,19 @@ Notes:
 - `packed_equal=False` can appear for v2-vs-v1 checks when the dequantized
   values are equivalent within the FP4 envelope; public validation is based on
   dequantized values plus residual contract, not byte identity alone.
-- Installed artifact validation is required after HF Jobs publishes the package.
-- First publish uses the repository workflow's GitHub-runner
-  `create_repo(..., repo_type="kernel", exist_ok=True)` step before launching
-  the HF Jobs builder.
+## HF Jobs Publish Status
+
+`flashrt/fp4-fused-ops` v1 was built and uploaded through the repository HF
+Jobs workflow.
+
+- Hub revision checked on June 20, 2026: `c77ac5a1`
+- Uploaded variants:
+  - `torch211-cxx11-cu128-x86_64-linux`
+  - `torch211-cxx11-cu130-x86_64-linux`
+  - `torch212-cxx11-cu130-x86_64-linux`
+  - `torch212-cxx11-cu132-x86_64-linux`
+
+Installed-artifact correctness through `get_kernel("flashrt/fp4-fused-ops")`
+should be rerun in a torch211 or torch212 CUDA environment. The local
+development environment used for the source tests is PyTorch 2.9.1+cu128,
+which intentionally does not match the uploaded torch211/torch212 variants.

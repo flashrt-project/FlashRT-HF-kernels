@@ -28,7 +28,20 @@ Result:
 | M=64, N=512, K=512 | 1 | 0.0 | 0.0 | 0.0 | 1.0 |
 | M=64, N=512, K=512 | 2 | 0.0 | 0.0 | 0.0 | 1.0 |
 
-Installed-artifact validation is required after HF Jobs publishes the package.
-First publish uses the repository workflow's GitHub-runner
-`create_repo(..., repo_type="kernel", exist_ok=True)` step before launching
-the HF Jobs builder.
+## HF Jobs Publish Status
+
+`flashrt/fp4-gemm` v1 was built and uploaded through the repository HF Jobs
+workflow after the package flake was updated to the current
+`genKernelFlakeOutputs` builder API.
+
+- Hub revision checked on June 20, 2026: `4fb53e52`
+- Uploaded variants:
+  - `torch211-cxx11-cu128-x86_64-linux`
+  - `torch211-cxx11-cu130-x86_64-linux`
+  - `torch212-cxx11-cu130-x86_64-linux`
+  - `torch212-cxx11-cu132-x86_64-linux`
+
+Installed-artifact correctness through `get_kernel("flashrt/fp4-gemm")`
+should be rerun in a torch211 or torch212 CUDA environment. The local
+development environment used for the source tests is PyTorch 2.9.1+cu128,
+which intentionally does not match the uploaded torch211/torch212 variants.

@@ -56,10 +56,19 @@ not meet the performance bar, and an alternate big tile returned non-zero
 status for the tested public row. This remains an internal tuning item rather
 than a public API.
 
-## Pending Release Gates
+## HF Jobs Publish Status
 
-- `kernel-builder check-config` was not run in the current shell because `nix`
-  is not installed there.
-- HF Jobs build/upload is pending.
-- Installed-artifact correctness through `get_kernel("flashrt/fp8-gemm")` is
-  pending after upload.
+`flashrt/fp8-gemm` v1 was built and uploaded through the repository HF Jobs
+workflow.
+
+- Hub revision checked on June 20, 2026: `166f09be`
+- Uploaded variants:
+  - `torch211-cxx11-cu128-x86_64-linux`
+  - `torch211-cxx11-cu130-x86_64-linux`
+  - `torch212-cxx11-cu130-x86_64-linux`
+  - `torch212-cxx11-cu132-x86_64-linux`
+
+Installed-artifact correctness through `get_kernel("flashrt/fp8-gemm")`
+should be rerun in a torch211 or torch212 CUDA environment. The local
+development environment used for the source tests is PyTorch 2.9.1+cu128,
+which intentionally does not match the uploaded torch211/torch212 variants.
