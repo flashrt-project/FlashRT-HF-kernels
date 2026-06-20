@@ -132,6 +132,17 @@ jobs:
             export HF_TOKEN="${{ secrets.HF_TOKEN }}"
             export GIT_LFS_SKIP_SMUDGE=1
 
+            python - <<'PY'
+            import os
+            from huggingface_hub import HfApi
+
+            HfApi(token=os.environ["HF_TOKEN"]).create_repo(
+                repo_id="flashrt/${{ matrix.package }}",
+                repo_type="kernel",
+                exist_ok=True,
+            )
+            PY
+
             git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
             cd FlashRT-HF-kernels
             git checkout "${{ github.sha }}"

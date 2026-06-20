@@ -36,3 +36,6 @@ Notes:
   values are equivalent within the FP4 envelope; public validation is based on
   dequantized values plus residual contract, not byte identity alone.
 - Installed artifact validation is required after HF Jobs publishes the package.
+- First publish uses the repository workflow's explicit Kernel Hub
+  `create_repo(..., repo_type="kernel", exist_ok=True)` step before
+  `kernel-builder build-and-upload`.
