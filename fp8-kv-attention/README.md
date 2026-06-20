@@ -25,7 +25,7 @@ The first public package intentionally exposes the validated fixed XQA shape:
 - Q heads / KV heads: `24 / 4`
 - head dim: `256`
 - supported q_seq: `1 <= q_seq <= 32`
-- target: Blackwell `sm_120/sm_121`, CUDA 12.8+
+- target: Blackwell `sm_120`, CUDA 12.8+
 
 Unsupported shapes fail at the Python/C++ boundary instead of silently falling
 back to a slower reference.
