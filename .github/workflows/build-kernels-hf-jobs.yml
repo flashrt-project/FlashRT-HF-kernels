@@ -24,6 +24,8 @@ on:
       - "linear-attention-primitives/**"
       - "world-model-conv/**"
       - "fp8-gemm/**"
+      - "fp4-fused-ops/**"
+      - "fp4-gemm/**"
   workflow_dispatch:
     inputs:
       package:
@@ -52,6 +54,8 @@ on:
           - linear-attention-primitives
           - world-model-conv
           - fp8-gemm
+          - fp4-fused-ops
+          - fp4-gemm
 
 permissions:
   contents: read
@@ -87,6 +91,8 @@ jobs:
           - linear-attention-primitives
           - world-model-conv
           - fp8-gemm
+          - fp4-fused-ops
+          - fp4-gemm
 
     steps:
       - uses: actions/checkout@v4

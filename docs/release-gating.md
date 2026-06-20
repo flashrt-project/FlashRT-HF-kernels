@@ -27,6 +27,8 @@ builds.
 | `flashrt-nvfp4` | G5 RC | v1 Blackwell layout helper correctness, package tests, examples, verified public benchmark rows, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, broader fused GEMM epilogue surfaces |
 | `flashrt-smallm-gemm` | G5 RC | SM120 NVFP4 W4A4 decode matvec correctness, package tests, examples, verified public benchmark rows, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
 | `flashrt-fused-quant` | G5 RC | Split and merged SiLU+NVFP4 quantization correctness, package tests, examples, benchmark latency grid, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, memory-bandwidth benchmark, residual/RMSNorm slices |
+| `fp4-fused-ops` | G4 source RC | FP16-to-NVFP4 producer and FP4-to-FP4 combiner package passes 26/26 strict source checks on RTX 5090; benchmark rows document producer/combiner latency and v2-vs-v1 comparisons | HF Jobs artifact build/upload, installed-artifact validation, multi-hardware validation |
+| `fp4-gemm` | G4 source RC | Native Blackwell NVFP4 W4A16 GEMM package passes 9/9 strict source checks on RTX 5090 across variants 0/1/2; benchmark rows report schedule-specific latency | HF Jobs artifact build/upload, installed-artifact validation, stronger library/internal low-bit comparison for headline claims |
 
 ## V1 Batch Blocks
 
@@ -38,6 +40,7 @@ The first public version has four equal blocks:
 | VLA/video post-processing | `flashrt-vla-video` | Q/K RMSNorm+RoPE/cache and packed-QKV split+norm+RoPE |
 | Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | NVFP4 scale layout helper plus at least one validated small-M/decode W4A4 path |
 | Fused quantization | `flashrt-fused-quant` | SiLU/gate or norm/residual low-bit quantization with reference tests and bandwidth benchmark |
+| Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP4/SFA producers, FP4-to-FP4 combiners, and W4A16 BF16-output GEMM for continuous low-bit model islands |
 
 ## V1 Batch Release Criteria
 

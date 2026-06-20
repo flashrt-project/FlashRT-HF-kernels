@@ -125,6 +125,10 @@ demos:
   shapes.
 - `fp8-gemm/benchmarks`: native Blackwell FP8 decode GEMV and small-M GEMM
   rows for low-latency `Linear` replacements.
+- `fp4-fused-ops/benchmarks`: native Blackwell FP16-to-NVFP4 producer and
+  FP4-to-FP4 combiner rows for keeping low-bit runtime islands continuous.
+- `fp4-gemm/benchmarks`: native Blackwell NVFP4 W4A16 GEMM rows with BF16
+  output and schedule-specific validation.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
   preallocated buffers and CUDA Graph replay for PI0.5/GROOT-shaped FFN chains.
 - `demos/runtime-demo`: multi-package PI0.5-shaped runtime prototype using
@@ -308,6 +312,8 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `diffusion-step-ops` | Diffusers package | Scheduler, CFG, first-frame forcing, and decode-postprocess helpers for diffusion/video runtime glue. |
 | `turboquant-kv` | Transformers package | KV unpack/combine helpers for TurboQuant-style serving and cache-compression demos. |
 | `world-model-conv` | Diffusers package | Blackwell FP8 3D causal conv primitive for video/world-model/VAE-style blocks. |
+| `fp4-fused-ops` | Native FP4 package | FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels for continuous low-bit transformer/diffuser paths. |
+| `fp4-gemm` | Native FP4 package | NVFP4 W4A16 GEMM with BF16 output for Blackwell low-bit linear layers. |
 
 ## Repository Status
 

@@ -41,6 +41,8 @@ Published v1 packages:
 | `flashrt/flashrt-nvfp4` | Blackwell NVFP4 scale-factor layout helpers. | You need CUTLASS Sm1xx-compatible NVFP4 swizzled scale-factor buffers. |
 | `flashrt/flashrt-smallm-gemm` | Shape-specialized SM120 NVFP4 W4A4 decode matvec. | You need a low-batch/decode M=1 W4A4 matvec with BF16 output on supported Blackwell shapes. |
 | `flashrt/flashrt-fused-quant` | Fused activation plus NVFP4 quantization. | You need memory-bound `SiLU(gate) * up` activation and NVFP4 swizzled quantization in one call. |
+| `flashrt/fp4-fused-ops` | Native Blackwell FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels. | You need residual/RMSNorm or SiLU-product activations to stay in packed FP4/SFA form for adjacent low-bit GEMM blocks. |
+| `flashrt/fp4-gemm` | Native Blackwell NVFP4 W4A16 GEMM with BF16 output. | You already have packed FP4 activations/weights plus SFA/SFB buffers and want a low-bit `Linear` replacement. |
 
 Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 
@@ -224,6 +226,30 @@ ops = get_kernel("flashrt/flashrt-nvfp4", version=1, trust_remote_code=True)
 
 swizzled = ops.nvfp4_sf_linear_to_swizzled(linear_scale_bytes)
 ```
+
+### FP4 Producer And W4A16 GEMM
+
+```python
+from kernels import get_kernel
+import torch
+
+producer = get_kernel("flashrt/fp4-fused-ops", version=1, trust_remote_code=True)
+gemm = get_kernel("flashrt/fp4-gemm", version=1, trust_remote_code=True)
+
+x = torch.randn((32, 256), device="cuda", dtype=torch.float16)
+w = torch.randn((512, 256), device="cuda", dtype=torch.float16)
+
+a_packed, sfa = gemm.quantize_fp4_sfa_fp16(x, is_sfb=False)
+b_packed, sfb = gemm.quantize_fp4_sfa_fp16(w, is_sfb=True)
+y = gemm.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb)
+
+merged = torch.randn((32, 512), device="cuda", dtype=torch.float16)
+act_packed, act_sfa = producer.silu_mul_fp4_sfa_v2_fp16(merged)
+```
+
+The producer package is meant to keep adjacent model islands in packed
+FP4/SFA form. The dequantization helpers are for validation and debugging, not
+for the hot path.
 
 ### Fused SiLU Product Plus NVFP4 Quantization
 

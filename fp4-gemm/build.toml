@@ -1,0 +1,33 @@
+[general]
+name = "fp4-gemm"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/fp4-gemm"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.fp4_gemm]
+backend = "cuda"
+depends = ["torch", "cutlass_4_0"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a"]
+src = [
+  "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cu",
+  "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cuh",
+  "csrc/quantize/quantize_fp4_sfa.cu",
+  "csrc/quantize/quantize_fp4_sfa.cuh",
+  "csrc/dequantize_fp4_sfa.cu",
+  "csrc/dequantize_fp4_sfa.cuh",
+]

@@ -96,6 +96,28 @@ those package matrices refer to.
 - Residual/RMSNorm variants need aliasing correctness and separate unfused
   launch-chain baselines before headline claims.
 
+### `fp4-fused-ops`
+
+- FP4 producer rows must report the dequantized FP4/SFA error envelope against
+  the FP16 math reference. Nonzero error is expected because the output is
+  quantized.
+- v2 producer rows may compare against v1 where v1 supports the shape, but byte
+  identity is not required; use dequantized value parity plus residual aliasing
+  correctness.
+- Rows with no meaningful fused public baseline should report latency and
+  explain that the kernel is a pipeline-continuity primitive.
+
+### `fp4-gemm`
+
+- The correctness reference must dequantize the exact FP4/SFA/SFB tensors
+  consumed by the kernel, then run PyTorch GEMM on those dequantized tensors.
+- Report each CUTLASS schedule variant separately. Do not imply that the widen
+  schedule is optimal for small shapes.
+- CUTLASS/cuBLASLt or FlashRT internal low-bit comparison is required before
+  making a broad low-bit GEMM headline claim.
+- FP4out GEMM variants remain internal until every public shape passes
+  `can_implement`, correctness, and benchmark gates.
+
 ## Required Metadata
 
 Every public `RESULTS.md` table must state:

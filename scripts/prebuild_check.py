@@ -37,6 +37,8 @@ V2_CANDIDATE_PACKAGES = [
     "turboquant-kv",
     "linear-attention-primitives",
     "world-model-conv",
+    "fp4-fused-ops",
+    "fp4-gemm",
 ]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",

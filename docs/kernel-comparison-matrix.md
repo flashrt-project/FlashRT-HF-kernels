@@ -172,6 +172,57 @@ Good public story:
 - This is a memory-bandwidth and launch-count package.
 - Report latency and GB/s together; speedup without bandwidth is not enough.
 
+### `fp4-fused-ops`
+
+Primary kernels:
+
+- `rms_norm_fp4_sfa_fp16`
+- `residual_add_rms_norm_fp4_sfa_fp16`
+- `residual_add_rms_norm_fp4_sfa_v2_fp16`
+- `residual_add_rms_norm_mul_fp4_sfa_fp16`
+- `silu_mul_fp4_sfa_v2_fp16`
+- `silu_mul_two_fp4_to_fp4`
+- `silu_mul_two_mul_fp4_to_fp4`
+
+Required comparisons:
+
+| Scope | Baselines | Headline gate |
+| --- | --- | --- |
+| FP16-to-FP4 producers | FP16 math reference plus dequantized FP4/SFA output envelope | Correctness includes residual aliasing, dtype, p99 error, cosine, and explicit unsupported-shape rejection |
+| v2 producer fast paths | v1 dequantized parity where v1 supports the shape | v2 is faster or equal on the published shape family |
+| FP4-to-FP4 combiners | Dequantized FP4 reference and producer latency | Report as pipeline-continuity kernels unless a strong fused baseline exists |
+
+Good public story:
+
+- This package is not a standalone giant-speedup package. Its role is keeping
+  FP4 runtime islands continuous by removing PyTorch elementwise breaks between
+  low-bit GEMMs.
+- Dequantization helpers are validation/debug APIs, not hot-path APIs.
+
+### `fp4-gemm`
+
+Primary kernels:
+
+- `quantize_fp4_sfa_fp16`
+- `dequantize_fp4_sfa_fp16`
+- `fp4_w4a16_linear_bf16`
+
+Required comparisons:
+
+| Scope | Baselines | Headline gate |
+| --- | --- | --- |
+| W4A16 GEMM | PyTorch GEMM over the same dequantized FP4/SFA/SFB inputs, CUTLASS/cuBLASLt or FlashRT internal path when available | Kernel output must match the dequantized-input reference; variants are reported separately |
+| FP4 producer helpers | Deterministic dequantized reference | Treated as validation/setup helpers unless included in an explicit fused model island |
+| SM120 hardware scope | RTX 5090 source validation first, then Hub artifact validation and other Blackwell hardware | Keep CUDA 12.8+ Blackwell `sm_120a` label until broader source paths exist |
+
+Good public story:
+
+- This package is the native FP4 linear building block for transformer and
+  diffuser demos that already keep activations and weights in packed FP4/SFA
+  form.
+- FP4-output GEMM variants stay internal until `can_implement` and public
+  shape/tile validation are clean.
+
 ## Minimum Public Table Columns
 
 Every public `RESULTS.md` table should include:

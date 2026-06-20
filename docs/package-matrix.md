@@ -9,6 +9,8 @@
 | `flashrt-nvfp4` | `nvfp4_sf_linear_to_swizzled`, `nvfp4_sf_swizzled_bytes`; planned `nvfp4_linear_bias_gelu_fp4out_sm120`, `nvfp4_linear_bias_gelu_bf16out_sm120`, `nvfp4_linear_streamk_bias_bf16out_sm120` | `csrc/quantize`, `csrc/gemm/fp4`, `flash_wm/csrc` | CUTLASS/cuBLAS where applicable, PyTorch dequant reference | Buildable NVFP4 layout helper; strong Blackwell low-bit showcase follows |
 | `flashrt-smallm-gemm` | `nvfp4_w4a4_decode_matvec_bf16out`, `nvfp4_w4a4_smallm_warpsplit_bf16out`, `tiny_fp8_smallm_gemm_bf16out` | `csrc/kernels`, `csrc/kernels/megakernel`, small-M matvec/matmul files | cuBLASLt, generic CUTLASS, PyTorch eager | Decode latency showcase for LLM/VLA serving |
 | `flashrt-fused-quant` | `silu_mul_quant_nvfp4_swizzled_bf16`, `silu_mul_merged_quant_nvfp4_swizzled_bf16`, `residual_rmsnorm_quant_nvfp4_swizzled_bf16`, `rmsnorm_quant_nvfp4_sfa_fp16` | `csrc/kernels`, `csrc/quantize`, `csrc/fused_fp4`, `flash_wm/csrc` | PyTorch eager reference | Shared utility package; useful when split from model-specific stacks |
+| `fp4-fused-ops` | `rms_norm_fp4_sfa_fp16`, `residual_add_rms_norm_fp4_sfa_v2_fp16`, `silu_mul_fp4_sfa_v2_fp16`, `silu_mul_two_fp4_to_fp4` | `csrc/fused_fp4`, `csrc/quantize` | FP16 math reference, v1/v2 dequantized parity, producer latency | Native Blackwell FP4 producer/combiner package for continuous low-bit runtime paths |
+| `fp4-gemm` | `quantize_fp4_sfa_fp16`, `dequantize_fp4_sfa_fp16`, `fp4_w4a16_linear_bf16` | `csrc/gemm/fp4`, `csrc/quantize` | PyTorch GEMM over the same dequantized FP4/SFA/SFB inputs | Native Blackwell NVFP4 W4A16 linear package |
 
 ## V1 Batch Blocks
 
@@ -21,6 +23,7 @@ is not a priority order.
 | VLA/video post-processing | `flashrt-vla-video` | 19-40x local RTX 5090 evidence for fused QKV/norm/RoPE/cache paths |
 | Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | Layout helpers, fused low-bit GEMM epilogues, and small-M/decode kernels |
 | Fused quantization | `flashrt-fused-quant` | Activation, residual, norm, and low-bit quantization fusion |
+| Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP16-to-NVFP4 producers, FP4-to-FP4 combiners, and NVFP4 W4A16 GEMM |
 
 Do not run full builder packaging for one block while the other v1 blocks are
 still missing source-extension tests, benchmark grids, or examples. Full
@@ -70,5 +73,7 @@ Initial targets:
   runtime checks on more GPUs when available.
 - Blackwell NVFP4/FP4 kernels: label as SM120/SM120a until other architectures
   are implemented and measured.
+- Native FP4 producer/GEMM packages: label as CUDA 12.8+ Blackwell
+  `sm_120a` until non-Blackwell source paths are added and measured.
 - H100/SM90 paths: package separately or gate explicitly if the implementation
   differs from the SM120 path.
