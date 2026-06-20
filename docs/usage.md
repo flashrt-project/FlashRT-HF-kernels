@@ -43,6 +43,7 @@ Published v1 packages:
 | `flashrt/flashrt-fused-quant` | Fused activation plus NVFP4 quantization. | You need memory-bound `SiLU(gate) * up` activation and NVFP4 swizzled quantization in one call. |
 | `flashrt/fp4-fused-ops` | Native Blackwell FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels. | You need residual/RMSNorm or SiLU-product activations to stay in packed FP4/SFA form for adjacent low-bit GEMM blocks. |
 | `flashrt/fp4-gemm` | Native Blackwell NVFP4 W4A16 GEMM with BF16 output. | You already have packed FP4 activations/weights plus SFA/SFB buffers and want a low-bit `Linear` replacement. |
+| `flashrt/fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache. | You already write transformer K/V cache in FP8 and need direct decode/verify attention without re-quantizing BF16 K/V. |
 
 Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 
@@ -250,6 +251,26 @@ act_packed, act_sfa = producer.silu_mul_fp4_sfa_v2_fp16(merged)
 The producer package is meant to keep adjacent model islands in packed
 FP4/SFA form. The dequantization helpers are for validation and debugging, not
 for the hot path.
+
+### FP8 KV XQA Attention
+
+```python
+from kernels import get_kernel
+import torch
+
+attn = get_kernel("flashrt/fp8-kv-attention", version=1, trust_remote_code=True)
+
+q = torch.randn(1, 24, 256, device="cuda", dtype=torch.bfloat16)
+k_cache = torch.randn(8, 128, 4, 256, device="cuda", dtype=torch.bfloat16).to(torch.float8_e4m3fn)
+v_cache = torch.randn(8, 128, 4, 256, device="cuda", dtype=torch.bfloat16).to(torch.float8_e4m3fn)
+
+out = attn.xqa_bf16_fp8kv(q, k_cache, v_cache)
+```
+
+v1 exposes the production-validated fixed shape used by FlashRT Qwen3.6:
+BF16 Q/O, FP8 E4M3 K/V, `24` Q heads, `4` KV heads, head dim `256`, page
+size `128`, and `q_seq <= 32`. Static-buffer runtimes should pass explicit
+`page_table`, `seq_lens`, `mask`, `out`, `semaphores`, and `scratch` tensors.
 
 ### Fused SiLU Product Plus NVFP4 Quantization
 

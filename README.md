@@ -129,6 +129,8 @@ demos:
   FP4-to-FP4 combiner rows for keeping low-bit runtime islands continuous.
 - `fp4-gemm/benchmarks`: native Blackwell NVFP4 W4A16 GEMM rows with BF16
   output and schedule-specific validation.
+- `fp8-kv-attention/benchmarks`: native Blackwell XQA attention over FP8 E4M3
+  paged K/V cache for Qwen3.6-style BF16-query decode/verify shapes.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
   preallocated buffers and CUDA Graph replay for PI0.5/GROOT-shaped FFN chains.
 - `demos/runtime-demo`: multi-package PI0.5-shaped runtime prototype using

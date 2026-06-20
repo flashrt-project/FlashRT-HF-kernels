@@ -1,0 +1,39 @@
+[general]
+name = "fp8-kv-attention"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/fp8-kv-attention"
+
+[torch]
+include = ["csrc", "csrc/attention/flashinfer_xqa_src"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.fp8_kv_attention]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc", "csrc/attention/flashinfer_xqa_src"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0", "12.1"]
+src = [
+  "csrc/xqa_mha_configured.cu",
+  "csrc/xqa_config.cuh",
+  "csrc/xqa_bf16_fp8kv.cu",
+  "csrc/xqa_bf16_fp8kv.cuh",
+]
+cuda-flags = [
+  "--expt-relaxed-constexpr",
+  "--ftz=true",
+  "--prec-div=false",
+  "--prec-sqrt=false",
+  "-U__CUDA_NO_BFLOAT16_OPERATORS__",
+  "-U__CUDA_NO_BFLOAT162_OPERATORS__",
+]

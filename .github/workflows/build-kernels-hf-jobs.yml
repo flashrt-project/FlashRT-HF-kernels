@@ -26,6 +26,7 @@ on:
       - "fp8-gemm/**"
       - "fp4-fused-ops/**"
       - "fp4-gemm/**"
+      - "fp8-kv-attention/**"
   workflow_dispatch:
     inputs:
       package:
@@ -56,6 +57,7 @@ on:
           - fp8-gemm
           - fp4-fused-ops
           - fp4-gemm
+          - fp8-kv-attention
 
 permissions:
   contents: read
@@ -93,6 +95,7 @@ jobs:
           - fp8-gemm
           - fp4-fused-ops
           - fp4-gemm
+          - fp8-kv-attention
 
     steps:
       - uses: actions/checkout@v4

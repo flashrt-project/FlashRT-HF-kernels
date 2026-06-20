@@ -11,6 +11,7 @@
 | `flashrt-fused-quant` | `silu_mul_quant_nvfp4_swizzled_bf16`, `silu_mul_merged_quant_nvfp4_swizzled_bf16`, `residual_rmsnorm_quant_nvfp4_swizzled_bf16`, `rmsnorm_quant_nvfp4_sfa_fp16` | `csrc/kernels`, `csrc/quantize`, `csrc/fused_fp4`, `flash_wm/csrc` | PyTorch eager reference | Shared utility package; useful when split from model-specific stacks |
 | `fp4-fused-ops` | `rms_norm_fp4_sfa_fp16`, `residual_add_rms_norm_fp4_sfa_v2_fp16`, `silu_mul_fp4_sfa_v2_fp16`, `silu_mul_two_fp4_to_fp4` | `csrc/fused_fp4`, `csrc/quantize` | FP16 math reference, v1/v2 dequantized parity, producer latency | Native Blackwell FP4 producer/combiner package for continuous low-bit runtime paths |
 | `fp4-gemm` | `quantize_fp4_sfa_fp16`, `dequantize_fp4_sfa_fp16`, `fp4_w4a16_linear_bf16` | `csrc/gemm/fp4`, `csrc/quantize` | PyTorch GEMM over the same dequantized FP4/SFA/SFB inputs | Native Blackwell NVFP4 W4A16 linear package |
+| `fp8-kv-attention` | `xqa_bf16_fp8kv`, `causal_spec_mask`, `default_page_table`, `allocate_workspace` | `csrc/attention/flashinfer_xqa_src`, `csrc/kernels/qwen36_flashinfer_xqa.*` | PyTorch FP8-dequant attention reference with the same speculative mask | Direct BF16-Q + FP8-KV XQA package for Qwen3.6-style decode/verify |
 
 ## V1 Batch Blocks
 
@@ -24,6 +25,7 @@ is not a priority order.
 | Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | Layout helpers, fused low-bit GEMM epilogues, and small-M/decode kernels |
 | Fused quantization | `flashrt-fused-quant` | Activation, residual, norm, and low-bit quantization fusion |
 | Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP16-to-NVFP4 producers, FP4-to-FP4 combiners, and NVFP4 W4A16 GEMM |
+| FP8 KV attention | `fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache for long-context decode/verify |
 
 Do not run full builder packaging for one block while the other v1 blocks are
 still missing source-extension tests, benchmark grids, or examples. Full
@@ -75,5 +77,7 @@ Initial targets:
   are implemented and measured.
 - Native FP4 producer/GEMM packages: label as CUDA 12.8+ Blackwell
   `sm_120a` until non-Blackwell source paths are added and measured.
+- FP8 KV attention: label as CUDA 12.8+ Blackwell `sm_120`/`sm_121`
+  fixed-shape XQA until additional head shapes and hardware rows are validated.
 - H100/SM90 paths: package separately or gate explicitly if the implementation
   differs from the SM120 path.
