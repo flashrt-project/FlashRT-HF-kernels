@@ -80,8 +80,8 @@ Initial targets:
   are implemented and measured.
 - Native FP4 producer/GEMM packages: label as CUDA 12.8+ Blackwell
   `sm_120a` until non-Blackwell source paths are added and measured.
-- FP8 KV attention: v1 artifact target is CUDA 12.8+ Blackwell `sm_120a`
-  fixed-shape XQA. Add `sm_121` only after a matching artifact build and
-  runtime validation pass on that architecture.
+- FP8 KV attention: v1 artifact target is CUDA 12.8+ Blackwell
+  `sm_120/sm_121` fixed-shape XQA. Do not claim non-Blackwell architectures
+  until a matching artifact build and runtime validation pass exists.
 - H100/SM90 paths: package separately or gate explicitly if the implementation
   differs from the SM120 path.

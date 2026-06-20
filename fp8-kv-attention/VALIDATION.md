@@ -54,12 +54,12 @@ Rows:
 Command:
 
 ```bash
-DEBUG=0 MAX_JOBS=8 NVCC_THREADS=2 TORCH_CUDA_ARCH_LIST=12.0a \
+DEBUG=0 MAX_JOBS=8 NVCC_THREADS=2 TORCH_CUDA_ARCH_LIST=12.0 \
   python -m pip wheel . -w /tmp/fp8kv-wheel -v --no-build-isolation
 ```
 
 Result:
 
-- Generated CMake project configured with CUDA 13.0 and `sm_120a`.
+- Generated CMake project configured with CUDA 13.0 and `sm_120`.
 - Built `_fp8_kv_attention_cuda_*.abi3.so` successfully.
 - Produced local wheel `fp8_kv_attention-0.1.0-cp313-cp313-linux_x86_64.whl`.

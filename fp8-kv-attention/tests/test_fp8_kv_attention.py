@@ -118,7 +118,7 @@ def _current_arch_list() -> str:
     if major == 12 and minor == 1:
         return "12.1"
     if major >= 12:
-        return "12.0a"
+        return "12.0"
     return f"{major}.{minor}"
 
 
