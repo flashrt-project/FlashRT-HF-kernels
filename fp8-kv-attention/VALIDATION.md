@@ -37,7 +37,7 @@ Command:
 python fp8-kv-attention/tests/test_fp8_kv_attention.py \
   --backend source \
   --mode full \
-  --json-out internal-tests/fp8-kv-attention-source-full.json
+  --json-out internal-tests/fp8-kv-attention-source-full-refresh.json
 ```
 
 Rows:
