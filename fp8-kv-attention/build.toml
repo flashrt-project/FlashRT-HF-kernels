@@ -22,7 +22,7 @@ backend = "cuda"
 depends = ["torch"]
 include = ["csrc", "csrc/attention/flashinfer_xqa_src"]
 cuda-minver = "12.8"
-cuda-capabilities = ["12.0", "12.1"]
+cuda-capabilities = ["12.0a"]
 src = [
   "csrc/xqa_mha_configured.cu",
   "csrc/xqa_config.cuh",
