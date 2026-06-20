@@ -236,6 +236,17 @@ Second-batch VLA/runtime packages target the model-demo hot path:
   residual/AdaRMSNorm/static-FP8 output for DiT/VLA/world-model blocks.
 - `flashrt-spatiotemporal-layout`: NCDHW/BLC layout, temporal unshuffle,
   channel-bias, and short-cache helpers for VLA/video/world-model pipelines.
+- `vl-transformer-primitives`: Q/K norm + RoPE + KV-write staging and vision
+  token pooling primitives for VLM transformer blocks.
+- `linear-attention-primitives`: small-M BF16 linear, QKV broadcast split,
+  partial RoPE, and gated-delta preparation primitives for linear-attention
+  transformer blocks.
+- `diffusion-step-ops`: diffusion scheduler, CFG, first-frame forcing, and
+  decode-postprocess CUDA helpers for diffusion/video runtime glue.
+- `turboquant-kv`: TurboQuant-style KV unpack/combine helpers for
+  serving/cache-compression demos.
+- `world-model-conv`: Blackwell FP8 3D causal conv primitive for
+  video/world-model/VAE-style blocks.
 
 ```text
 FP8 input -> FP8 gate/up GEMM -> SiLU(gate) * up -> FP8 requant -> FP8 down GEMM -> BF16 output
@@ -276,6 +287,12 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `flashrt-nvfp4` | V1 block | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
 | `flashrt-smallm-gemm` | V1 block | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |
 | `flashrt-fused-quant` | V1 block | Memory-bound fusion kernels: norm, residual, activation, and quantization. |
+| `MiniMaxAI-msa-blackwell` | Partner extension | MiniMax MSA sparse attention extension for Blackwell hardware. |
+| `vl-transformer-primitives` | Transformers/diffusers package | VLM Q/K norm + RoPE + KV-write staging and vision token pooling primitives. |
+| `linear-attention-primitives` | Transformers package | Small-M BF16 linear, QKV broadcast split, partial RoPE, and gated-delta preparation primitives. |
+| `diffusion-step-ops` | Diffusers package | Scheduler, CFG, first-frame forcing, and decode-postprocess helpers for diffusion/video runtime glue. |
+| `turboquant-kv` | Transformers package | KV unpack/combine helpers for TurboQuant-style serving and cache-compression demos. |
+| `world-model-conv` | Diffusers package | Blackwell FP8 3D causal conv primitive for video/world-model/VAE-style blocks. |
 
 ## Repository Status
 

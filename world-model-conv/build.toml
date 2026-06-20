@@ -1,0 +1,29 @@
+[general]
+name = "world-model-conv"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/world-model-conv"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.world_model_conv]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a"]
+src = [
+  "csrc/fp8_conv3d_sm120_v18.cu",
+  "csrc/world_model_conv.cuh",
+]

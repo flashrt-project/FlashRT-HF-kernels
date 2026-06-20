@@ -33,6 +33,10 @@ V2_CANDIDATE_PACKAGES = [
     "flashrt-spatiotemporal-layout",
     "MiniMaxAI-msa-blackwell",
     "vl-transformer-primitives",
+    "diffusion-step-ops",
+    "turboquant-kv",
+    "linear-attention-primitives",
+    "world-model-conv",
 ]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",

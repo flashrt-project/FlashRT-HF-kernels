@@ -19,6 +19,10 @@ on:
       - "flashrt-vla-video/**"
       - "MiniMaxAI-msa-blackwell/**"
       - "vl-transformer-primitives/**"
+      - "diffusion-step-ops/**"
+      - "turboquant-kv/**"
+      - "linear-attention-primitives/**"
+      - "world-model-conv/**"
   workflow_dispatch:
     inputs:
       package:
@@ -42,6 +46,10 @@ on:
           - flashrt-vla-video
           - MiniMaxAI-msa-blackwell
           - vl-transformer-primitives
+          - diffusion-step-ops
+          - turboquant-kv
+          - linear-attention-primitives
+          - world-model-conv
 
 permissions:
   contents: read
@@ -72,6 +80,10 @@ jobs:
           - flashrt-vla-video
           - MiniMaxAI-msa-blackwell
           - vl-transformer-primitives
+          - diffusion-step-ops
+          - turboquant-kv
+          - linear-attention-primitives
+          - world-model-conv
 
     steps:
       - uses: actions/checkout@v4

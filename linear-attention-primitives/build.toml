@@ -1,0 +1,28 @@
+[general]
+name = "linear-attention-primitives"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/linear-attention-primitives"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.linear_attention_primitives]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+src = [
+  "csrc/linear_attention_primitives.cu",
+  "csrc/linear_attention_primitives.cuh",
+]
