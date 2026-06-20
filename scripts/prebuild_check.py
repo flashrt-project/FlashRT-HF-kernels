@@ -32,6 +32,7 @@ V2_CANDIDATE_PACKAGES = [
     "flashrt-adaptive-norms",
     "flashrt-spatiotemporal-layout",
     "MiniMaxAI-msa-blackwell",
+    "vl-transformer-primitives",
 ]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",

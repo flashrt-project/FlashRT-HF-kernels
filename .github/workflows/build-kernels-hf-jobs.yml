@@ -18,6 +18,7 @@ on:
       - "flashrt-smallm-gemm/**"
       - "flashrt-vla-video/**"
       - "MiniMaxAI-msa-blackwell/**"
+      - "vl-transformer-primitives/**"
   workflow_dispatch:
     inputs:
       package:
@@ -40,6 +41,7 @@ on:
           - flashrt-smallm-gemm
           - flashrt-vla-video
           - MiniMaxAI-msa-blackwell
+          - vl-transformer-primitives
 
 permissions:
   contents: read
@@ -69,6 +71,7 @@ jobs:
           - flashrt-smallm-gemm
           - flashrt-vla-video
           - MiniMaxAI-msa-blackwell
+          - vl-transformer-primitives
 
     steps:
       - uses: actions/checkout@v4
