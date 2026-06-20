@@ -5,7 +5,7 @@ from kernels import get_kernel
 
 
 def main() -> None:
-    ops = get_kernel("flashrt/gated-delta-attention", version=1, trust_remote_code=True)
+    ops = get_kernel("flashrt/gated-delta-attention", version=2, trust_remote_code=True)
     b, h, d = 1, 48, 128
     q = torch.randn(b, h, d, device="cuda", dtype=torch.bfloat16)
     k = torch.randn_like(q)

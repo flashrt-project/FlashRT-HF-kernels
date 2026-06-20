@@ -1,7 +1,7 @@
 [general]
 name = "gated-delta-attention"
 license = "Apache-2.0"
-version = 1
+version = 2
 backends = ["cuda"]
 
 [general.cuda]

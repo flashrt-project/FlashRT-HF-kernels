@@ -57,7 +57,7 @@ Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 | `flashrt/flashrt-spatiotemporal-layout` | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers. | You need world-model/video layout glue to keep the model-demo hot path on CUDA. |
 | `flashrt/linear-attention-primitives` | Small-M BF16 linear, QKV broadcast split, partial RoPE, and gated-delta preparation helpers. | You are assembling a transformer linear-attention block and need graph-friendly staging ops. |
 | `flashrt/causal-conv1d-state` | BF16 causal Conv1D forward/update/chunk kernels with persistent state. | You need the Conv1D state path used before linear-attention recurrence, including Qwen3.6-style GQA split output. |
-| `flashrt/gated-delta-attention` | BF16 Gated DeltaNet recurrent/chunk state kernels. | You need the stateful linear-attention recurrence for decode, verify, or prefill chunks. |
+| `flashrt/gated-delta-attention` | BF16 Gated DeltaNet recurrent/chunk/WY state kernels. | You need the stateful linear-attention recurrence for decode, verify, or Qwen3.6-style prefill chunks. |
 
 Package-specific hardware claims should use the corresponding built-artifact
 and multi-hardware validation rows. The PI0.5 runtime demo composes these
@@ -92,7 +92,7 @@ from kernels import get_kernel
 import torch
 
 conv = get_kernel("flashrt/causal-conv1d-state", version=1, trust_remote_code=True)
-gdn = get_kernel("flashrt/gated-delta-attention", version=1, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=2, trust_remote_code=True)
 
 B, S, C, K = 1, 8, 10240, 4
 x = torch.randn(B, S, C, device="cuda", dtype=torch.bfloat16)
@@ -104,16 +104,24 @@ q16, k16, v48 = conv.causal_conv1d_update_chunk_parallel_gqa_bf16(
     x, w, conv_state, bias
 )
 
-# Broadcast q/k outside this snippet or use `linear-attention-primitives`
-# helpers, then run the recurrent/chunk Gated DeltaNet state kernel.
+# Run the Qwen3.6-style Gated DeltaNet chunk state kernel.
+q = q16.repeat_interleave(3, dim=1).contiguous()
+k = k16.repeat_interleave(3, dim=1).contiguous()
 H, D = 48, 128
-q = torch.randn(S, H, D, device="cuda", dtype=torch.bfloat16)
-k = torch.randn_like(q)
 v = v48.reshape(S, H, D).contiguous()
 g = torch.randn(S, H, device="cuda", dtype=torch.bfloat16)
 beta = torch.sigmoid(torch.randn(S, H, device="cuda")).to(torch.bfloat16)
 state = torch.zeros(H, D, D, device="cuda", dtype=torch.bfloat16)
 out = gdn.gated_delta_chunk_bf16(q, k, v, g, beta, state)
+
+# For long-prefill WY blocks, keep q/k unbroadcasted and use the v2 WY API.
+state_wy = torch.zeros(H, D, D, device="cuda", dtype=torch.bfloat16)
+q16_l2, k16_l2, _, _, g_cumsum = gdn.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
+A = gdn.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum)
+Ai = gdn.gdn_wy_solve_tril_b64_f32(A, S)
+w48, u48 = gdn.gdn_wy_recompute_wu_b64_bf16(k16_l2, v, beta, g_cumsum, Ai)
+h0, v_new = gdn.gdn_wy_chunk_h_b64_bf16(k16_l2, u48, w48, g_cumsum, state_wy)
+out_wy = gdn.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum)
 ```
 
 For hot paths, preallocate all outputs and state buffers and pass them through

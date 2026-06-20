@@ -34,10 +34,15 @@ SHAPES = {
     "chunk_s4_h4": ("chunk", 1, 4, 4),
     "chunk_smem_s4_h4": ("chunk_smem", 1, 4, 4),
     "recurrent_h48": ("recurrent", 1, 1, 48),
+    "split_s4": ("split", 1, 4, 48),
+    "gating_s4": ("gating", 1, 4, 48),
+    "chunk_from_conv_s4": ("chunk_from_conv", 1, 4, 48),
+    "wy_pipeline_s4": ("wy_pipeline", 1, 4, 48),
+    "wy_pipeline_s65": ("wy_pipeline", 1, 65, 48),
 }
 MODES = {
     "smoke": ["recurrent_h4"],
-    "headline": ["recurrent_h48", "chunk_s4_h4"],
+    "headline": ["recurrent_h48", "chunk_s4_h4", "wy_pipeline_s65"],
     "full": list(SHAPES.keys()),
 }
 
@@ -84,6 +89,66 @@ class SourceOps:
             self._ops.gated_delta_chunk_bf16(q, k, v, g, beta, state, out, use_qk_l2norm)
         return out
 
+    def split_broadcast(self, conv_out):
+        q = torch.empty((conv_out.shape[0], 48, D), device=conv_out.device, dtype=conv_out.dtype)
+        k = torch.empty_like(q)
+        v = torch.empty_like(q)
+        self._ops.lin_split_qkv_broadcast_bf16(conv_out, q, k, v)
+        return q, k, v
+
+    def split_gqa(self, conv_out):
+        q = torch.empty((conv_out.shape[0], 16, D), device=conv_out.device, dtype=conv_out.dtype)
+        k = torch.empty_like(q)
+        v = torch.empty((conv_out.shape[0], 48, D), device=conv_out.device, dtype=conv_out.dtype)
+        self._ops.lin_split_qkv_gqa_bf16(conv_out, q, k, v)
+        return q, k, v
+
+    def split_q_gate(self, q_proj):
+        q_pre = torch.empty((q_proj.shape[0], 24, 256), device=q_proj.device, dtype=q_proj.dtype)
+        gate = torch.empty((q_proj.shape[0], 24 * 256), device=q_proj.device, dtype=q_proj.dtype)
+        self._ops.split_q_gate_bf16(q_proj, q_pre, gate)
+        return q_pre, gate
+
+    def gating(self, a, b, neg, dt):
+        g = torch.empty_like(a)
+        beta = torch.empty_like(a)
+        self._ops.gdn_gating_bf16(a, b, neg, dt, g, beta)
+        return g, beta
+
+    def gating_strided(self, a, b, neg, dt, rows, a_stride, b_stride):
+        g = torch.empty((rows, 48), device=a.device, dtype=a.dtype)
+        beta = torch.empty_like(g)
+        self._ops.gdn_gating_strided_bf16(a, b, neg, dt, g, beta, a_stride, b_stride)
+        return g, beta
+
+    def chunk_from_conv(self, conv_out, a, b, neg, dt, state, use_qk_l2norm=True):
+        out = torch.empty((conv_out.shape[0], 48, D), device=conv_out.device, dtype=conv_out.dtype)
+        self._ops.gdn_chunk_from_conv_smem_bf16(conv_out, a, b, neg, dt, state, out, use_qk_l2norm)
+        return out
+
+    def wy_pipeline(self, q16, k16, v48, g, beta, state):
+        S = q16.shape[0]
+        chunks = (S + 63) // 64
+        q16_l2 = torch.empty_like(q16)
+        k16_l2 = torch.empty_like(k16)
+        q_pack = torch.empty((chunks, 48, 64, D), device=q16.device, dtype=q16.dtype)
+        k_pack = torch.empty((chunks, 16, 64, D), device=q16.device, dtype=q16.dtype)
+        g_cumsum = torch.empty_like(g)
+        A = torch.empty((chunks, 48, 64, 64), device=q16.device, dtype=torch.float32)
+        Ai = torch.empty_like(A)
+        w = torch.empty_like(v48)
+        u = torch.empty_like(v48)
+        h0 = torch.empty((chunks, 48, D, D), device=q16.device, dtype=q16.dtype)
+        v_new = torch.empty_like(v48)
+        out = torch.empty_like(v48)
+        self._ops.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g, q16_l2, k16_l2, q_pack, k_pack, g_cumsum)
+        self._ops.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum, A)
+        self._ops.gdn_wy_solve_tril_b64_f32(A, Ai, S)
+        self._ops.gdn_wy_recompute_wu_b64_bf16(k16_l2, v48, beta, g_cumsum, Ai, w, u)
+        self._ops.gdn_wy_chunk_h_b64_bf16(k16_l2, u, w, g_cumsum, state, h0, v_new)
+        self._ops.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum, out)
+        return out
+
 
 class InstalledOps:
     def __init__(self, mod) -> None:
@@ -112,6 +177,36 @@ class InstalledOps:
         return self._mod.gated_delta_chunk_bf16(
             q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm
         )
+
+    def split_broadcast(self, conv_out):
+        return self._mod.lin_split_qkv_broadcast_bf16(conv_out)
+
+    def split_gqa(self, conv_out):
+        return self._mod.lin_split_qkv_gqa_bf16(conv_out)
+
+    def split_q_gate(self, q_proj):
+        return self._mod.split_q_gate_bf16(q_proj)
+
+    def gating(self, a, b, neg, dt):
+        return self._mod.gdn_gating_bf16(a, b, neg, dt)
+
+    def gating_strided(self, a, b, neg, dt, rows, a_stride, b_stride):
+        return self._mod.gdn_gating_strided_bf16(
+            a, b, neg, dt, rows=rows, a_stride=a_stride, b_stride=b_stride
+        )
+
+    def chunk_from_conv(self, conv_out, a, b, neg, dt, state, use_qk_l2norm=True):
+        return self._mod.gdn_chunk_from_conv_smem_bf16(
+            conv_out, a, b, neg, dt, state, use_qk_l2norm=use_qk_l2norm
+        )
+
+    def wy_pipeline(self, q16, k16, v48, g, beta, state):
+        q16_l2, k16_l2, _, _, g_cumsum = self._mod.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
+        A = self._mod.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum)
+        Ai = self._mod.gdn_wy_solve_tril_b64_f32(A, q16.shape[0])
+        w, u = self._mod.gdn_wy_recompute_wu_b64_bf16(k16_l2, v48, beta, g_cumsum, Ai)
+        h0, v_new = self._mod.gdn_wy_chunk_h_b64_bf16(k16_l2, u, w, g_cumsum, state)
+        return self._mod.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum)
 
 
 def _arch_list() -> str:
@@ -207,6 +302,45 @@ def ref_chunk(q, k, v, g, beta, state, *, use_qk_l2norm=True):
     return torch.stack(outs, dim=0), st.squeeze(0)
 
 
+def make_conv_inputs(S: int, seed: int):
+    gen = torch.Generator(device="cuda")
+    gen.manual_seed(seed)
+    conv_out = (torch.randn((S, 10240), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    a = (torch.randn((S, 48), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    b = (torch.randn((S, 48), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    neg = (torch.randn((48,), device="cuda", generator=gen).abs() * -0.02).float()
+    dt = (torch.randn((48,), device="cuda", generator=gen) * 0.02).float()
+    state = (torch.randn((48, D, D), device="cuda", generator=gen) * 0.02).to(torch.bfloat16)
+    return conv_out, a, b, neg, dt, state
+
+
+def ref_split_broadcast(conv_out):
+    S = conv_out.shape[0]
+    x = conv_out.view(S, 10240)
+    q16 = x[:, :2048].view(S, 16, D)
+    k16 = x[:, 2048:4096].view(S, 16, D)
+    v48 = x[:, 4096:].view(S, 48, D)
+    q48 = q16.repeat_interleave(3, dim=1).contiguous()
+    k48 = k16.repeat_interleave(3, dim=1).contiguous()
+    return q48, k48, v48.contiguous()
+
+
+def ref_split_gqa(conv_out):
+    S = conv_out.shape[0]
+    x = conv_out.view(S, 10240)
+    return (
+        x[:, :2048].view(S, 16, D).contiguous(),
+        x[:, 2048:4096].view(S, 16, D).contiguous(),
+        x[:, 4096:].view(S, 48, D).contiguous(),
+    )
+
+
+def ref_gating(a, b, neg, dt):
+    g = (neg[None, :] * torch.log1p(torch.exp(a.float() + dt[None, :]))).to(torch.bfloat16)
+    beta = torch.sigmoid(b.float()).to(torch.bfloat16)
+    return g, beta
+
+
 def metrics(got: torch.Tensor, ref: torch.Tensor) -> tuple[float, float, float, float]:
     diff = (got.float() - ref.float()).abs()
     return (
@@ -236,7 +370,7 @@ def run_case(ops, name: str) -> Row:
         state_max, _, _, _ = metrics(state_work, ref_state)
         if state_max > (0.00390625 if kind != "f32state" else 0.0005):
             raise AssertionError(f"{name} state mismatch: {state_max}")
-    else:
+    elif kind in {"chunk", "chunk_smem"}:
         gen = torch.Generator(device="cuda")
         gen.manual_seed(9000 + S + H)
         q = (torch.randn((S, H, D), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
@@ -251,6 +385,64 @@ def run_case(ops, name: str) -> Row:
         torch.cuda.synchronize()
         state_max, _, _, _ = metrics(state_work, ref_state)
         if state_max > 0.00390625:
+            raise AssertionError(f"{name} state mismatch: {state_max}")
+    if kind == "split":
+        conv_out, a, b, neg, dt, state = make_conv_inputs(S, 10000 + S)
+        q48, k48, v48 = ops.split_broadcast(conv_out)
+        q16, k16, v48_gqa = ops.split_gqa(conv_out)
+        q48_ref, k48_ref, v48_ref = ref_split_broadcast(conv_out)
+        q16_ref, k16_ref, v48_gqa_ref = ref_split_gqa(conv_out)
+        gen = torch.Generator(device="cuda")
+        gen.manual_seed(10040 + S)
+        q_proj = (torch.randn((S, 24, 512), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+        q_pre, gate = ops.split_q_gate(q_proj)
+        got = torch.cat([
+            q48.flatten(), k48.flatten(), v48.flatten(),
+            q16.flatten(), k16.flatten(), v48_gqa.flatten(),
+            q_pre.flatten(), gate.flatten(),
+        ])
+        ref = torch.cat([
+            q48_ref.flatten(), k48_ref.flatten(), v48_ref.flatten(),
+            q16_ref.flatten(), k16_ref.flatten(), v48_gqa_ref.flatten(),
+            q_proj[:, :, :256].contiguous().flatten(),
+            q_proj[:, :, 256:].contiguous().view(S, 24 * 256).flatten(),
+        ])
+        max_abs, mean_abs, p99_abs, cos = metrics(got, ref)
+        return Row(name, kind, B, S, H, max_abs, mean_abs, p99_abs, cos, max_abs == 0.0)
+    if kind == "gating":
+        conv_out, a, b, neg, dt, state = make_conv_inputs(S, 11000 + S)
+        g, beta = ops.gating(a, b, neg, dt)
+        g_ref, beta_ref = ref_gating(a, b, neg, dt)
+        a_pad = torch.empty((S, 64), device="cuda", dtype=torch.bfloat16)
+        b_pad = torch.empty_like(a_pad)
+        a_pad[:, :48] = a
+        b_pad[:, :48] = b
+        gs, betas = ops.gating_strided(a_pad.flatten(), b_pad.flatten(), neg, dt, S, 64, 64)
+        got = torch.cat([g.flatten(), beta.flatten(), gs.flatten(), betas.flatten()])
+        ref = torch.cat([g_ref.flatten(), beta_ref.flatten(), g_ref.flatten(), beta_ref.flatten()])
+        max_abs, mean_abs, p99_abs, cos = metrics(got, ref)
+        return Row(name, kind, B, S, H, max_abs, mean_abs, p99_abs, cos, max_abs <= 0.001953125 and cos >= 0.9999)
+    if kind == "chunk_from_conv":
+        conv_out, a, b, neg, dt, state = make_conv_inputs(S, 12000 + S)
+        state_work = state.clone()
+        got = ops.chunk_from_conv(conv_out, a, b, neg, dt, state_work)
+        q48, k48, v48 = ref_split_broadcast(conv_out)
+        g, beta = ref_gating(a, b, neg, dt)
+        ref, ref_state = ref_chunk(q48, k48, v48, g, beta, state)
+        state_max, _, _, _ = metrics(state_work, ref_state)
+        if state_max > 0.00390625:
+            raise AssertionError(f"{name} state mismatch: {state_max}")
+    if kind == "wy_pipeline":
+        conv_out, a, b, neg, dt, state = make_conv_inputs(S, 13000 + S)
+        q16, k16, v48 = ref_split_gqa(conv_out)
+        g, beta = ref_gating(a, b, neg, dt)
+        state_work = state.clone()
+        got = ops.wy_pipeline(q16, k16, v48, g, beta, state_work)
+        q48 = q16.repeat_interleave(3, dim=1).contiguous()
+        k48 = k16.repeat_interleave(3, dim=1).contiguous()
+        ref, ref_state = ref_chunk(q48, k48, v48, g, beta, state)
+        state_max, _, _, _ = metrics(state_work, ref_state)
+        if state_max > 0.015625:
             raise AssertionError(f"{name} state mismatch: {state_max}")
     max_abs, mean_abs, p99_abs, cos = metrics(got, ref)
     passed = max_abs <= 0.015625 and mean_abs <= 0.0015 and cos >= 0.999

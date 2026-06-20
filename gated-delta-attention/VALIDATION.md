@@ -14,7 +14,9 @@ Correctness metrics:
 - cosine similarity
 
 The reference uses the same recurrent Gated DeltaNet math with FP32 internal
-accumulation and BF16 state/output casts.
+accumulation and BF16 state/output casts. Split/gating helpers are checked
+against exact PyTorch tensor formulas. `gdn_chunk_from_conv_smem_bf16` and the
+WY pipeline are checked end-to-end against the same recurrent reference.
 
 ## RTX 5090 Source Results
 
@@ -24,7 +26,7 @@ Command:
 python gated-delta-attention/tests/test_gated_delta_attention.py \
   --backend source \
   --mode full \
-  --json-out internal-tests/gated-delta-attention-source-full.json
+  --json-out internal-tests/gated-delta-attention-v2-source-full.json
 ```
 
 Rows:
@@ -37,6 +39,11 @@ Rows:
 | chunk_s4_h4 | chunk | 1 | 4 | 4 | 0.000000 | 0.000000 | 0.000000 | 0.99999994 | PASS |
 | chunk_smem_s4_h4 | chunk_smem | 1 | 4 | 4 | 0.000000 | 0.000000 | 0.000000 | 0.99999994 | PASS |
 | recurrent_h48 | recurrent | 1 | 1 | 48 | 0.000002 | 0.000000 | 0.000000 | 1.00000000 | PASS |
+| split_s4 | split | 1 | 4 | 48 | 0.000000 | 0.000000 | 0.000000 | 1.00000000 | PASS |
+| gating_s4 | gating | 1 | 4 | 48 | 0.000000 | 0.000000 | 0.000000 | 1.00000000 | PASS |
+| chunk_from_conv_s4 | chunk_from_conv | 1 | 4 | 48 | 0.000015 | 0.000000 | 0.000000 | 1.00000000 | PASS |
+| wy_pipeline_s4 | wy_pipeline | 1 | 4 | 48 | 0.000031 | 0.000004 | 0.000015 | 0.99999440 | PASS |
+| wy_pipeline_s65 | wy_pipeline | 1 | 65 | 48 | 0.000107 | 0.000009 | 0.000038 | 0.99996358 | PASS |
 
 ## Generated Artifact Smoke
 
@@ -53,4 +60,4 @@ python tests/test_gated_delta_attention.py \
   --json-out ../internal-tests/gated-delta-attention-installed-local-full.json
 ```
 
-Result: same 6/6 rows pass.
+Result: same full rows pass for the local generated artifact.

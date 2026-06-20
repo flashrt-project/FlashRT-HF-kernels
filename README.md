@@ -264,8 +264,8 @@ Second-batch VLA/runtime packages target the model-demo hot path:
   transformer blocks.
 - `causal-conv1d-state`: BF16 causal depthwise Conv1D forward/update/chunk
   kernels with persistent state, including the Qwen3.6-style GQA split path.
-- `gated-delta-attention`: BF16 Gated DeltaNet recurrent/chunk kernels for
-  stateful transformer linear-attention decode and prefill chunks.
+- `gated-delta-attention`: BF16 Gated DeltaNet recurrent/chunk/WY kernels for
+  stateful transformer linear-attention decode and Qwen3.6-style prefill.
 - `diffusion-step-ops`: diffusion scheduler, CFG, first-frame forcing, and
   decode-postprocess CUDA helpers for diffusion/video runtime glue.
 - `turboquant-kv`: TurboQuant-style KV unpack/combine helpers for
@@ -316,7 +316,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `vl-transformer-primitives` | Transformers/diffusers package | VLM Q/K norm + RoPE + KV-write staging and vision token pooling primitives. |
 | `linear-attention-primitives` | Transformers package | Small-M BF16 linear, QKV broadcast split, partial RoPE, and gated-delta preparation primitives. |
 | `causal-conv1d-state` | Transformers package | BF16 causal depthwise Conv1D forward/update/chunk kernels with persistent state and GQA split output. |
-| `gated-delta-attention` | Transformers package | BF16 Gated DeltaNet recurrent/chunk state kernels for linear-attention decode and prefill. |
+| `gated-delta-attention` | Transformers package | BF16 Gated DeltaNet recurrent/chunk/WY state kernels for linear-attention decode and Qwen3.6-style prefill. |
 | `diffusion-step-ops` | Diffusers package | Scheduler, CFG, first-frame forcing, and decode-postprocess helpers for diffusion/video runtime glue. |
 | `turboquant-kv` | Transformers package | KV unpack/combine helpers for TurboQuant-style serving and cache-compression demos. |
 | `world-model-conv` | Diffusers package | Blackwell FP8 3D causal conv primitive for video/world-model/VAE-style blocks. |
