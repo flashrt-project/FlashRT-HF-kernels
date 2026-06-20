@@ -45,13 +45,6 @@ void check_int32(torch::Tensor const& tensor, const char* name) {
               name, " must have dtype torch.int32");
 }
 
-void check_u32_or_i32(torch::Tensor const& tensor, const char* name) {
-  check_cuda_contiguous(tensor, name);
-  TORCH_CHECK(tensor.scalar_type() == torch::kInt32 ||
-                  tensor.scalar_type() == c10::ScalarType::UInt32,
-              name, " must have dtype torch.int32 or torch.uint32");
-}
-
 int checked_int(int64_t value, const char* name) {
   TORCH_CHECK(value > 0 && value <= std::numeric_limits<int>::max(),
               name, " must fit in positive int");
@@ -119,13 +112,13 @@ void xqa_bf16_fp8kv(
   check_int32(page_table, "page_table");
   TORCH_CHECK(page_table.numel() >= k_cache.size(0),
               "page_table must contain at least one entry per cache page");
-  check_u32_or_i32(seq_lens, "seq_lens");
+  check_int32(seq_lens, "seq_lens");
   TORCH_CHECK(seq_lens.numel() >= 1, "seq_lens must contain one sequence length");
-  check_u32_or_i32(mask, "mask");
+  check_int32(mask, "mask");
   TORCH_CHECK(mask.numel() >= q_seq * ((q_seq + 31) / 32),
               "mask must have at least q_seq * ceil(q_seq / 32) elements");
-  check_u32_or_i32(semaphores, "semaphores");
-  TORCH_CHECK(semaphores.numel() >= 256, "semaphores must contain at least 256 int32/uint32 entries");
+  check_int32(semaphores, "semaphores");
+  TORCH_CHECK(semaphores.numel() >= 256, "semaphores must contain at least 256 int32 entries");
   check_cuda_contiguous(scratch, "scratch");
   TORCH_CHECK(scratch.scalar_type() == torch::kUInt8, "scratch must have dtype torch.uint8");
   TORCH_CHECK(scratch.numel() >= (1 << 20), "scratch must contain at least 1 MiB");
