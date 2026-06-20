@@ -86,3 +86,5 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("fp8_conv3d_v18_ncdhw_res_bf16out", torch::kCUDA, &fp8_conv3d_v18_ncdhw_res_bf16out);
 #endif
 }
+
+REGISTER_EXTENSION(TORCH_EXTENSION_NAME)

@@ -224,3 +224,5 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("gated_delta_prepare_bf16", torch::kCUDA, &gated_delta_prepare_bf16);
 #endif
 }
+
+REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
