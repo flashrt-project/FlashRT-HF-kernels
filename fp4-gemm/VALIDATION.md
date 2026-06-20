@@ -29,6 +29,6 @@ Result:
 | M=64, N=512, K=512 | 2 | 0.0 | 0.0 | 0.0 | 1.0 |
 
 Installed-artifact validation is required after HF Jobs publishes the package.
-First publish uses the repository workflow's explicit Kernel Hub
-`create_repo(..., repo_type="kernel", exist_ok=True)` step before
-`kernel-builder build-and-upload`.
+First publish uses the repository workflow's GitHub-runner
+`create_repo(..., repo_type="kernel", exist_ok=True)` step before launching
+the HF Jobs builder.

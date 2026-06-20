@@ -115,6 +115,25 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Ensure Kernel Hub repo exists for ${{ matrix.package }}
+        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade "huggingface_hub>=1.1.0"
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          HfApi(token=os.environ["HF_TOKEN"]).create_repo(
+              repo_id="flashrt/${{ matrix.package }}",
+              repo_type="kernel",
+              exist_ok=True,
+          )
+          PY
+
       - name: Build and upload ${{ matrix.package }} via HF Jobs
         if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
         uses: huggingface/kernel-builder-job@main
@@ -131,17 +150,6 @@ jobs:
             set +x
             export HF_TOKEN="${{ secrets.HF_TOKEN }}"
             export GIT_LFS_SKIP_SMUDGE=1
-
-            python - <<'PY'
-            import os
-            from huggingface_hub import HfApi
-
-            HfApi(token=os.environ["HF_TOKEN"]).create_repo(
-                repo_id="flashrt/${{ matrix.package }}",
-                repo_type="kernel",
-                exist_ok=True,
-            )
-            PY
 
             git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
             cd FlashRT-HF-kernels
