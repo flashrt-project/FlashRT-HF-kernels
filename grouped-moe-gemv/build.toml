@@ -1,0 +1,31 @@
+[general]
+name = "grouped-moe-gemv"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/grouped-moe-gemv"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.grouped_moe_gemv]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a"]
+src = [
+  "csrc/kernels/nexn2_w4a16_gemv.cu",
+  "csrc/kernels/nexn2_w4a16_gemv.cuh",
+  "csrc/kernels/nexn2_moe_grouped_w4a16.cu",
+  "csrc/kernels/nexn2_moe_grouped_w4a16.cuh",
+]

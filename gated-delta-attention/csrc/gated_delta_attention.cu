@@ -1050,6 +1050,17 @@ __global__ void qwen36_gdn_wy_solve_tril_b64_kernel(
   }
 }
 
+__global__ void qwen36_gdn_wy_cast_ai_f32_to_bf16_kernel(
+    const float* __restrict__ Ai,
+    __nv_bfloat16* __restrict__ Ai_pack,
+    int total)
+{
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < total) {
+    Ai_pack[idx] = __float2bfloat16(Ai[idx]);
+  }
+}
+
 __global__ void qwen36_gdn_wy_recompute_wu_b64_kernel(
     const __nv_bfloat16* __restrict__ k16_l2,
     const __nv_bfloat16* __restrict__ v48,
@@ -1619,6 +1630,22 @@ void qwen36_gdn_wy_solve_tril_b64_f32(
       reinterpret_cast<const float*>(A),
       reinterpret_cast<float*>(Ai),
       S);
+}
+
+void qwen36_gdn_wy_cast_ai_f32_to_bf16(
+    const void* Ai,
+    void*       Ai_pack,
+    int S,
+    cudaStream_t stream)
+{
+  if (S <= 0) return;
+  const int chunks = (S + kWyChunk - 1) / kWyChunk;
+  const int total = chunks * kVHeads * kWyChunk * kWyChunk;
+  qwen36_gdn_wy_cast_ai_f32_to_bf16_kernel<<<
+      (total + 255) / 256, 256, 0, stream>>>(
+      reinterpret_cast<const float*>(Ai),
+      reinterpret_cast<__nv_bfloat16*>(Ai_pack),
+      total);
 }
 
 void qwen36_gdn_wy_recompute_wu_b64_bf16(

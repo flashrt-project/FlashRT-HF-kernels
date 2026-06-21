@@ -1,7 +1,7 @@
 [general]
 name = "gated-delta-attention"
 license = "Apache-2.0"
-version = 2
+version = 3
 backends = ["cuda"]
 
 [general.cuda]
@@ -25,6 +25,10 @@ cuda-minver = "12.8"
 src = [
   "csrc/gated_delta_attention.cu",
   "csrc/gated_delta_attention.cuh",
+  "csrc/gated_delta_wy_bf16.cuh",
+  "csrc/gated_delta_wy_recompute_wu_mma_fla.cu",
+  "csrc/gated_delta_wy_bf16_mma_fla.cu",
+  "csrc/gated_delta_wy_output_o_mma_fla.cu",
 ]
 cuda-flags = [
   "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",

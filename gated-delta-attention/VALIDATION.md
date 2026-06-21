@@ -26,7 +26,7 @@ Command:
 python gated-delta-attention/tests/test_gated_delta_attention.py \
   --backend source \
   --mode full \
-  --json-out internal-tests/gated-delta-attention-v2-source-full.json
+  --json-out internal-tests/gated-delta-attention-v3-source-full.json
 ```
 
 Rows:
@@ -44,6 +44,9 @@ Rows:
 | chunk_from_conv_s4 | chunk_from_conv | 1 | 4 | 48 | 0.000015 | 0.000000 | 0.000000 | 1.00000000 | PASS |
 | wy_pipeline_s4 | wy_pipeline | 1 | 4 | 48 | 0.000031 | 0.000004 | 0.000015 | 0.99999440 | PASS |
 | wy_pipeline_s65 | wy_pipeline | 1 | 65 | 48 | 0.000107 | 0.000009 | 0.000038 | 0.99996358 | PASS |
+| wy_mma_fla_s64 | wy_mma_fla | 1 | 64 | 48 | 0.000122 | 0.000010 | 0.000044 | 0.99996173 | PASS |
+| wy_mma_fla_s65 | wy_mma_fla | 1 | 65 | 48 | 0.000107 | 0.000010 | 0.000040 | 0.99996245 | PASS |
+| wy_mma_fla_s128 | wy_mma_fla | 1 | 128 | 48 | 0.000122 | 0.000011 | 0.000046 | 0.99994701 | PASS |
 
 ## Generated Artifact Smoke
 
@@ -61,3 +64,6 @@ python tests/test_gated_delta_attention.py \
 ```
 
 Result: same full rows pass for the local generated artifact.
+
+For v3 release artifacts, rerun the same command against the HF Jobs artifact
+before updating the installed-artifact claim.

@@ -13,7 +13,11 @@
 | `fp4-gemm` | `quantize_fp4_sfa_fp16`, `dequantize_fp4_sfa_fp16`, `fp4_w4a16_linear_bf16` | `csrc/gemm/fp4`, `csrc/quantize` | PyTorch GEMM over the same dequantized FP4/SFA/SFB inputs | Native Blackwell NVFP4 W4A16 linear package |
 | `fp8-kv-attention` | `xqa_bf16_fp8kv`, `causal_spec_mask`, `default_page_table`, `allocate_workspace` | `csrc/attention/flashinfer_xqa_src`, `csrc/kernels/qwen36_flashinfer_xqa.*` | PyTorch FP8-dequant attention reference with the same speculative mask | Direct BF16-Q + FP8-KV XQA package for Qwen3.6-style decode/verify |
 | `causal-conv1d-state` | `causal_conv1d_bf16`, `causal_conv1d_update_bf16`, `causal_conv1d_update_inout_bf16`, `causal_conv1d_update_chunk_parallel_gqa_bf16` | `csrc/kernels/causal_conv1d_qwen36.*` | PyTorch BF16 causal Conv1D state reference | Qwen3.6-style pre-linear-attention Conv1D state update and GQA split |
-| `gated-delta-attention` | `gated_delta_recurrent_bf16`, `gated_delta_chunk_smem_bf16`, `lin_split_qkv_gqa_bf16`, `gdn_gating_bf16`, `gdn_chunk_from_conv_smem_bf16`, `gdn_wy_*_b64_*` | `csrc/kernels/gated_deltanet_qwen36.*` | PyTorch Gated DeltaNet recurrent/chunk reference with BF16 state contract | Stateful linear-attention recurrence plus Qwen3.6-style prefill/WY blocks |
+| `gated-delta-attention` | `gated_delta_recurrent_bf16`, `gated_delta_chunk_smem_bf16`, `lin_split_qkv_gqa_bf16`, `gdn_gating_bf16`, `gdn_chunk_from_conv_smem_bf16`, `gdn_wy_*_b64_*`, `gdn_wy_*_mma_fla_bf16` | `csrc/kernels/gated_deltanet_qwen36.*`, `csrc/kernels/linear_attention/gated_delta_wy_bf16*` | PyTorch Gated DeltaNet recurrent/chunk reference with BF16 state contract | Stateful linear-attention recurrence plus Qwen3.6-style prefill/WY blocks and FLA-style native CUDA MMA prefill |
+| `bf16-linear-gemv` | `bf16_decode_gemv_bf16`, `bf16_decode_gemv_unrolled_bf16` | `csrc/gemm/bf16_gemv_m1_sm120.*`, `csrc/kernels/nexn2_bf16_gemv.*` | PyTorch BF16 GEMV reference | M=1 BF16 decode projection/GEMV path |
+| `transformer-fused-ops` | `rms_norm_gated_silu_bf16`, `silu_mul_bf16`, `embedding_lookup_bf16`, `partial_rope_qk_bf16`, `argmax_bf16`, `nexn2_*` helpers | `csrc/kernels/qwen36_misc.*`, `silu_mul_qwen36.*`, `rms_norm_gated_silu_qwen36.*`, `nexn2_misc.*`, `nexn2_router_topk.*` | PyTorch eager references | Transformer hot-path activation, layout, RoPE, argmax/spec, and router helper ops |
+| `grouped-moe-gemv` | `w4a16_decode_gemv_bf16`, `grouped_w4a16_gemv_bf16` | `csrc/kernels/nexn2_w4a16_gemv.*`, `nexn2_moe_grouped_w4a16.*` | Deterministic packed NVFP4 analytic reference | Blackwell W4A16 MoE decode/routed-slot GEMV |
+| `linear-attention-seq-state` | `gated_delta_recurrent_seq_bf16` | `csrc/kernels/nexn2_gdn_seq.*` | PyTorch sequential state reference | One-launch prefill scan for Gated DeltaNet style linear attention |
 
 ## V1 Batch Blocks
 
@@ -28,7 +32,7 @@ is not a priority order.
 | Fused quantization | `flashrt-fused-quant` | Activation, residual, norm, and low-bit quantization fusion |
 | Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP16-to-NVFP4 producers, FP4-to-FP4 combiners, and NVFP4 W4A16 GEMM |
 | FP8 KV attention | `fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache for long-context decode/verify |
-| Qwen3.6 linear-attention state | `causal-conv1d-state`, `gated-delta-attention`, `linear-attention-primitives` | Conv1D state update, Gated DeltaNet recurrence/chunks, WY prefill blocks, and staging helpers |
+| Qwen3.6/NexN2 linear-attention state | `causal-conv1d-state`, `gated-delta-attention`, `linear-attention-primitives`, `linear-attention-seq-state`, `transformer-fused-ops` | Conv1D state update, Gated DeltaNet recurrence/chunks, FLA-style WY prefill blocks, one-launch sequence scan, and staging helpers |
 
 Do not run full builder packaging for one block while the other v1 blocks are
 still missing source-extension tests, benchmark grids, or examples. Full

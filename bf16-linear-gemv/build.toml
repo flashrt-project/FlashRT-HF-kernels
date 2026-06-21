@@ -1,0 +1,31 @@
+[general]
+name = "bf16-linear-gemv"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/bf16-linear-gemv"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.bf16_linear_gemv]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a"]
+src = [
+  "csrc/gemm/bf16_gemv_m1_sm120.cu",
+  "csrc/gemm/bf16_gemv_m1_sm120.cuh",
+  "csrc/kernels/nexn2_bf16_gemv.cu",
+  "csrc/kernels/nexn2_bf16_gemv.cuh",
+]

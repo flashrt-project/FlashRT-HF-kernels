@@ -1,0 +1,28 @@
+[general]
+name = "linear-attention-seq-state"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/linear-attention-seq-state"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.linear_attention_seq_state]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+src = [
+  "csrc/kernels/nexn2_gdn_seq.cu",
+  "csrc/kernels/nexn2_gdn_seq.cuh",
+]

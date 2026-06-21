@@ -39,10 +39,13 @@ SHAPES = {
     "chunk_from_conv_s4": ("chunk_from_conv", 1, 4, 48),
     "wy_pipeline_s4": ("wy_pipeline", 1, 4, 48),
     "wy_pipeline_s65": ("wy_pipeline", 1, 65, 48),
+    "wy_mma_fla_s64": ("wy_mma_fla", 1, 64, 48),
+    "wy_mma_fla_s65": ("wy_mma_fla", 1, 65, 48),
+    "wy_mma_fla_s128": ("wy_mma_fla", 1, 128, 48),
 }
 MODES = {
     "smoke": ["recurrent_h4"],
-    "headline": ["recurrent_h48", "chunk_s4_h4", "wy_pipeline_s65"],
+    "headline": ["recurrent_h48", "chunk_s4_h4", "wy_pipeline_s65", "wy_mma_fla_s128"],
     "full": list(SHAPES.keys()),
 }
 
@@ -149,6 +152,34 @@ class SourceOps:
         self._ops.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum, out)
         return out
 
+    def wy_mma_fla(self, q16, k16, v48, g, beta, state):
+        S = q16.shape[0]
+        chunks = (S + 63) // 64
+        scale = D ** -0.5
+        q16_l2 = torch.empty_like(q16)
+        k16_l2 = torch.empty_like(k16)
+        q_pack = torch.empty((chunks, 48, 64, D), device=q16.device, dtype=q16.dtype)
+        k_pack_hk = torch.empty((chunks, 16, 64, D), device=q16.device, dtype=q16.dtype)
+        g_cumsum = torch.empty_like(g)
+        A = torch.empty((chunks, 48, 64, 64), device=q16.device, dtype=torch.float32)
+        Ai = torch.empty_like(A)
+        Ai_pack = torch.empty((chunks, 48, 64, 64), device=q16.device, dtype=q16.dtype)
+        w_pack = torch.empty((chunks, 48, 64, D), device=q16.device, dtype=q16.dtype)
+        u_pack = torch.empty_like(w_pack)
+        h0 = torch.empty((chunks, 48, D, D), device=q16.device, dtype=q16.dtype)
+        v_new = torch.empty_like(v48)
+        v_new_pack = torch.empty_like(w_pack)
+        k_pack_hv = torch.empty_like(w_pack)
+        out = torch.empty_like(v48)
+        self._ops.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g, q16_l2, k16_l2, q_pack, k_pack_hk, g_cumsum)
+        self._ops.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum, A)
+        self._ops.gdn_wy_solve_tril_b64_f32(A, Ai, S)
+        self._ops.gdn_wy_cast_ai_f32_to_bf16(Ai, Ai_pack, S)
+        self._ops.gdn_wy_recompute_wu_b64_mma_fla_bf16(k16_l2, v48, beta, g_cumsum, Ai_pack, w_pack, u_pack)
+        self._ops.gdn_wy_chunk_h_b64_mma_fla_bf16(k16_l2, w_pack, u_pack, g_cumsum, state, h0, v_new, v_new_pack, k_pack_hv)
+        self._ops.gdn_wy_output_o_b64_mma_fla_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, out, scale)
+        return out
+
 
 class InstalledOps:
     def __init__(self, mod) -> None:
@@ -208,6 +239,19 @@ class InstalledOps:
         h0, v_new = self._mod.gdn_wy_chunk_h_b64_bf16(k16_l2, u, w, g_cumsum, state)
         return self._mod.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum)
 
+    def wy_mma_fla(self, q16, k16, v48, g, beta, state):
+        q16_l2, k16_l2, q_pack, _, g_cumsum = self._mod.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
+        A = self._mod.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum)
+        Ai = self._mod.gdn_wy_solve_tril_b64_f32(A, q16.shape[0])
+        Ai_pack = self._mod.gdn_wy_cast_ai_f32_to_bf16(Ai, q16.shape[0])
+        w_pack, u_pack = self._mod.gdn_wy_recompute_wu_b64_mma_fla_bf16(k16_l2, v48, beta, g_cumsum, Ai_pack)
+        h0, _, v_new_pack, k_pack_hv = self._mod.gdn_wy_chunk_h_b64_mma_fla_bf16(
+            k16_l2, w_pack, u_pack, g_cumsum, state
+        )
+        return self._mod.gdn_wy_output_o_b64_mma_fla_bf16(
+            q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, scale=D ** -0.5
+        )
+
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -230,6 +274,9 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "gated_delta_attention.cu"),
+            str(PACKAGE / "csrc" / "gated_delta_wy_recompute_wu_mma_fla.cu"),
+            str(PACKAGE / "csrc" / "gated_delta_wy_bf16_mma_fla.cu"),
+            str(PACKAGE / "csrc" / "gated_delta_wy_output_o_mma_fla.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -432,20 +479,27 @@ def run_case(ops, name: str) -> Row:
         state_max, _, _, _ = metrics(state_work, ref_state)
         if state_max > 0.00390625:
             raise AssertionError(f"{name} state mismatch: {state_max}")
-    if kind == "wy_pipeline":
+    if kind in {"wy_pipeline", "wy_mma_fla"}:
         conv_out, a, b, neg, dt, state = make_conv_inputs(S, 13000 + S)
         q16, k16, v48 = ref_split_gqa(conv_out)
         g, beta = ref_gating(a, b, neg, dt)
         state_work = state.clone()
-        got = ops.wy_pipeline(q16, k16, v48, g, beta, state_work)
+        if kind == "wy_pipeline":
+            got = ops.wy_pipeline(q16, k16, v48, g, beta, state_work)
+        else:
+            got = ops.wy_mma_fla(q16, k16, v48, g, beta, state_work)
         q48 = q16.repeat_interleave(3, dim=1).contiguous()
         k48 = k16.repeat_interleave(3, dim=1).contiguous()
         ref, ref_state = ref_chunk(q48, k48, v48, g, beta, state)
         state_max, _, _, _ = metrics(state_work, ref_state)
-        if state_max > 0.015625:
+        state_tol = 0.015625
+        if state_max > state_tol:
             raise AssertionError(f"{name} state mismatch: {state_max}")
     max_abs, mean_abs, p99_abs, cos = metrics(got, ref)
-    passed = max_abs <= 0.015625 and mean_abs <= 0.0015 and cos >= 0.999
+    if kind == "wy_mma_fla":
+        passed = max_abs <= 0.001 and mean_abs <= 0.0001 and p99_abs <= 0.0005 and cos >= 0.9999
+    else:
+        passed = max_abs <= 0.015625 and mean_abs <= 0.0015 and cos >= 0.999
     return Row(name, kind, B, S, H, max_abs, mean_abs, p99_abs, cos, passed)
 
 

@@ -10,6 +10,7 @@ The first public profile targets Qwen3.6-style dimensions:
 - BF16 or FP32 recurrent state
 - optional in-kernel Q/K L2 normalization
 - prefill WY block helpers with 64-token chunks
+- FLA-style native CUDA MMA prefill path for WY recompute/chunk/output
 
 ## Available Functions
 
@@ -27,11 +28,16 @@ The first public profile targets Qwen3.6-style dimensions:
 - `gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g, ...)`
 - `gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum, A=None)`
 - `gdn_wy_solve_tril_b64_f32(A, S, Ai=None)`
+- `gdn_wy_cast_ai_f32_to_bf16(Ai, S, Ai_pack=None)`
 - `gdn_wy_recompute_wu_b64_bf16(k16_l2, v48, beta, g_cumsum, Ai, ...)`
 - `gdn_wy_chunk_h_b64_bf16(k16_l2, u48, w48, g_cumsum, state, ...)`
 - `gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum, out=None)`
+- `gdn_wy_recompute_wu_b64_mma_fla_bf16(k16_l2, v48, beta, g_cumsum, Ai_pack, ...)`
+- `gdn_wy_chunk_h_b64_mma_fla_bf16(k16_l2, w_pack, u_pack, g_cumsum, state, ...)`
+- `gdn_wy_output_o_b64_mma_fla_bf16(q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, ...)`
+- `gdn_wy_output_o_b64_mma_fla_rawk_bf16(q_pack_hv, k16_l2, v_pack, h0, g_cumsum, ...)`
 
-The v2 API covers both decode recurrence and Qwen3.6-style prefill/WY
+The v3 API covers both decode recurrence and Qwen3.6-style prefill/WY
 building blocks. It does not package generic FlashAttention.
 
 ## Usage
@@ -40,7 +46,7 @@ building blocks. It does not package generic FlashAttention.
 from kernels import get_kernel
 import torch
 
-gdn = get_kernel("flashrt/gated-delta-attention", version=2, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=3, trust_remote_code=True)
 
 B, H, D = 1, 48, 128
 q = torch.randn(B, H, D, device="cuda", dtype=torch.bfloat16)
@@ -72,6 +78,27 @@ Ai = gdn.gdn_wy_solve_tril_b64_f32(A, S)
 w48, u48 = gdn.gdn_wy_recompute_wu_b64_bf16(k16_l2, v48, beta, g_cumsum, Ai)
 h0, v_new = gdn.gdn_wy_chunk_h_b64_bf16(k16_l2, u48, w48, g_cumsum, state)
 out = gdn.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum)
+```
+
+FLA-style native CUDA MMA prefill path:
+
+```python
+S = q16.shape[0]
+scale = 128 ** -0.5
+
+q16_l2, k16_l2, q_pack_hv, _, g_cumsum = gdn.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
+A = gdn.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum)
+Ai = gdn.gdn_wy_solve_tril_b64_f32(A, S)
+Ai_pack = gdn.gdn_wy_cast_ai_f32_to_bf16(Ai, S)
+w_pack, u_pack = gdn.gdn_wy_recompute_wu_b64_mma_fla_bf16(
+    k16_l2, v48, beta, g_cumsum, Ai_pack
+)
+h0, v_new, v_pack, k_pack_hv = gdn.gdn_wy_chunk_h_b64_mma_fla_bf16(
+    k16_l2, w_pack, u_pack, g_cumsum, state
+)
+out = gdn.gdn_wy_output_o_b64_mma_fla_bf16(
+    q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, scale=scale
+)
 ```
 
 ## Validation

@@ -55,6 +55,11 @@ def _chunks(S: int) -> int:
     return (S + 63) // 64
 
 
+def _check_wy_pack(x, C: int, n0: int, n1: int, name: str) -> None:
+    if x.shape != (C, 48, n0, n1):
+        raise RuntimeError(f"{name} must have shape (ceil(S/64),48,{n0},{n1})")
+
+
 @torch.library.register_fake(add_op_namespace_prefix("gated_delta_recurrent_bf16"))
 def _recurrent_fake(q, k, v, g, beta, state, out, use_qk_l2norm: bool = True) -> None:
     _check_step(q, k, v, g, beta, out)
@@ -222,6 +227,73 @@ def _wy_output_fake(q16_l2, k16_l2, v_new, h0, g_cumsum, out) -> None:
     _check_q16(k16_l2, S, "k16_l2")
     _check_v48(v_new, S, "v_new")
     if h0.shape != (_chunks(S), 48, 128, 128):
+        raise RuntimeError("h0 must have shape (ceil(S/64),48,128,128)")
+    _check_heads48(g_cumsum, S, "g_cumsum")
+    _check_v48(out, S, "out")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_cast_ai_f32_to_bf16"))
+def _wy_cast_ai_fake(Ai, Ai_pack, S: int) -> None:
+    C = _chunks(S)
+    if Ai.shape != (C, 48, 64, 64):
+        raise RuntimeError("Ai must have shape (ceil(S/64),48,64,64)")
+    _check_wy_pack(Ai_pack, C, 64, 64, "Ai_pack")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_recompute_wu_b64_mma_fla_bf16"))
+def _wy_recompute_fla_fake(k16_l2, v48, beta, g_cumsum, Ai_pack, w_pack, u_pack) -> None:
+    S = k16_l2.shape[0]
+    C = _chunks(S)
+    _check_q16(k16_l2, S, "k16_l2")
+    _check_v48(v48, S, "v48")
+    _check_heads48(beta, S, "beta")
+    _check_heads48(g_cumsum, S, "g_cumsum")
+    _check_wy_pack(Ai_pack, C, 64, 64, "Ai_pack")
+    _check_wy_pack(w_pack, C, 64, 128, "w_pack")
+    _check_wy_pack(u_pack, C, 64, 128, "u_pack")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_chunk_h_b64_mma_fla_bf16"))
+def _wy_chunk_h_fla_fake(k16_l2, w_pack, u_pack, g_cumsum, state, h0, v_new, v_new_pack, k_pack_hv) -> None:
+    S = k16_l2.shape[0]
+    C = _chunks(S)
+    _check_q16(k16_l2, S, "k16_l2")
+    _check_wy_pack(w_pack, C, 64, 128, "w_pack")
+    _check_wy_pack(u_pack, C, 64, 128, "u_pack")
+    _check_heads48(g_cumsum, S, "g_cumsum")
+    if state.shape != (48, 128, 128) or h0.shape != (C, 48, 128, 128):
+        raise RuntimeError("state/h0 shapes are invalid")
+    _check_v48(v_new, S, "v_new")
+    _check_wy_pack(v_new_pack, C, 64, 128, "v_new_pack")
+    _check_wy_pack(k_pack_hv, C, 64, 128, "k_pack_hv")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_output_o_b64_mma_fla_bf16"))
+def _wy_output_fla_fake(q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, out, scale: float = 0.08838834764831845) -> None:
+    S = out.shape[0]
+    C = _chunks(S)
+    _check_wy_pack(q_pack_hv, C, 64, 128, "q_pack_hv")
+    _check_wy_pack(k_pack_hv, C, 64, 128, "k_pack_hv")
+    _check_wy_pack(v_pack, C, 64, 128, "v_pack")
+    if h0.shape != (C, 48, 128, 128):
+        raise RuntimeError("h0 must have shape (ceil(S/64),48,128,128)")
+    _check_heads48(g_cumsum, S, "g_cumsum")
+    _check_v48(out, S, "out")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_output_o_b64_mma_fla_rawk_bf16"))
+def _wy_output_fla_rawk_fake(q_pack_hv, k16_l2, v_pack, h0, g_cumsum, out, scale: float = 0.08838834764831845) -> None:
+    S = out.shape[0]
+    C = _chunks(S)
+    _check_wy_pack(q_pack_hv, C, 64, 128, "q_pack_hv")
+    _check_q16(k16_l2, S, "k16_l2")
+    _check_wy_pack(v_pack, C, 64, 128, "v_pack")
+    if h0.shape != (C, 48, 128, 128):
         raise RuntimeError("h0 must have shape (ceil(S/64),48,128,128)")
     _check_heads48(g_cumsum, S, "g_cumsum")
     _check_v48(out, S, "out")
@@ -526,6 +598,95 @@ def gdn_wy_output_o_b64_bf16(
     return out
 
 
+def gdn_wy_cast_ai_f32_to_bf16(
+    Ai: torch.Tensor,
+    S: int,
+    *,
+    Ai_pack: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if Ai_pack is None:
+        Ai_pack = torch.empty((_chunks(S), 48, 64, 64), device=Ai.device, dtype=torch.bfloat16)
+    ops.gdn_wy_cast_ai_f32_to_bf16(Ai, Ai_pack, int(S))
+    return Ai_pack
+
+
+def gdn_wy_recompute_wu_b64_mma_fla_bf16(
+    k16_l2: torch.Tensor,
+    v48: torch.Tensor,
+    beta: torch.Tensor,
+    g_cumsum: torch.Tensor,
+    Ai_pack: torch.Tensor,
+    *,
+    w_pack: Optional[torch.Tensor] = None,
+    u_pack: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    C = _chunks(k16_l2.shape[0])
+    if w_pack is None:
+        w_pack = torch.empty((C, 48, 64, 128), device=k16_l2.device, dtype=k16_l2.dtype)
+    if u_pack is None:
+        u_pack = torch.empty_like(w_pack)
+    ops.gdn_wy_recompute_wu_b64_mma_fla_bf16(k16_l2, v48, beta, g_cumsum, Ai_pack, w_pack, u_pack)
+    return w_pack, u_pack
+
+
+def gdn_wy_chunk_h_b64_mma_fla_bf16(
+    k16_l2: torch.Tensor,
+    w_pack: torch.Tensor,
+    u_pack: torch.Tensor,
+    g_cumsum: torch.Tensor,
+    state: torch.Tensor,
+    *,
+    h0: Optional[torch.Tensor] = None,
+    v_new: Optional[torch.Tensor] = None,
+    v_new_pack: Optional[torch.Tensor] = None,
+    k_pack_hv: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    S = k16_l2.shape[0]
+    C = _chunks(S)
+    if h0 is None:
+        h0 = torch.empty((C, 48, 128, 128), device=k16_l2.device, dtype=k16_l2.dtype)
+    if v_new is None:
+        v_new = torch.empty((S, 48, 128), device=k16_l2.device, dtype=k16_l2.dtype)
+    if v_new_pack is None:
+        v_new_pack = torch.empty((C, 48, 64, 128), device=k16_l2.device, dtype=k16_l2.dtype)
+    if k_pack_hv is None:
+        k_pack_hv = torch.empty((C, 48, 64, 128), device=k16_l2.device, dtype=k16_l2.dtype)
+    ops.gdn_wy_chunk_h_b64_mma_fla_bf16(k16_l2, w_pack, u_pack, g_cumsum, state, h0, v_new, v_new_pack, k_pack_hv)
+    return h0, v_new, v_new_pack, k_pack_hv
+
+
+def gdn_wy_output_o_b64_mma_fla_bf16(
+    q_pack_hv: torch.Tensor,
+    k_pack_hv: torch.Tensor,
+    v_pack: torch.Tensor,
+    h0: torch.Tensor,
+    g_cumsum: torch.Tensor,
+    *,
+    scale: float = 0.08838834764831845,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty((g_cumsum.shape[0], 48, 128), device=q_pack_hv.device, dtype=q_pack_hv.dtype)
+    ops.gdn_wy_output_o_b64_mma_fla_bf16(q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, out, float(scale))
+    return out
+
+
+def gdn_wy_output_o_b64_mma_fla_rawk_bf16(
+    q_pack_hv: torch.Tensor,
+    k16_l2: torch.Tensor,
+    v_pack: torch.Tensor,
+    h0: torch.Tensor,
+    g_cumsum: torch.Tensor,
+    *,
+    scale: float = 0.08838834764831845,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty((g_cumsum.shape[0], 48, 128), device=q_pack_hv.device, dtype=q_pack_hv.dtype)
+    ops.gdn_wy_output_o_b64_mma_fla_rawk_bf16(q_pack_hv, k16_l2, v_pack, h0, g_cumsum, out, float(scale))
+    return out
+
+
 __all__ = [
     "gated_delta_recurrent_bf16",
     "gated_delta_recurrent_inout_bf16",
@@ -544,4 +705,9 @@ __all__ = [
     "gdn_wy_recompute_wu_b64_bf16",
     "gdn_wy_chunk_h_b64_bf16",
     "gdn_wy_output_o_b64_bf16",
+    "gdn_wy_cast_ai_f32_to_bf16",
+    "gdn_wy_recompute_wu_b64_mma_fla_bf16",
+    "gdn_wy_chunk_h_b64_mma_fla_bf16",
+    "gdn_wy_output_o_b64_mma_fla_bf16",
+    "gdn_wy_output_o_b64_mma_fla_rawk_bf16",
 ]

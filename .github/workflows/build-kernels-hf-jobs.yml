@@ -22,6 +22,10 @@ on:
       - "diffusion-step-ops/**"
       - "turboquant-kv/**"
       - "linear-attention-primitives/**"
+      - "bf16-linear-gemv/**"
+      - "transformer-fused-ops/**"
+      - "grouped-moe-gemv/**"
+      - "linear-attention-seq-state/**"
       - "world-model-conv/**"
       - "fp8-gemm/**"
       - "fp4-fused-ops/**"
@@ -55,6 +59,10 @@ on:
           - diffusion-step-ops
           - turboquant-kv
           - linear-attention-primitives
+          - bf16-linear-gemv
+          - transformer-fused-ops
+          - grouped-moe-gemv
+          - linear-attention-seq-state
           - world-model-conv
           - fp8-gemm
           - fp4-fused-ops
@@ -95,6 +103,10 @@ jobs:
           - diffusion-step-ops
           - turboquant-kv
           - linear-attention-primitives
+          - bf16-linear-gemv
+          - transformer-fused-ops
+          - grouped-moe-gemv
+          - linear-attention-seq-state
           - world-model-conv
           - fp8-gemm
           - fp4-fused-ops

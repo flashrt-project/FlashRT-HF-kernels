@@ -56,8 +56,12 @@ Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 | `flashrt/flashrt-adaptive-norms` | AdaRMSNorm/style modulation and fused residual/AdaRMSNorm/static-FP8 output. | You need DiT/VLA/world-model adaptive normalization and optional FP8 activation output. |
 | `flashrt/flashrt-spatiotemporal-layout` | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers. | You need world-model/video layout glue to keep the model-demo hot path on CUDA. |
 | `flashrt/linear-attention-primitives` | Small-M BF16 linear, QKV broadcast split, partial RoPE, and gated-delta preparation helpers. | You are assembling a transformer linear-attention block and need graph-friendly staging ops. |
+| `flashrt/bf16-linear-gemv` | Native BF16 M=1 decode GEMV variants. | You need a graph-friendly decode projection path when FP8/FP4 weights are not used. |
+| `flashrt/transformer-fused-ops` | Fused RMS-gated-SiLU, SiLU/sigmoid multiply, embedding, partial RoPE, argmax/spec accept, and NexN2 layout/router helpers. | You are removing small PyTorch eager ops from transformer hot paths. |
+| `flashrt/grouped-moe-gemv` | Native W4A16 decode and grouped routed-slot MoE GEMV. | You have packed NVFP4 expert weights and want routed expert slots to stay in native CUDA. |
+| `flashrt/linear-attention-seq-state` | One-launch BF16 Gated DeltaNet sequential state scan. | You need prefill sequence scan without launching a recurrent state kernel once per token. |
 | `flashrt/causal-conv1d-state` | BF16 causal Conv1D forward/update/chunk kernels with persistent state. | You need the Conv1D state path used before linear-attention recurrence, including Qwen3.6-style GQA split output. |
-| `flashrt/gated-delta-attention` | BF16 Gated DeltaNet recurrent/chunk/WY state kernels. | You need the stateful linear-attention recurrence for decode, verify, or Qwen3.6-style prefill chunks. |
+| `flashrt/gated-delta-attention` | BF16 Gated DeltaNet recurrent/chunk/WY state kernels, including the v3 native CUDA FLA-style WY prefill path. | You need the stateful linear-attention recurrence for decode, verify, or Qwen3.6-style prefill chunks. |
 
 Package-specific hardware claims should use the corresponding built-artifact
 and multi-hardware validation rows. The PI0.5 runtime demo composes these
@@ -92,7 +96,7 @@ from kernels import get_kernel
 import torch
 
 conv = get_kernel("flashrt/causal-conv1d-state", version=1, trust_remote_code=True)
-gdn = get_kernel("flashrt/gated-delta-attention", version=2, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=3, trust_remote_code=True)
 
 B, S, C, K = 1, 8, 10240, 4
 x = torch.randn(B, S, C, device="cuda", dtype=torch.bfloat16)
@@ -114,14 +118,15 @@ beta = torch.sigmoid(torch.randn(S, H, device="cuda")).to(torch.bfloat16)
 state = torch.zeros(H, D, D, device="cuda", dtype=torch.bfloat16)
 out = gdn.gated_delta_chunk_bf16(q, k, v, g, beta, state)
 
-# For long-prefill WY blocks, keep q/k unbroadcasted and use the v2 WY API.
+# For long-prefill WY blocks, keep q/k unbroadcasted and use the v3 WY API.
 state_wy = torch.zeros(H, D, D, device="cuda", dtype=torch.bfloat16)
-q16_l2, k16_l2, _, _, g_cumsum = gdn.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
+q16_l2, k16_l2, q_pack, _, g_cumsum = gdn.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
 A = gdn.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum)
 Ai = gdn.gdn_wy_solve_tril_b64_f32(A, S)
-w48, u48 = gdn.gdn_wy_recompute_wu_b64_bf16(k16_l2, v, beta, g_cumsum, Ai)
-h0, v_new = gdn.gdn_wy_chunk_h_b64_bf16(k16_l2, u48, w48, g_cumsum, state_wy)
-out_wy = gdn.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum)
+Ai_pack = gdn.gdn_wy_cast_ai_f32_to_bf16(Ai, S)
+w_pack, u_pack = gdn.gdn_wy_recompute_wu_b64_mma_fla_bf16(k16_l2, v, beta, g_cumsum, Ai_pack)
+h0, _, v_pack, k_pack = gdn.gdn_wy_chunk_h_b64_mma_fla_bf16(k16_l2, w_pack, u_pack, g_cumsum, state_wy)
+out_wy = gdn.gdn_wy_output_o_b64_mma_fla_bf16(q_pack, k_pack, v_pack, h0, g_cumsum)
 ```
 
 For hot paths, preallocate all outputs and state buffers and pass them through

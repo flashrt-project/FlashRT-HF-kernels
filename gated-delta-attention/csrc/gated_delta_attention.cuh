@@ -271,6 +271,12 @@ void qwen36_gdn_wy_solve_tril_b64_f32(
     int S,
     cudaStream_t stream);
 
+void qwen36_gdn_wy_cast_ai_f32_to_bf16(
+    const void* Ai,
+    void*       Ai_pack,
+    int S,
+    cudaStream_t stream);
+
 void qwen36_gdn_wy_recompute_wu_b64_bf16(
     const void* k16_l2,
     const void* v48,
