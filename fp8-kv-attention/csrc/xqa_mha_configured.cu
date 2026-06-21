@@ -6,4 +6,4 @@
 
 #include "xqa_config.cuh"
 
-#include "attention/flashinfer_xqa_src/mha.cu"
+#include "flashinfer_xqa_mha_include.cuh"
