@@ -1,0 +1,106 @@
+name: Mirror FlashRT Kernels For Legacy Clients
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/mirror-kernels-legacy-model.yml"
+      - "scripts/mirror_kernel_legacy_model.py"
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Kernel package to mirror to the legacy model repo namespace"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - MiniMaxAI-msa-blackwell
+          - bf16-linear-gemv
+          - causal-conv1d-state
+          - diffusion-step-ops
+          - flashrt-adaptive-norms
+          - flashrt-fp8-ffn
+          - flashrt-fp8-swiglu-ffn
+          - flashrt-fused-quant
+          - flashrt-gemm-epilogues
+          - flashrt-nvfp4
+          - flashrt-qkv-cache-rope
+          - flashrt-residual-norm-quant
+          - flashrt-smallm-gemm
+          - flashrt-spatiotemporal-layout
+          - flashrt-vla-residual-gates
+          - flashrt-vla-video
+          - fp4-fused-ops
+          - fp4-gemm
+          - fp8-gemm
+          - fp8-kv-attention
+          - gated-delta-attention
+          - grouped-moe-gemv
+          - linear-attention-primitives
+          - linear-attention-seq-state
+          - transformer-fused-ops
+          - turboquant-kv
+          - vl-transformer-primitives
+          - world-model-conv
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flashrt-legacy-kernel-mirror-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    name: Mirror ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package:
+          - MiniMaxAI-msa-blackwell
+          - bf16-linear-gemv
+          - causal-conv1d-state
+          - diffusion-step-ops
+          - flashrt-adaptive-norms
+          - flashrt-fp8-ffn
+          - flashrt-fp8-swiglu-ffn
+          - flashrt-fused-quant
+          - flashrt-gemm-epilogues
+          - flashrt-nvfp4
+          - flashrt-qkv-cache-rope
+          - flashrt-residual-norm-quant
+          - flashrt-smallm-gemm
+          - flashrt-spatiotemporal-layout
+          - flashrt-vla-residual-gates
+          - flashrt-vla-video
+          - fp4-fused-ops
+          - fp4-gemm
+          - fp8-gemm
+          - fp8-kv-attention
+          - gated-delta-attention
+          - grouped-moe-gemv
+          - linear-attention-primitives
+          - linear-attention-seq-state
+          - transformer-fused-ops
+          - turboquant-kv
+          - vl-transformer-primitives
+          - world-model-conv
+
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'push' || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
+
+      - name: Mirror Kernel Hub refs to legacy model repo
+        if: github.event_name == 'push' || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade "huggingface_hub>=1.1.0"
+          python scripts/mirror_kernel_legacy_model.py \
+            --namespace flashrt \
+            --package "${{ matrix.package }}" \
+            --repo-root .
