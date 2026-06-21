@@ -40,6 +40,10 @@ The first public profile targets Qwen3.6-style dimensions:
 The v3 API covers both decode recurrence and Qwen3.6-style prefill/WY
 building blocks. It does not package generic FlashAttention.
 
+The v3 FLA-style MMA path requires NVIDIA `sm_80+` because it uses BF16
+`mma.sync` instructions. The package build targets Ampere, Ada, Hopper, and
+Blackwell CUDA capabilities.
+
 ## Usage
 
 ```python
