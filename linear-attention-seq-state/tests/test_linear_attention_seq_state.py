@@ -103,7 +103,9 @@ def run(ops, mode: str) -> int:
         beta = torch.sigmoid(torch.randn((s, h), device="cuda", generator=gen)).to(torch.bfloat16)
         state0 = (torch.randn((h, 128, 128), device="cuda", generator=gen) * 0.01).to(torch.bfloat16)
         state = state0.clone()
-        got_out, got_state = ops.gated_delta_recurrent_seq_bf16(q, k, v, g, beta, state, False)
+        got_out, got_state = ops.gated_delta_recurrent_seq_bf16(
+            q, k, v, g, beta, state, use_qk_l2norm=False
+        )
         torch.cuda.synchronize()
         ref_out, ref_state = ref_scan(q, k, v, g, beta, state0, False)
         assert_close(f"gdn_seq_out S={s} H={h}", got_out, ref_out)
