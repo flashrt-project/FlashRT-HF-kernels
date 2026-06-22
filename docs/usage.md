@@ -44,6 +44,7 @@ Published v1 packages:
 | `flashrt/fp4-fused-ops` | Native Blackwell FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels. | You need residual/RMSNorm or SiLU-product activations to stay in packed FP4/SFA form for adjacent low-bit GEMM blocks. |
 | `flashrt/fp4-gemm` | Native Blackwell NVFP4 W4A16 GEMM with BF16 output. | You already have packed FP4 activations/weights plus SFA/SFB buffers and want a low-bit `Linear` replacement. |
 | `flashrt/fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache. | You already write transformer K/V cache in FP8 and need direct decode/verify attention without re-quantizing BF16 K/V. |
+| `flashrt/sageattention2-blackwell` | SageAttention2-style Blackwell prefill attention over int8-Q/K and FP16/FP8 V. | You need long-context prefill self-attention for Wan/video non-causal blocks or Qwen causal GQA blocks. |
 
 Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 
@@ -340,6 +341,33 @@ v_cache = torch.randn(8, 128, 4, 256, device="cuda", dtype=torch.bfloat16).to(to
 
 out = attn.xqa_bf16_fp8kv(q, k_cache, v_cache)
 ```
+
+### SageAttention2 Prefill Attention
+
+```python
+from kernels import get_kernel
+import torch
+
+sage = get_kernel("flashrt/sageattention2-blackwell", version=1, trust_remote_code=True)
+
+# Qwen-style causal GQA prefill, head_dim=128.
+q = torch.randn((1, 4096, 32, 128), device="cuda", dtype=torch.bfloat16)
+k = torch.randn((1, 4096, 8, 128), device="cuda", dtype=torch.bfloat16)
+v = torch.randn((1, 4096, 8, 128), device="cuda", dtype=torch.bfloat16)
+out = sage.sage2_prefill_f16_bf16_d128(q, k, v, causal=True)
+
+# Runtime path: quantize once, then call the core with persistent output.
+q_i8, q_scale = sage.quantize_q_bf16_d128(q)
+k_i8, k_scale = sage.quantize_k_bf16_d128(k)
+v_half = sage.quantize_v_fp16_bf16_d128(v)
+out_static = torch.empty_like(q)
+sage.sage2_qk_int8_sv_f16_bf16_d128(
+    q_i8, k_i8, v_half, q_scale, k_scale, causal=True, out=out_static
+)
+```
+
+SageAttention2 is a prefill/self-attention kernel. For M=1 autoregressive
+decode over FP8 K/V cache, use `flashrt/fp8-kv-attention` instead.
 
 v1 exposes the production-validated fixed shape used by FlashRT Qwen3.6:
 BF16 Q/O, FP8 E4M3 K/V, `24` Q heads, `4` KV heads, head dim `256`, page

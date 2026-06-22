@@ -13,6 +13,43 @@ For the complete model runtime, serving pipeline, and production FlashRT
 frontends, see the upstream repository:
 [LiangSu8899/FlashRT](https://github.com/LiangSu8899/FlashRT).
 
+## Showcase
+
+These kernels drop into stock `transformers` and `diffusers` on Blackwell
+(SM120) **through each library's official APIs** — FlashRT registers as a
+quantization backend (`quantization_config`, like torchao / bitsandbytes), plus
+`kernelize` for RMSNorm and the official attention backends. No forked libraries,
+no hand-patching.
+
+**Measured on RTX 5090 (SM120), eager (what ZeroGPU runs):**
+
+| demo | stack | speedup | cosine vs BF16 |
+|---|---|---:|---:|
+| Wan2.2 (per denoise step, 480²) | FlashRT FP8 | 1.28x | 0.99989 |
+| | **FlashRT NVFP4 (4-bit)** | **1.97x** | 0.99864 |
+| Qwen3-8B (prefill, 1024 tok) | FlashRT FP8 | 1.50x | preserved |
+| | **FlashRT NVFP4 (4-bit)** | **2.91x** | — |
+
+NVFP4 (4-bit) is the headline; FlashRT also accelerates the Wan **VAE** (FP8 3D
+convs) and uses the community FlashAttention-2 kernel on Blackwell.
+
+**Demos & Spaces**
+
+- 🎬 **diffusers — Wan2.2 (FP8 / NVFP4):** [`flashrt/flashrt-fast-wan22`](https://huggingface.co/spaces/flashrt/flashrt-fast-wan22)
+  — Wan's DiT quantized via the **diffusers quantization API**
+  (`WanTransformer3DModel.from_pretrained(quantization_config=FlashRTDiffusersConfig(...))`),
+  + community FA2 attention + FP8 VAE convs.
+- ⚡ **transformers — Qwen3-8B:** [`flashrt/flashrt-kernelize-qwen3`](https://huggingface.co/spaces/flashrt/flashrt-kernelize-qwen3)
+  — FlashRT through the **official transformers APIs**: a registered **quantization
+  backend** (`from_pretrained(quantization_config=FlashRTConfig(...))`, like
+  torchao/bitsandbytes) for FP8/NVFP4 GEMMs, `kernelize()` for RMSNorm (cosine
+  0.9999), and the `attn_implementation` Hub-kernel attention backend. Prefill
+  1.50× (FP8, quality preserved) / 2.91× (NVFP4).
+- 📝 **Blog:** *FlashRT kernels in `transformers` and `diffusers` on Blackwell* —
+  [English](#) · [中文](#) *(links on publish)*.
+
+Demo source: [`demos/space/`](demos/space/).
+
 ## Current Snapshot
 
 This repository is a release-candidate integration layer for the first FlashRT
@@ -131,6 +168,8 @@ demos:
   output and schedule-specific validation.
 - `fp8-kv-attention/benchmarks`: native Blackwell XQA attention over FP8 E4M3
   paged K/V cache for Qwen3.6-style BF16-query decode/verify shapes.
+- `sageattention2-blackwell/benchmarks`: SageAttention2-style Blackwell
+  prefill self-attention for Wan non-causal and Qwen causal GQA shapes.
 - `adaptive-layernorm-producers/benchmarks`: AdaLayerNorm/no-affine LayerNorm
   producer fusion to FP8/NVFP4 activations for DiT/Wan/video blocks.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
@@ -283,6 +322,8 @@ Second-batch VLA/runtime packages target the model-demo hot path:
   serving/cache-compression demos.
 - `world-model-conv`: Blackwell FP8 3D causal conv primitive for
   video/world-model/VAE-style blocks.
+- `sageattention2-blackwell`: SageAttention2-style Blackwell prefill
+  attention for Wan/video self-attention and Qwen causal GQA prefill.
 
 ```text
 FP8 input -> FP8 gate/up GEMM -> SiLU(gate) * up -> FP8 requant -> FP8 down GEMM -> BF16 output
@@ -339,6 +380,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `world-model-conv` | Diffusers package | Blackwell FP8 3D causal conv primitive for video/world-model/VAE-style blocks. |
 | `fp4-fused-ops` | Native FP4 package | FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels for continuous low-bit transformer/diffuser paths. |
 | `fp4-gemm` | Native FP4 package | NVFP4 W4A16 GEMM with BF16 output for Blackwell low-bit linear layers. |
+| `sageattention2-blackwell` | Attention package | SageAttention2-style prefill attention for Wan non-causal and Qwen causal GQA shapes on Blackwell. |
 
 ## Repository Status
 

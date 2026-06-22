@@ -1,0 +1,42 @@
+[general]
+name = "sageattention2-blackwell"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/sageattention2-blackwell"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+]
+
+[kernel.sageattention2_blackwell]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0", "12.0a", "12.1"]
+src = [
+  "csrc/sage2_blackwell.cu",
+  "csrc/sage2_blackwell.cuh",
+  "csrc/cp_async.cuh",
+  "csrc/math.cuh",
+  "csrc/mma.cuh",
+  "csrc/numeric_conversion.cuh",
+  "csrc/permuted_smem.cuh",
+  "csrc/qattn/attn_utils.cuh",
+  "csrc/qattn/qk_int_sv_f16_core.cuh",
+  "csrc/qattn/qk_int_sv_f8_core.cuh",
+]
+cuda-flags = [
+  "--expt-relaxed-constexpr",
+  "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT16_OPERATORS__",
+  "-U__CUDA_NO_BFLOAT162_OPERATORS__",
+]

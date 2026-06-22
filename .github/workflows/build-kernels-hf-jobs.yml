@@ -34,6 +34,7 @@ on:
       - "causal-conv1d-state/**"
       - "gated-delta-attention/**"
       - "adaptive-layernorm-producers/**"
+      - "sageattention2-blackwell/**"
   workflow_dispatch:
     inputs:
       package:
@@ -72,6 +73,7 @@ on:
           - causal-conv1d-state
           - gated-delta-attention
           - adaptive-layernorm-producers
+          - sageattention2-blackwell
 
 permissions:
   contents: read
@@ -117,6 +119,7 @@ jobs:
           - causal-conv1d-state
           - gated-delta-attention
           - adaptive-layernorm-producers
+          - sageattention2-blackwell
 
     steps:
       - uses: actions/checkout@v4

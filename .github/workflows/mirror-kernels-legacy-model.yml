@@ -16,6 +16,7 @@ on:
         options:
           - all
           - adaptive-layernorm-producers
+          - sageattention2-blackwell
           - MiniMaxAI-msa-blackwell
           - bf16-linear-gemv
           - causal-conv1d-state
@@ -63,6 +64,7 @@ jobs:
       matrix:
         package:
           - adaptive-layernorm-producers
+          - sageattention2-blackwell
           - MiniMaxAI-msa-blackwell
           - bf16-linear-gemv
           - causal-conv1d-state
