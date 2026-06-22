@@ -18,37 +18,21 @@ frontends, see the upstream repository:
 These kernels drop into stock `transformers` and `diffusers` on Blackwell
 (SM120) **through each library's official APIs** — FlashRT registers as a
 quantization backend (`quantization_config`, like torchao / bitsandbytes), plus
-`kernelize` for RMSNorm and the official attention backends. No forked libraries,
-no hand-patching.
+`kernelize` for RMSNorm and the `set_attn_processor` / `attn_implementation`
+attention backends. No forked libraries, no hand-patching — each step is a named
+FlashRT Hub kernel reached through an official API.
 
-**Measured on RTX 5090 (SM120), eager (what ZeroGPU runs):**
+![FlashRT optimization ladders](assets/flashrt_optimization_ladder.png)
 
-| demo | stack | speedup | cosine vs BF16 |
-|---|---|---:|---:|
-| Wan2.2 (per denoise step, 480²) | FlashRT FP8 | 1.28x | 0.99989 |
-| | **FlashRT NVFP4 (4-bit)** | **1.97x** | 0.99864 |
-| Qwen3-8B (prefill, 1024 tok) | FlashRT FP8 | 1.50x | preserved |
-| | **FlashRT NVFP4 (4-bit)** | **2.91x** | — |
+**Measured on RTX 5090 (SM120):**
 
-NVFP4 (4-bit) is the headline; FlashRT also accelerates the Wan **VAE** (FP8 3D
-convs) and uses the community FlashAttention-2 kernel on Blackwell.
+- **diffusers — Wan2.2 TI2V-5B** (per denoise step): bf16 161 → `sageattention2-blackwell`
+  158.7 → `fp4-gemm` NVFP4 79.9 (2.01x) → `torch.compile` **42.5 ms (3.79x)**.
+- **transformers — Qwen3-8B** (prefill 4096): bf16 379 → `sageattention2-blackwell`
+  365.5 → `fp4-gemm` NVFP4 151.8 (2.50x) → `flashrt-residual-norm-quant` (`kernelize`)
+  133.2 (2.85x) → `torch.compile` **114.2 ms (3.32x)**; decode 66.4 → **86.7 tok/s (1.31x)**.
 
-**Demos & Spaces**
-
-- 🎬 **diffusers — Wan2.2 (FP8 / NVFP4):** [`flashrt/flashrt-fast-wan22`](https://huggingface.co/spaces/flashrt/flashrt-fast-wan22)
-  — Wan's DiT quantized via the **diffusers quantization API**
-  (`WanTransformer3DModel.from_pretrained(quantization_config=FlashRTDiffusersConfig(...))`),
-  + community FA2 attention + FP8 VAE convs.
-- ⚡ **transformers — Qwen3-8B:** [`flashrt/flashrt-kernelize-qwen3`](https://huggingface.co/spaces/flashrt/flashrt-kernelize-qwen3)
-  — FlashRT through the **official transformers APIs**: a registered **quantization
-  backend** (`from_pretrained(quantization_config=FlashRTConfig(...))`, like
-  torchao/bitsandbytes) for FP8/NVFP4 GEMMs, `kernelize()` for RMSNorm (cosine
-  0.9999), and the `attn_implementation` Hub-kernel attention backend. Prefill
-  1.50× (FP8, quality preserved) / 2.91× (NVFP4).
-- 📝 **Blog:** *FlashRT kernels in `transformers` and `diffusers` on Blackwell* —
-  [English](#) · [中文](#) *(links on publish)*.
-
-Demo source: [`demos/space/`](demos/space/).
+cosine vs BF16 ≈ 0.999. Demo source: [`demos/space/`](demos/space/).
 
 ## Current Snapshot
 
