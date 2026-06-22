@@ -54,7 +54,7 @@ concurrency:
   cancel-in-progress: false
 
 # Mirrors kernel repos to model repos so older `kernels<0.13` clients can
-# resolve version branches such as `v1`.
+# resolve version branches such as `v1`; rerun after new kernel builds finish.
 jobs:
   mirror:
     name: Mirror ${{ matrix.package }}
