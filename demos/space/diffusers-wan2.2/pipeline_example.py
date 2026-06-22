@@ -6,10 +6,10 @@ torchao / bitsandbytes), and `torch.compile` then gives the largest per-step win
 
     python pipeline_example.py [bf16|fp8|nvfp4]   # default nvfp4
 
-Measured per denoise step, 480², RTX 5090 (SM120):
-    bf16  161 ms (1.00x)
-    fp8    67 ms (2.40x, torch.compile + static-scale; quality-preserving, cos 0.9999)
-    nvfp4  44 ms (3.63x, torch.compile) / 81 ms (1.97x, eager)
+Measured per denoise step, 480x480x33, RTX 5090 (SM120), cosine vs BF16 ~0.999:
+    bf16   161.0 ms (1.00x)
+    nvfp4   79.9 ms (2.01x, eager) / 42.5 ms (3.79x, torch.compile)
+    fp8    quality-preserving option (mode="fp8", cosine ~0.9999)
 """
 
 import sys
@@ -28,8 +28,8 @@ def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "nvfp4"
     print(f"loading Wan2.2 via the official diffusers quantization API (mode={mode}) ...")
 
-    # One call: quantized transformer (quantization_config) + FA2 attention + FP8 VAE
-    # + torch.compile (auto-on for nvfp4). See optimize.load_flashrt_wan.
+    # One call: quantized transformer (quantization_config) + SageAttention2 +
+    # FP8 VAE + torch.compile (auto-on for nvfp4). See optimize.load_flashrt_wan.
     pipe = load_flashrt_wan(MODEL_ID, mode=mode, height=H, width=W, num_frames=FRAMES)
 
     prompt = "a cat surfing a wave, cinematic, golden hour"

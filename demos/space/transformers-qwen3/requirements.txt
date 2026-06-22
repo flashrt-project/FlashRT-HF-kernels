@@ -1,0 +1,10 @@
+# Tested on Blackwell (SM120) with:
+#   torch 2.11.0+cu128, transformers 5.12.1, kernels 0.12.3
+# The FlashRT Hub kernels resolve a torch211-cu128 build, and the NVFP4 (4-bit)
+# path needs Blackwell tensor cores. transformers/diffusers require kernels<0.13.
+torch>=2.11
+transformers>=5.0
+accelerate
+kernels>=0.12,<0.13
+gradio>=4.0       # app.py (Gradio UI) only
+spaces            # app.py (ZeroGPU) only

@@ -80,17 +80,17 @@ APIs**: the transformer's FP8/NVFP4 GEMMs load via the **quantization API**
 attention via the FlashRT SageAttention2 Blackwell processor (SM120), and the
 VAE's 3D convs in FP8.
 
-**Per denoise step, 480², eager (RTX 5090 — what ZeroGPU runs):**
+**Per denoise step, 480×480×33, RTX 5090 (SM120), cosine vs BF16 ≈ 0.999:**
 
-| stack | speedup | cosine vs BF16 |
+| stack | ms/step | vs BF16 |
 |---|---:|---:|
-| BF16 | 1.00x | — |
-| FlashRT FP8 | **1.28x** | 0.99989 |
-| **FlashRT NVFP4 (4-bit)** | **1.97x** | 0.99864 |
+| BF16 | 161.0 | 1.00x |
+| **FlashRT NVFP4 (4-bit), eager** | 79.9 | **2.01x** |
+| **+ torch.compile** | 42.5 | **3.79x** |
 
-NVFP4 (4-bit) is the headline; FP8 uses a generic per-Linear quantizer. FlashRT
-also quantizes the VAE (FP8 3D convs), which the transformer quantizer
-(Linear-only) doesn't cover.
+NVFP4 (4-bit) is the headline; FP8 is the quality-preserving option. FlashRT also
+runs SageAttention2 (attention) and FP8 VAE 3D convs (`world-model-conv`).
+The 3.79x uses `torch.compile`; on ZeroGPU the equivalent is AoTI.
 """
 
 

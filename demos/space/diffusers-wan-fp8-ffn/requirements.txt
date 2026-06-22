@@ -1,9 +1,0 @@
-torch
-diffusers>=0.36
-transformers>=4.51
-accelerate
-ftfy
-# transformers/diffusers require kernels<0.13; the flashrt kernel resolves there too.
-kernels>=0.12,<0.13
-gradio>=4.0
-spaces

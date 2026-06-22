@@ -10,10 +10,11 @@ Everything loads through official entry points — no model surgery:
 
     python serving_example.py [bf16|fp8|nvfp4]   # default nvfp4
 
-Measured (RTX 5090, 1024-token prefill + greedy decode):
-    bf16   prefill 100 ms   decode 56 tok/s
-    fp8    prefill  62 ms   decode 64 tok/s   (static-scale, quality-preserving)
-    nvfp4  prefill  36 ms   decode 69 tok/s   <- prefill 2.8x, decode 1.22x
+Measured (RTX 5090, Qwen3-8B, 1024-token prefill + greedy decode), cosine ~0.999:
+    bf16   prefill 98.3 ms   decode 66.4 tok/s
+    nvfp4  prefill 33.5 ms   decode 86.7 tok/s   (NVFP4 GEMMs + kernelize RMSNorm)
+                                                 -> prefill 2.93x, decode 1.31x
+    (fp8 is the quality-preserving option: mode="fp8")
 """
 
 import sys

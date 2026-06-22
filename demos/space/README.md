@@ -14,13 +14,14 @@ acceleration demos, not full-runtime replacements.
 
 | Folder | Library | Model | Integration |
 |---|---|---|---|
-| `transformers-qwen3-fp8-mlp` | transformers | Qwen3-8B | official APIs: quantization backend (FP8/NVFP4) + `kernelize` (RMSNorm) + `attn_implementation` (FA2) |
-| `diffusers-wan-fp8-ffn` | diffusers | Wan2.2 TI2V-5B | official APIs: diffusers quantization backend (FP8/NVFP4) + FA2 attn (SM120) + FP8 VAE |
+| `transformers-qwen3` | transformers | Qwen3-8B | official APIs: quantization backend (FP8/NVFP4) + `kernelize` (RMSNorm) + `attn_implementation` (SageAttention2) |
+| `diffusers-wan2.2` | diffusers | Wan2.2 TI2V-5B | official APIs: diffusers quantization backend (FP8/NVFP4) + `set_attn_processor` (SageAttention2) + FP8 VAE |
 
 Both demos go **entirely through each library's official APIs** — FlashRT
 registers as a quantization backend (`quantization_config`, like torchao /
-bitsandbytes) so the FP8/NVFP4 GEMMs load via `from_pretrained`. Numbers are
-eager (what ZeroGPU runs), RTX 5090.
+bitsandbytes) so the FP8/NVFP4 GEMMs load via `from_pretrained`. Numbers below are
+RTX 5090 (SM120); the headline rows use `torch.compile` (on ZeroGPU the equivalent
+is AoTI).
 
 - **transformers (Qwen3-8B):** quantization backend (NVFP4 GEMMs) + `kernelize()`
   RMSNorm (the gpt-oss path) + `attn_implementation` FlashRT SageAttention2
