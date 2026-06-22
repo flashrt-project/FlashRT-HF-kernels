@@ -25,6 +25,10 @@ Expected result:
   benchmarks, examples, and `benchmarks/RESULTS.md`;
 - `kernel-builder-docker check-config` passes for every v1 package.
 
+`scripts/prebuild_check.py` discovers every package from `*/build.toml`.
+Do not maintain a separate handwritten release list for this gate; otherwise a
+new package can accidentally skip config, docs, artifact, or cache checks.
+
 ## Full Build Window
 
 Run this only after source, tests, benchmark scripts, and docs have settled:

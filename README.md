@@ -40,7 +40,7 @@ Start here:
 
 - `docs/usage.md`: package map, model integration rules, and copy-pasteable
   usage snippets.
-- Package cards: each `flashrt-*/CARD.md` explains what that Hub package
+- Package cards: each package `CARD.md` explains what that Hub package
   contains and where it should be used.
 - `examples/`: runnable top-level examples for direct Hub loading and FFN
   replacement.
@@ -131,6 +131,8 @@ demos:
   output and schedule-specific validation.
 - `fp8-kv-attention/benchmarks`: native Blackwell XQA attention over FP8 E4M3
   paged K/V cache for Qwen3.6-style BF16-query decode/verify shapes.
+- `adaptive-layernorm-producers/benchmarks`: AdaLayerNorm/no-affine LayerNorm
+  producer fusion to FP8/NVFP4 activations for DiT/Wan/video blocks.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
   preallocated buffers and CUDA Graph replay for PI0.5/GROOT-shaped FFN chains.
 - `demos/runtime-demo`: multi-package PI0.5-shaped runtime prototype using
@@ -255,6 +257,8 @@ Second-batch VLA/runtime packages target the model-demo hot path:
   for VLA block glue.
 - `flashrt-adaptive-norms`: AdaRMSNorm/style modulation and fused
   residual/AdaRMSNorm/static-FP8 output for DiT/VLA/world-model blocks.
+- `adaptive-layernorm-producers`: AdaLayerNorm/no-affine LayerNorm producer
+  fusion to FP8 or NVFP4 activations for DiT/Wan/video diffusion blocks.
 - `flashrt-spatiotemporal-layout`: NCDHW/BLC layout, temporal unshuffle,
   channel-bias, and short-cache helpers for VLA/video/world-model pipelines.
 - `vl-transformer-primitives`: Q/K norm + RoPE + KV-write staging and vision
@@ -287,6 +291,7 @@ packed QKV -> split Q/K -> RMSNorm Q/K -> RoPE Q/K
 decode Q/K/V -> RMSNorm Q/K -> rotate-half RoPE Q/K -> Q stage / KV cache write
 video/action/und residuals -> gated residual updates -> BF16 segment outputs
 style -> AdaRMSNorm/style gate -> BF16 or static-FP8 activation
+BF16 x/style -> AdaLayerNorm -> FP8 or NVFP4 activation producer
 NCDHW latent -> BLC tokens / temporal unshuffle / channel-bias / cache update
 ```
 
@@ -314,6 +319,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `flashrt-qkv-cache-rope` | Runtime package | Packed-QKV split, Q/K RMSNorm, RoPE staging, decode Q staging, and KV cache-write for VLA/VLM/video attention inputs. |
 | `flashrt-vla-residual-gates` | Runtime package | Video/action/und joint gated residual updates for VLA block glue. |
 | `flashrt-adaptive-norms` | Runtime package | AdaRMSNorm/style modulation and fused residual/AdaRMSNorm/static-FP8 activation output for DiT/VLA/world-model blocks. |
+| `adaptive-layernorm-producers` | Runtime package | AdaLayerNorm/no-affine LayerNorm producer fusion to FP8 or NVFP4 activations for DiT/Wan/video diffusion blocks. |
 | `flashrt-spatiotemporal-layout` | Runtime package | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers for VLA/video/world-model pipelines. |
 | `flashrt-vla-video` | V1 block | VLA, vision, video, and diffusion attention postprocess kernels that are reusable outside the FlashRT serving engine. |
 | `flashrt-nvfp4` | V1 block | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |

@@ -15,6 +15,7 @@ on:
         type: choice
         options:
           - all
+          - adaptive-layernorm-producers
           - MiniMaxAI-msa-blackwell
           - bf16-linear-gemv
           - causal-conv1d-state
@@ -59,6 +60,7 @@ jobs:
       fail-fast: false
       matrix:
         package:
+          - adaptive-layernorm-producers
           - MiniMaxAI-msa-blackwell
           - bf16-linear-gemv
           - causal-conv1d-state

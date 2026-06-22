@@ -33,6 +33,7 @@ on:
       - "fp8-kv-attention/**"
       - "causal-conv1d-state/**"
       - "gated-delta-attention/**"
+      - "adaptive-layernorm-producers/**"
   workflow_dispatch:
     inputs:
       package:
@@ -70,6 +71,7 @@ on:
           - fp8-kv-attention
           - causal-conv1d-state
           - gated-delta-attention
+          - adaptive-layernorm-producers
 
 permissions:
   contents: read
@@ -114,6 +116,7 @@ jobs:
           - fp8-kv-attention
           - causal-conv1d-state
           - gated-delta-attention
+          - adaptive-layernorm-producers
 
     steps:
       - uses: actions/checkout@v4

@@ -16,34 +16,6 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-V1_PACKAGES = [
-    "flashrt-gemm-epilogues",
-    "flashrt-fp8-ffn",
-    "flashrt-vla-video",
-    "flashrt-nvfp4",
-    "flashrt-smallm-gemm",
-    "flashrt-fused-quant",
-]
-V2_CANDIDATE_PACKAGES = [
-    "flashrt-fp8-swiglu-ffn",
-    "flashrt-residual-norm-quant",
-    "flashrt-qkv-cache-rope",
-    "flashrt-vla-residual-gates",
-    "flashrt-adaptive-norms",
-    "flashrt-spatiotemporal-layout",
-    "MiniMaxAI-msa-blackwell",
-    "vl-transformer-primitives",
-    "diffusion-step-ops",
-    "turboquant-kv",
-    "linear-attention-primitives",
-    "bf16-linear-gemv",
-    "transformer-fused-ops",
-    "grouped-moe-gemv",
-    "linear-attention-seq-state",
-    "world-model-conv",
-    "fp4-fused-ops",
-    "fp4-gemm",
-]
 REQUIRED_DOCS = [
     "docs/benchmark-baselines.md",
     "docs/correctness-gating.md",
@@ -81,6 +53,17 @@ ARTIFACT_NAMES = [
     "result",
     "result-2",
 ]
+
+
+def discover_packages() -> list[str]:
+    """Return every Kernel Hub package in this repository.
+
+    Keep this dynamic. New packages must automatically enter the prebuild gate;
+    otherwise it is too easy to publish a package without the same docs,
+    artifact, and config checks as the older packages.
+    """
+
+    return sorted(path.parent.name for path in ROOT.glob("*/build.toml"))
 
 
 def run(cmd: list[str], cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
@@ -191,12 +174,19 @@ def main() -> int:
         default="/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker",
         help="kernel-builder-docker command path",
     )
+    parser.add_argument(
+        "--package",
+        action="append",
+        dest="packages",
+        help="check only this package; may be passed multiple times",
+    )
     args = parser.parse_args()
 
     errors: list[str] = []
     warnings: list[str] = []
+    packages = args.packages or discover_packages()
 
-    for pkg in V1_PACKAGES + V2_CANDIDATE_PACKAGES:
+    for pkg in packages:
         check_package(pkg, errors, warnings)
         if args.check_config:
             check_config(pkg, args.builder, errors)

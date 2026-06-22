@@ -29,6 +29,7 @@ builds.
 | `flashrt-fused-quant` | G5 RC | Split and merged SiLU+NVFP4 quantization correctness, package tests, examples, benchmark latency grid, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, memory-bandwidth benchmark, residual/RMSNorm slices |
 | `fp4-fused-ops` | G4 source RC | FP16-to-NVFP4 producer and FP4-to-FP4 combiner package passes 26/26 strict source checks on RTX 5090; benchmark rows document producer/combiner latency and v2-vs-v1 comparisons | HF Jobs artifact build/upload, installed-artifact validation, multi-hardware validation |
 | `fp4-gemm` | G4 source RC | Native Blackwell NVFP4 W4A16 GEMM package passes 9/9 strict source checks on RTX 5090 across variants 0/1/2; benchmark rows report schedule-specific latency | HF Jobs artifact build/upload, installed-artifact validation, stronger library/internal low-bit comparison for headline claims |
+| `adaptive-layernorm-producers` | G4 source RC | AdaLayerNorm/no-affine LayerNorm producer fusion to FP8 or NVFP4 passes full source correctness on RTX 5090; representative Wan/DiT/VLA shapes show 12-25x vs eager producer chains | HF Jobs artifact build/upload, installed-artifact validation, legacy `v1` mirror, multi-hardware validation |
 
 ## V1 Batch Blocks
 

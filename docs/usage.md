@@ -54,6 +54,7 @@ Runtime packages used by the VLA/world-model and PI0.5 HF-kernel demo:
 | `flashrt/flashrt-qkv-cache-rope` | Packed-QKV split, Q/K RMSNorm, RoPE, joint Q/K/V workspace writes, GQA sequence cache writes, decode Q staging, and KV cache-write. | You need attention staging for VLA/VLM/video blocks, including graph-friendly decoder KV cache writes. |
 | `flashrt/flashrt-vla-residual-gates` | Video/action/und joint gated residual updates. | You have multi-segment VLA block glue and want one CUDA launch for the segment residual/gate updates. |
 | `flashrt/flashrt-adaptive-norms` | AdaRMSNorm/style modulation and fused residual/AdaRMSNorm/static-FP8 output. | You need DiT/VLA/world-model adaptive normalization and optional FP8 activation output. |
+| `flashrt/adaptive-layernorm-producers` | AdaLayerNorm/no-affine LayerNorm producer fusion to FP8 or NVFP4 activations. | You need Wan/DiT/video diffusion producer fusion before FP8 or NVFP4 GEMM consumers. |
 | `flashrt/flashrt-spatiotemporal-layout` | NCDHW/BLC layout, temporal unshuffle, channel-bias, and short-cache helpers. | You need world-model/video layout glue to keep the model-demo hot path on CUDA. |
 | `flashrt/linear-attention-primitives` | Small-M BF16 linear, QKV broadcast split, partial RoPE, and gated-delta preparation helpers. | You are assembling a transformer linear-attention block and need graph-friendly staging ops. |
 | `flashrt/bf16-linear-gemv` | Native BF16 M=1 decode GEMV variants. | You need a graph-friendly decode projection path when FP8/FP4 weights are not used. |
@@ -88,6 +89,29 @@ For statically calibrated per-tensor FP8, pass
 `alpha = float(input_scale * weight_scale)` from host-side calibration metadata.
 The package targets Blackwell `sm_120a` and exposes `M=1` decode plus
 `2 <= M <= 64` small-M rows in v1.
+
+### Adaptive LayerNorm Producer To FP8/NVFP4
+
+```python
+from kernels import get_kernel
+import torch
+
+ops = get_kernel("flashrt/adaptive-layernorm-producers", version=1, trust_remote_code=True)
+
+rows, dim = 2520, 3072
+x = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+scale = torch.zeros((dim,), device="cuda", dtype=torch.bfloat16)
+shift = torch.zeros((dim,), device="cuda", dtype=torch.bfloat16)
+act_scale = torch.tensor([0.025], device="cuda", dtype=torch.float32)
+
+# Use persistent outputs in runtime hot paths and CUDA Graph capture.
+out_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+ops.ada_layer_norm_quant_fp8_bf16(x, scale, shift, act_scale, out=out_fp8)
+
+packed_nvfp4, sf_swizzled = ops.ada_layer_norm_quant_nvfp4_swizzled_bf16(
+    x, scale, shift
+)
+```
 
 ### Qwen3.6-Style Linear Attention State Path
 

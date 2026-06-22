@@ -1,0 +1,29 @@
+[general]
+name = "adaptive-layernorm-producers"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/adaptive-layernorm-producers"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+]
+
+[kernel.adaptive_layernorm_producers]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+src = [
+  "csrc/ada_layer_norm_fp8.cu",
+  "csrc/ada_layer_norm_fp8.cuh",
+  "csrc/dit_layer_norm_fp8.cu",
+  "csrc/dit_layer_norm_fp8.cuh",
+]

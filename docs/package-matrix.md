@@ -16,6 +16,7 @@
 | `gated-delta-attention` | `gated_delta_recurrent_bf16`, `gated_delta_chunk_smem_bf16`, `lin_split_qkv_gqa_bf16`, `gdn_gating_bf16`, `gdn_chunk_from_conv_smem_bf16`, `gdn_wy_*_b64_*`, `gdn_wy_*_mma_fla_bf16` | `csrc/kernels/gated_deltanet_qwen36.*`, `csrc/kernels/linear_attention/gated_delta_wy_bf16*` | PyTorch Gated DeltaNet recurrent/chunk reference with BF16 state contract | Stateful linear-attention recurrence plus Qwen3.6-style prefill/WY blocks and FLA-style native CUDA MMA prefill |
 | `bf16-linear-gemv` | `bf16_decode_gemv_bf16`, `bf16_decode_gemv_unrolled_bf16` | `csrc/gemm/bf16_gemv_m1_sm120.*`, `csrc/kernels/nexn2_bf16_gemv.*` | PyTorch BF16 GEMV reference | M=1 BF16 decode projection/GEMV path |
 | `transformer-fused-ops` | `rms_norm_gated_silu_bf16`, `silu_mul_bf16`, `embedding_lookup_bf16`, `partial_rope_qk_bf16`, `argmax_bf16`, `nexn2_*` helpers | `csrc/kernels/qwen36_misc.*`, `silu_mul_qwen36.*`, `rms_norm_gated_silu_qwen36.*`, `nexn2_misc.*`, `nexn2_router_topk.*` | PyTorch eager references | Transformer hot-path activation, layout, RoPE, argmax/spec, and router helper ops |
+| `adaptive-layernorm-producers` | `ada_layer_norm_quant_fp8_bf16`, `ada_layer_norm_quant_fp8_modfp8_bf16`, `awq_ada_layer_norm_quant_fp8_bf16`, `ada_layer_norm_quant_nvfp4_swizzled_bf16`, `ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16`, `layer_norm_no_affine_quant_fp8_static_bf16` | `csrc/quantize/ada_layer_norm_fp8.*`, `csrc/kernels/dit_bf16.cu` | PyTorch eager producer chain plus bit-level NVFP4 reference | DiT/Wan/video diffusion producer fusion before FP8 or NVFP4 GEMM consumers |
 | `grouped-moe-gemv` | `w4a16_decode_gemv_bf16`, `grouped_w4a16_gemv_bf16` | `csrc/kernels/nexn2_w4a16_gemv.*`, `nexn2_moe_grouped_w4a16.*` | Deterministic packed NVFP4 analytic reference | Blackwell W4A16 MoE decode/routed-slot GEMV |
 | `linear-attention-seq-state` | `gated_delta_recurrent_seq_bf16` | `csrc/kernels/nexn2_gdn_seq.*` | PyTorch sequential state reference | One-launch prefill scan for Gated DeltaNet style linear attention |
 
@@ -33,6 +34,7 @@ is not a priority order.
 | Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP16-to-NVFP4 producers, FP4-to-FP4 combiners, and NVFP4 W4A16 GEMM |
 | FP8 KV attention | `fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache for long-context decode/verify |
 | Qwen3.6/NexN2 linear-attention state | `causal-conv1d-state`, `gated-delta-attention`, `linear-attention-primitives`, `linear-attention-seq-state`, `transformer-fused-ops` | Conv1D state update, Gated DeltaNet recurrence/chunks, FLA-style WY prefill blocks, one-launch sequence scan, and staging helpers |
+| DiT/Wan producer fusion | `adaptive-layernorm-producers`, `diffusion-step-ops`, `world-model-conv`, `fp8-gemm`, `fp4-fused-ops`, `fp4-gemm` | LayerNorm/AdaLayerNorm low-bit activation producers, diffusion runtime glue, and adjacent low-bit GEMM consumers |
 
 Do not run full builder packaging for one block while the other v1 blocks are
 still missing source-extension tests, benchmark grids, or examples. Full
