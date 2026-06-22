@@ -52,6 +52,8 @@ concurrency:
   group: flashrt-legacy-kernel-mirror-${{ github.ref }}
   cancel-in-progress: false
 
+# Mirrors kernel repos to model repos so older `kernels<0.13` clients can
+# resolve version branches such as `v1`.
 jobs:
   mirror:
     name: Mirror ${{ matrix.package }}
