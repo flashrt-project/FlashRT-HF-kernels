@@ -97,6 +97,10 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
   float d[num_tiles_q][2]; // denominator
 
   uint32_t q_scale_idx, k_scale_idx;
+  const uint32_t q_warp_idx = get_warp_idx_q<num_warps_q, num_warps_k>();
+  const uint32_t q_warp_linear = bx * num_warps_q + q_warp_idx;
+  const uint32_t q_warp_start = bx * CTA_Q + q_warp_idx * WARP_Q;
+  const bool q_warp_valid = q_warp_start < qo_len;
 
   if constexpr (Q_GRAN == QuantGranularity::kPerBlock)
   {
@@ -105,13 +109,14 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
   }
   else if constexpr (Q_GRAN == QuantGranularity::kPerWarp)
   {
-    const uint32_t num_warp_block_q = gridDim.x * num_warps_q;
-    q_scale_idx = batch_id * num_qo_heads * num_warp_block_q + head_id * num_warp_block_q + bx * num_warps_q + get_warp_idx_q<num_warps_q, num_warps_k>();
+    const uint32_t num_warp_block_q = div_ceil(qo_len, WARP_Q);
+    q_scale_idx = batch_id * num_qo_heads * num_warp_block_q + head_id * num_warp_block_q + min(q_warp_linear, num_warp_block_q - 1);
   }
   else if constexpr (Q_GRAN == QuantGranularity::kPerThread)
   {
-    const uint32_t num_warp_block_q = gridDim.x * num_warps_q;
-    q_scale_idx = batch_id * num_qo_heads * (num_warp_block_q * 8) + head_id * (num_warp_block_q * 8) + bx * (num_warps_q * 8) + get_warp_idx_q<num_warps_q, num_warps_k>() * 8 + lane_id / 4;
+    const uint32_t num_warp_block_q = div_ceil(qo_len, WARP_Q);
+    const uint32_t q_warp_clamped = min(q_warp_linear, num_warp_block_q - 1);
+    q_scale_idx = batch_id * num_qo_heads * (num_warp_block_q * 8) + head_id * (num_warp_block_q * 8) + q_warp_clamped * 8 + lane_id / 4;
   }
 
   if constexpr (K_GRAN == QuantGranularity::kPerBlock)
@@ -244,7 +249,7 @@ __global__ void qk_int_sv_f16_attn_kernel(int8_t *__restrict__ Q, int8_t *__rest
     &K_lane_base_ptr, K_smem_offset_load, stride_seq_k, smem_K, K_load_idx_lane_base, kv_len);
   cp_async::commit_group();
 
-  float q_scale = Q_scale[q_scale_idx];
+  float q_scale = q_warp_valid ? Q_scale[q_scale_idx] : 0.0f;
 
   float original_sm_scale = sm_scale;
   float dequant_scale = q_scale * K_scale[k_scale_idx + 0 * k_scale_advance_offset];

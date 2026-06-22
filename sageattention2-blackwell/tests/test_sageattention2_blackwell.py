@@ -237,6 +237,10 @@ def main() -> None:
                 ("wan_noncausal_s256_fp8v", 1, 256, 24, 24, False, True),
                 ("qwen_causal_gqa_s256_fp8v", 1, 256, 32, 8, True, True),
                 ("qwen_causal_gqa_s512_f16v", 1, 512, 32, 8, True, False),
+                ("wan_noncausal_s3600_partial_f16v", 1, 3600, 24, 24, False, False),
+                ("wan_noncausal_s3600_partial_fp8v", 1, 3600, 24, 24, False, True),
+                ("wan_noncausal_s5070_partial_f16v", 1, 5070, 24, 24, False, False),
+                ("qwen_causal_gqa_s3600_partial_f16v", 1, 3600, 32, 8, True, False),
             ]
         )
     for case in cases:

@@ -121,6 +121,7 @@ def main() -> None:
             ("wan_self_attn", 1024, 24, 24, False),
             ("wan_self_attn", 2520, 24, 24, False),
             ("wan_self_attn", 4096, 24, 24, False),
+            ("wan_self_attn", 5070, 24, 24, False),
         ]
     rows = [run_case(ops, *case, args.iters, args.warmup) for case in cases]
     lines = [
