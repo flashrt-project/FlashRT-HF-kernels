@@ -90,6 +90,10 @@ def mirror_branch(api: HfApi, repo_id: str, branch: str, token: str) -> None:
             exist_ok=True,
             token=token,
         )
+        try:
+            api.delete_tag(repo_id=repo_id, repo_type="model", tag=branch, token=token)
+        except Exception:
+            pass
         api.upload_folder(
             repo_id=repo_id,
             repo_type="model",
@@ -101,10 +105,6 @@ def mirror_branch(api: HfApi, repo_id: str, branch: str, token: str) -> None:
             commit_message=f"Mirror Kernel Hub artifacts for {branch}",
             token=token,
         )
-        try:
-            api.delete_tag(repo_id=repo_id, repo_type="model", tag=branch, token=token)
-        except Exception:
-            pass
         api.create_tag(
             repo_id=repo_id,
             repo_type="model",
