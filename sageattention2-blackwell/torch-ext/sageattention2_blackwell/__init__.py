@@ -14,19 +14,36 @@ HEAD_DIM = 128
 
 
 def padded_k64(seqlen_k: int) -> int:
-    return int(ops.padded_k64(int(seqlen_k)))
+    seqlen_k = int(seqlen_k)
+    if seqlen_k <= 0:
+        raise ValueError("seqlen_k must be positive")
+    return ((seqlen_k + 63) // 64) * 64
 
 
 def q_scale_elems(batch: int, seqlen_q: int, q_heads: int) -> int:
-    return int(ops.q_scale_elems(int(batch), int(seqlen_q), int(q_heads)))
+    batch = int(batch)
+    seqlen_q = int(seqlen_q)
+    q_heads = int(q_heads)
+    if batch <= 0 or seqlen_q <= 0 or q_heads <= 0:
+        raise ValueError("shape values must be positive")
+    return batch * q_heads * ((seqlen_q + 31) // 32)
 
 
 def k_scale_elems(batch: int, seqlen_k: int, kv_heads: int) -> int:
-    return int(ops.k_scale_elems(int(batch), int(seqlen_k), int(kv_heads)))
+    batch = int(batch)
+    seqlen_k = int(seqlen_k)
+    kv_heads = int(kv_heads)
+    if batch <= 0 or seqlen_k <= 0 or kv_heads <= 0:
+        raise ValueError("shape values must be positive")
+    return batch * kv_heads * ((seqlen_k + 63) // 64)
 
 
 def v_scale_elems(batch: int, kv_heads: int) -> int:
-    return int(ops.v_scale_elems(int(batch), int(kv_heads)))
+    batch = int(batch)
+    kv_heads = int(kv_heads)
+    if batch <= 0 or kv_heads <= 0:
+        raise ValueError("shape values must be positive")
+    return batch * kv_heads * HEAD_DIM
 
 
 def _check_bhd128(x: torch.Tensor, name: str) -> None:
