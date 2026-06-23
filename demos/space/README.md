@@ -20,8 +20,7 @@ acceleration demos, not full-runtime replacements.
 Both demos go **entirely through each library's official APIs** — FlashRT
 registers as a quantization backend (`quantization_config`, like torchao /
 bitsandbytes) so the FP8/NVFP4 GEMMs load via `from_pretrained`. Numbers below are
-RTX 5090 (SM120); the headline rows use `torch.compile` (on ZeroGPU the equivalent
-is AoTI).
+RTX 5090 (SM120); the `torch.compile` rows are local — ZeroGPU runs eager.
 
 - **transformers (Qwen3-8B):** quantization backend (NVFP4 GEMMs) + `kernelize()`
   RMSNorm (the gpt-oss path) + `attn_implementation` FlashRT SageAttention2
