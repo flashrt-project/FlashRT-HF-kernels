@@ -33,13 +33,19 @@ def _load(mode: str):
     the official diffusers quantization API (FlashRTDiffusersConfig)."""
     pipe = _state.get(mode)
     if pipe is None:
-        # ZeroGPU runs eager (no torch.compile / JIT).
+        # No torch.compile (JIT would burn ZeroGPU quota); we AoT-compile instead.
         pipe = load_flashrt_wan(
             MODEL_ID, mode=("bf16" if mode == "baseline" else mode),
             height=HEIGHT, width=WIDTH, num_frames=NUM_FRAMES,
             vae_fp8=(mode != "baseline"), sage_attn=(mode != "baseline"),
             compile_transformer=False,
         )
+        if mode != "baseline":
+            from flashrt_aoti import aot_compile_transformer
+            aot_compile_transformer(
+                pipe, example_prompt="a calibration clip of gentle waves",
+                height=HEIGHT, width=WIDTH, num_frames=NUM_FRAMES,
+            )
         _state[mode] = pipe
     return pipe
 
@@ -92,7 +98,7 @@ VAE's 3D convs in FP8.
 
 NVFP4 (4-bit) is the headline; FP8 is the quality-preserving option. FlashRT also
 runs SageAttention2 (attention) and FP8 VAE 3D convs (`world-model-conv`).
-The 2.01x eager is what ZeroGPU runs; 3.79x adds local `torch.compile`.
+ZeroGPU AoT-compiles the transformer at startup (aokit) — no per-call JIT.
 """
 
 

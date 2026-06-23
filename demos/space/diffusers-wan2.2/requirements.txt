@@ -10,3 +10,4 @@ ftfy
 kernels>=0.12,<0.13
 gradio>=4.0       # app.py (Gradio UI) only
 spaces            # app.py (ZeroGPU) only
+aokit             # app.py: ahead-of-time compile on ZeroGPU (no JIT)

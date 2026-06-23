@@ -64,8 +64,10 @@ pipe.transformer.set_attn_processor(WanSageAttention2Processor())   # SageAttent
 cosine vs BF16 ≈ 0.999.
 
 - **NVFP4 (4-bit) is the headline** — the same dynamic-per-block path FlashRT's
-  production runtime uses. The eager NVFP4 step is **2.01x** (what ZeroGPU runs);
-  the **3.79x** adds `torch.compile`, a local-GPU number (Spaces run eager).
+  production runtime uses. The eager NVFP4 step is **2.01x**; **+ AoT compilation
+  → 3.79x**. ZeroGPU doesn't run `torch.compile` (JIT would burn the quota), so
+  the Space AoT-compiles the transformer once at startup via
+  [`aokit`](https://github.com/huggingface/aokit) (see `flashrt_aoti.py`).
 - **FP8** is available as the quality-preserving precision (`mode="fp8"`,
   cosine ≈ 0.9999). A Linear-level quantizer can't fuse the GELU MLP, so FP8
   trails a hand-fused path — the cost of going through the official API; NVFP4 is
