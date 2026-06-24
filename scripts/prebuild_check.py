@@ -127,10 +127,16 @@ def check_package(pkg: str, errors: list[str], warnings: list[str]) -> None:
 
     source_entries: list[str] = []
     source_entries.extend(config.get("torch", {}).get("src", []))
+    allowed_backends = set(config.get("general", {}).get("backends", []))
     for kernel_name, kernel_cfg in config.get("kernel", {}).items():
         backend = kernel_cfg.get("backend")
-        if backend != "cuda":
+        if backend not in {"cuda", "rocm"}:
             fail(errors, f"{pkg}: kernel {kernel_name} backend is {backend!r}")
+        if backend not in allowed_backends:
+            fail(
+                errors,
+                f"{pkg}: kernel {kernel_name} backend {backend!r} is not listed in general.backends",
+            )
         source_entries.extend(kernel_cfg.get("src", []))
 
     for rel in source_entries:

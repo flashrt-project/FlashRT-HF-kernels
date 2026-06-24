@@ -2,7 +2,7 @@
 name = "flashrt-fp8-ffn"
 license = "Apache-2.0"
 version = 1
-backends = ["cuda"]
+backends = ["cuda", "rocm"]
 
 [general.cuda]
 minver = "12.8"
@@ -25,4 +25,24 @@ cuda-minver = "12.8"
 src = [
   "csrc/fp8_ffn.cu",
   "csrc/fp8_ffn.cuh",
+]
+
+[kernel.flashrt_fp8_ffn_rocm]
+backend = "rocm"
+depends = ["torch"]
+include = ["csrc"]
+rocm-archs = [
+  "gfx90a",
+  "gfx942",
+  "gfx950",
+  "gfx1030",
+  "gfx1100",
+  "gfx1101",
+  "gfx1102",
+]
+src = [
+  "csrc/rocm/fp8_ffn_rocm.hip",
+  "csrc/rocm/fp8_ffn_rocm.h",
+  "csrc/rocm/hipblaslt_simple.cpp",
+  "csrc/rocm/hipblaslt_simple.h",
 ]

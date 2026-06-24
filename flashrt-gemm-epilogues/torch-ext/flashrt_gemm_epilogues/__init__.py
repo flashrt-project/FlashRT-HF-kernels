@@ -126,8 +126,14 @@ def _channel_scale_quantize_fp8_static_bf16_fake(
     return None
 
 
+def _fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
 def _allocate_fp8_like(input: torch.Tensor) -> torch.Tensor:
-    return torch.empty(input.shape, device=input.device, dtype=torch.float8_e4m3fn)
+    return torch.empty(input.shape, device=input.device, dtype=_fp8_dtype())
 
 
 def bf16_linear_bf16(

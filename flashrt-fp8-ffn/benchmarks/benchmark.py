@@ -204,7 +204,7 @@ def load_installed_ops(artifact: str | None):
 def load_hub_ops(repo_id: str, version: int):
     from kernels import get_kernel
 
-    return get_kernel(repo_id, version=version, trust_remote_code=True)
+    return get_kernel(repo_id, version=version)
 
 
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:

@@ -54,7 +54,7 @@ class FlashRTFP8QuantEpilogue(torch.nn.Module):
     def __init__(self, *, repo_id: str, version: int) -> None:
         super().__init__()
         if get_kernel is not None:
-            self.ops = get_kernel(repo_id, version=version, trust_remote_code=True)
+            self.ops = get_kernel(repo_id, version=version)
         else:
             import flashrt_gemm_epilogues
 

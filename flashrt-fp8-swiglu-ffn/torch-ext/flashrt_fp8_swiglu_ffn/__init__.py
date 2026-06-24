@@ -34,6 +34,12 @@ _preload_cublaslt()
 from ._ops import add_op_namespace_prefix, ops
 
 
+def _fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp8_gemm_bf16"))
 def _fp8_gemm_bf16_fake(
     input: torch.Tensor,
@@ -180,7 +186,7 @@ def silu_mul_merged_quantize_fp8_static_bf16(
         out_fp8 = torch.empty(
             (gate_up_bf16.shape[0], gate_up_bf16.shape[1] // 2),
             device=gate_up_bf16.device,
-            dtype=torch.float8_e4m3fn,
+            dtype=_fp8_dtype(),
         )
     ops.silu_mul_merged_quantize_fp8_static_bf16(
         gate_up_bf16,
@@ -201,7 +207,7 @@ def gelu_mul_merged_quantize_fp8_static_bf16(
         out_fp8 = torch.empty(
             (gate_up_bf16.shape[0], gate_up_bf16.shape[1] // 2),
             device=gate_up_bf16.device,
-            dtype=torch.float8_e4m3fn,
+            dtype=_fp8_dtype(),
         )
     ops.gelu_mul_merged_quantize_fp8_static_bf16(
         gate_up_bf16,
@@ -243,7 +249,7 @@ def fp8_swiglu_mlp_bf16(
         hidden_fp8 = torch.empty(
             (input.shape[0], hidden),
             device=input.device,
-            dtype=torch.float8_e4m3fn,
+            dtype=_fp8_dtype(),
         )
     if out is None:
         out = torch.empty(
@@ -294,7 +300,7 @@ def fp8_geglu_mlp_bf16(
         hidden_fp8 = torch.empty(
             (input.shape[0], hidden),
             device=input.device,
-            dtype=torch.float8_e4m3fn,
+            dtype=_fp8_dtype(),
         )
     if out is None:
         out = torch.empty(

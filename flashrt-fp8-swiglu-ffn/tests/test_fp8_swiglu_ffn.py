@@ -28,6 +28,16 @@ REGISTRATION_INCLUDE = (
 )
 
 
+def fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
+def fp8_max() -> float:
+    return 240.0 if torch.version.hip is not None else 448.0
+
+
 class SourceOps:
     def __init__(self, namespace: str) -> None:
         self._ops = getattr(torch.ops, namespace)
@@ -43,7 +53,7 @@ class SourceOps:
             out = torch.empty(
                 (gate_up.shape[0], gate_up.shape[1] // 2),
                 device=gate_up.device,
-                dtype=torch.float8_e4m3fn,
+                dtype=fp8_dtype(),
             )
         self._ops.silu_mul_merged_quantize_fp8_static_bf16(gate_up, scale, out)
         return out
@@ -53,7 +63,7 @@ class SourceOps:
             out = torch.empty(
                 (gate_up.shape[0], gate_up.shape[1] // 2),
                 device=gate_up.device,
-                dtype=torch.float8_e4m3fn,
+                dtype=fp8_dtype(),
             )
         self._ops.gelu_mul_merged_quantize_fp8_static_bf16(gate_up, scale, out)
         return out
@@ -81,7 +91,7 @@ class SourceOps:
             hidden_fp8 = torch.empty(
                 (x.shape[0], gate_up_w.shape[0] // 2),
                 device=x.device,
-                dtype=torch.float8_e4m3fn,
+                dtype=fp8_dtype(),
             )
         if out is None:
             out = torch.empty((x.shape[0], down_w.shape[0]), device=x.device, dtype=torch.bfloat16)
@@ -122,7 +132,7 @@ class SourceOps:
             hidden_fp8 = torch.empty(
                 (x.shape[0], gate_up_w.shape[0] // 2),
                 device=x.device,
-                dtype=torch.float8_e4m3fn,
+                dtype=fp8_dtype(),
             )
         if out is None:
             out = torch.empty((x.shape[0], down_w.shape[0]), device=x.device, dtype=torch.bfloat16)
@@ -191,7 +201,7 @@ def load_installed_ops(artifact: str | None):
 
 
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    return torch.clamp(x.float() / scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+    return torch.clamp(x.float() / scale.float(), -fp8_max(), fp8_max()).to(fp8_dtype())
 
 
 def dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
@@ -409,7 +419,7 @@ def run_shape(ops, label: str, shape: tuple[int, int, int, int]) -> None:
 def run_rejection_tests(ops) -> None:
     x, gate_up_w, down_w, x_s, gu_s, hid_s, dn_s = make_case(4, 128, 256, 128)
     bad_gate_up = torch.empty((4, 511), device="cuda", dtype=torch.bfloat16)
-    bad_hidden = torch.empty((4, 255), device="cuda", dtype=torch.float8_e4m3fn)
+    bad_hidden = torch.empty((4, 255), device="cuda", dtype=fp8_dtype())
 
     expect_runtime_error(
         "reject odd gate_up columns",

@@ -34,6 +34,12 @@ _preload_cublaslt()
 from ._ops import add_op_namespace_prefix, ops
 
 
+def _fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp8_gemm_bf16"))
 def _fp8_gemm_bf16_fake(
     input: torch.Tensor,
@@ -146,7 +152,7 @@ def fp8_linear_bias_gelu_quant_bf16(
             dtype=torch.bfloat16,
         )
     if out_fp8 is None:
-        out_fp8 = torch.empty_like(hidden_bf16, dtype=torch.float8_e4m3fn)
+        out_fp8 = torch.empty_like(hidden_bf16, dtype=_fp8_dtype())
     ops.fp8_linear_bias_gelu_quant_bf16(
         input,
         weight,
@@ -190,7 +196,7 @@ def fp8_gelu_mlp_bf16(
             dtype=torch.bfloat16,
         )
     if hidden_fp8 is None:
-        hidden_fp8 = torch.empty_like(hidden_bf16, dtype=torch.float8_e4m3fn)
+        hidden_fp8 = torch.empty_like(hidden_bf16, dtype=_fp8_dtype())
     if out is None:
         out = torch.empty(
             (input.shape[0], down_weight.shape[0]),

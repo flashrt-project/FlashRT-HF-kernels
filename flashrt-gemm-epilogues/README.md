@@ -89,7 +89,7 @@ replaces BF16 post-projection epilogue work with the FP8 quantization helpers.
 import torch
 from kernels import get_kernel
 
-ops = get_kernel("flashrt/flashrt-gemm-epilogues", version=1, trust_remote_code=True)
+ops = get_kernel("flashrt/flashrt-gemm-epilogues", version=1)
 
 x = torch.randn((4, 4096), device="cuda", dtype=torch.bfloat16)
 bias = torch.randn((4096,), device="cuda", dtype=torch.bfloat16)

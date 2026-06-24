@@ -3,14 +3,18 @@
 
 #include <limits>
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #endif
 
+#if defined(CUDA_KERNEL)
 #include "bf16_gemm_bias_gelu.cuh"
 #include "bias_gelu_quantize_fp8.cuh"
 #include "channel_scale_quantize_fp8.cuh"
+#elif defined(ROCM_KERNEL)
+#include "rocm/gemm_epilogues_rocm.h"
+#endif
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -27,8 +31,13 @@ void check_common_tensors(
               "input must have dtype torch.bfloat16");
   TORCH_CHECK(scale.scalar_type() == torch::kFloat32,
               "scale must have dtype torch.float32");
+  #if defined(ROCM_KERNEL)
+  TORCH_CHECK(out.scalar_type() == c10::ScalarType::Float8_e4m3fnuz,
+              "out must have dtype torch.float8_e4m3fnuz on ROCm");
+#else
   TORCH_CHECK(out.scalar_type() == c10::ScalarType::Float8_e4m3fn,
               "out must have dtype torch.float8_e4m3fn");
+#endif
   TORCH_CHECK(input.is_contiguous(), "input must be contiguous");
   TORCH_CHECK(scale.is_contiguous(), "scale must be contiguous");
   TORCH_CHECK(out.is_contiguous(), "out must be contiguous");
@@ -55,7 +64,7 @@ void launch_bias_gelu_quantize(
   const int N = static_cast<int>(N64);
   const long long M = input.numel() / N;
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
   flash_rt::quantize::bias_gelu_quantize_fp8_static_bf16(
@@ -67,7 +76,7 @@ void launch_bias_gelu_quantize(
       N,
       stream);
 #else
-  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -195,7 +204,7 @@ void bf16_linear_bf16(
   const int K = static_cast<int>(x.size(1));
   const int N = static_cast<int>(w.size(1));
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(x.device());
   auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
   flash_rt::gemm::bf16_gemm(
@@ -207,7 +216,7 @@ void bf16_linear_bf16(
       K,
       stream);
 #else
-  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -221,7 +230,7 @@ void bf16_linear_bias_bf16(
   const int K = static_cast<int>(x.size(1));
   const int N = static_cast<int>(w.size(1));
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(x.device());
   auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
   flash_rt::gemm::bf16_gemm_bias(
@@ -234,7 +243,7 @@ void bf16_linear_bias_bf16(
       K,
       stream);
 #else
-  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -248,7 +257,7 @@ void bf16_gemm_bias_gelu(
   const int K = static_cast<int>(a.size(1));
   const int N = static_cast<int>(b.size(1));
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(a.device());
   auto stream = at::cuda::getCurrentCUDAStream(a.get_device()).stream();
   flash_rt::gemm::bf16_gemm_bias_gelu(
@@ -261,7 +270,7 @@ void bf16_gemm_bias_gelu(
       K,
       stream);
 #else
-  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -275,7 +284,7 @@ void bf16_gemm_bias(
   const int K = static_cast<int>(a.size(1));
   const int N = static_cast<int>(b.size(1));
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(a.device());
   auto stream = at::cuda::getCurrentCUDAStream(a.get_device()).stream();
   flash_rt::gemm::bf16_gemm_bias(
@@ -288,7 +297,7 @@ void bf16_gemm_bias(
       K,
       stream);
 #else
-  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -340,7 +349,7 @@ void channel_scale_quantize_fp8_static_bf16(
               "input and channel_scale must be on the same CUDA device");
   const long long M = input.numel() / K;
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
   flash_rt::quantize::channel_scale_quantize_fp8_static_bf16(
@@ -352,7 +361,7 @@ void channel_scale_quantize_fp8_static_bf16(
       K,
       stream);
 #else
-  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-gemm-epilogues was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -371,7 +380,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor input, Tensor scale, Tensor! out) -> ()");
   ops.def("channel_scale_quantize_fp8_static_bf16("
           "Tensor input, Tensor channel_scale, Tensor scale, Tensor! out) -> ()");
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   ops.impl("bf16_linear_bf16",
            torch::kCUDA,
            &bf16_linear_bf16);

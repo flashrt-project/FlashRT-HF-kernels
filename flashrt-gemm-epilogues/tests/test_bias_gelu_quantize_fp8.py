@@ -5,9 +5,20 @@ import flashrt_gemm_epilogues as flashrt_ops
 
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available() or not hasattr(torch, "float8_e4m3fn"),
-    reason="CUDA with float8_e4m3fn support is required",
+    not torch.cuda.is_available()
+    or not (hasattr(torch, "float8_e4m3fn") or hasattr(torch, "float8_e4m3fnuz")),
+    reason="CUDA/ROCm with FP8 support is required",
 )
+
+
+def _fp8_dtype():
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
+def _fp8_max() -> float:
+    return 240.0 if torch.version.hip is not None else 448.0
 
 
 def _reference(input, bias, scale):
@@ -15,14 +26,14 @@ def _reference(input, bias, scale):
     if bias is not None:
         y = y + bias.float()
     y = torch.nn.functional.gelu(y, approximate="tanh")
-    y = torch.clamp(y / scale.float(), -448.0, 448.0)
-    return y.to(torch.float8_e4m3fn)
+    y = torch.clamp(y / scale.float(), -_fp8_max(), _fp8_max())
+    return y.to(_fp8_dtype())
 
 
 def _channel_scale_reference(input, channel_scale, scale):
     y = input.float() * channel_scale.float()
-    y = torch.clamp(y / scale.float(), -448.0, 448.0)
-    return y.to(torch.float8_e4m3fn)
+    y = torch.clamp(y / scale.float(), -_fp8_max(), _fp8_max())
+    return y.to(_fp8_dtype())
 
 
 @pytest.mark.parametrize("shape", [(4, 16), (2, 3, 32)])
@@ -56,7 +67,7 @@ def test_out_tensor_is_reused():
     input = torch.randn((2, 16), device=device, dtype=torch.bfloat16).contiguous()
     bias = torch.randn((16,), device=device, dtype=torch.bfloat16).contiguous()
     scale = torch.tensor([1.0], device=device, dtype=torch.float32)
-    out = torch.empty(input.shape, device=device, dtype=torch.float8_e4m3fn)
+    out = torch.empty(input.shape, device=device, dtype=_fp8_dtype())
 
     returned = flashrt_ops.bias_gelu_quantize_fp8_static_bf16(
         input, bias, scale, out=out

@@ -32,7 +32,7 @@ def main() -> None:
         raise SystemExit("CUDA is required")
 
     if get_kernel is not None:
-        ops = get_kernel(args.repo_id, version=args.version, trust_remote_code=True)
+        ops = get_kernel(args.repo_id, version=args.version)
     else:
         import flashrt_fp8_ffn as ops
 

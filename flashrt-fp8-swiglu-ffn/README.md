@@ -34,7 +34,7 @@ Tensor conventions:
 from kernels import get_kernel
 import torch
 
-ops = get_kernel("flashrt/flashrt-fp8-swiglu-ffn", version=1, trust_remote_code=True)
+ops = get_kernel("flashrt/flashrt-fp8-swiglu-ffn", version=1)
 
 x_scale = torch.tensor([0.05], device="cuda")
 gate_up_scale = torch.tensor([0.04], device="cuda")

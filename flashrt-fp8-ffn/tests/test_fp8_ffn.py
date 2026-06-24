@@ -28,6 +28,16 @@ REGISTRATION_INCLUDE = (
 )
 
 
+def fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
+def fp8_max() -> float:
+    return 240.0 if torch.version.hip is not None else 448.0
+
+
 class SourceOps:
     def __init__(self, namespace: str) -> None:
         self._ops = getattr(torch.ops, namespace)
@@ -44,7 +54,7 @@ class SourceOps:
         if hidden is None:
             hidden = torch.empty((x.shape[0], w.shape[0]), device=x.device, dtype=torch.bfloat16)
         if out is None:
-            out = torch.empty_like(hidden, dtype=torch.float8_e4m3fn)
+            out = torch.empty_like(hidden, dtype=fp8_dtype())
         self._ops.fp8_linear_bias_gelu_quant_bf16(
             x, w, bias, x_scale, w_scale, y_scale, hidden, out
         )
@@ -68,7 +78,7 @@ class SourceOps:
         if hidden is None:
             hidden = torch.empty((x.shape[0], up_w.shape[0]), device=x.device, dtype=torch.bfloat16)
         if hidden_fp8 is None:
-            hidden_fp8 = torch.empty_like(hidden, dtype=torch.float8_e4m3fn)
+            hidden_fp8 = torch.empty_like(hidden, dtype=fp8_dtype())
         if out is None:
             out = torch.empty((x.shape[0], down_w.shape[0]), device=x.device, dtype=torch.bfloat16)
         self._ops.fp8_gelu_mlp_bf16(
@@ -137,7 +147,7 @@ def load_installed_ops(artifact: str | None):
 
 
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    return torch.clamp(x.float() / scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+    return torch.clamp(x.float() / scale.float(), -fp8_max(), fp8_max()).to(fp8_dtype())
 
 
 def dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
@@ -151,7 +161,7 @@ def ref_gemm(x, w, x_scale, w_scale) -> torch.Tensor:
 def ref_linear_bias_gelu_quant(x, w, bias, x_scale, w_scale, y_scale):
     hidden = ref_gemm(x, w, x_scale, w_scale)
     y = torch.nn.functional.gelu(hidden.float() + bias.float(), approximate="tanh")
-    y_fp8 = torch.clamp(y / y_scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+    y_fp8 = torch.clamp(y / y_scale.float(), -fp8_max(), fp8_max()).to(fp8_dtype())
     return hidden, y_fp8
 
 

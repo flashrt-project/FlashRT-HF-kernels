@@ -5,12 +5,16 @@
 
 #include <limits>
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #endif
 
+#if defined(CUDA_KERNEL)
 #include "fp8_swiglu_ffn.cuh"
+#elif defined(ROCM_KERNEL)
+#include "rocm/fp8_swiglu_ffn_rocm.h"
+#endif
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -32,8 +36,13 @@ void check_scale(torch::Tensor const& scale, const char* name, int device) {
 
 void check_fp8_matrix(torch::Tensor const& t, const char* name) {
   check_cuda_tensor(t, name);
+#if defined(ROCM_KERNEL)
+  TORCH_CHECK(t.scalar_type() == c10::ScalarType::Float8_e4m3fnuz,
+              name, " must have dtype torch.float8_e4m3fnuz on ROCm");
+#else
   TORCH_CHECK(t.scalar_type() == c10::ScalarType::Float8_e4m3fn,
               name, " must have dtype torch.float8_e4m3fn");
+#endif
   TORCH_CHECK(t.dim() == 2, name, " must be a 2D tensor");
   TORCH_CHECK(t.size(0) > 0 && t.size(1) > 0,
               name, " dimensions must be non-zero");
@@ -54,8 +63,13 @@ void check_bf16_matrix(torch::Tensor const& t, const char* name) {
 
 void check_fp8_output(torch::Tensor const& t, const char* name) {
   check_cuda_tensor(t, name);
+#if defined(ROCM_KERNEL)
+  TORCH_CHECK(t.scalar_type() == c10::ScalarType::Float8_e4m3fnuz,
+              name, " must have dtype torch.float8_e4m3fnuz on ROCm");
+#else
   TORCH_CHECK(t.scalar_type() == c10::ScalarType::Float8_e4m3fn,
               name, " must have dtype torch.float8_e4m3fn");
+#endif
   TORCH_CHECK(t.dim() == 2, name, " must be a 2D tensor");
 }
 
@@ -94,7 +108,7 @@ void launch_fp8_gemm_bf16(
   const int K = static_cast<int>(input.size(1));
   const int N = static_cast<int>(weight.size(0));
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
   flash_rt::fp8_swiglu_ffn::fp8_gemm_descale_bf16out(
@@ -108,7 +122,7 @@ void launch_fp8_gemm_bf16(
       reinterpret_cast<const float*>(weight_scale.data_ptr()),
       stream);
 #else
-  TORCH_CHECK(false, "flashrt-fp8-swiglu-ffn was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-fp8-swiglu-ffn was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -120,7 +134,7 @@ void launch_swiglu_quant(
   const long long M = gate_up_bf16.size(0);
   const int H = static_cast<int>(out_fp8.size(1));
 
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   at::cuda::CUDAGuard device_guard(gate_up_bf16.device());
   auto stream =
       at::cuda::getCurrentCUDAStream(gate_up_bf16.get_device()).stream();
@@ -142,7 +156,7 @@ void launch_swiglu_quant(
         stream);
   }
 #else
-  TORCH_CHECK(false, "flashrt-fp8-swiglu-ffn was not built with CUDA support");
+  TORCH_CHECK(false, "flashrt-fp8-swiglu-ffn was not built with CUDA/ROCm support");
 #endif
 }
 
@@ -280,7 +294,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor input_scale, Tensor gate_up_weight_scale, "
           "Tensor hidden_scale, Tensor down_weight_scale, "
           "Tensor! gate_up_bf16, Tensor! hidden_fp8, Tensor! out) -> ()");
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   ops.impl("fp8_gemm_bf16", torch::kCUDA, &fp8_gemm_bf16);
   ops.impl("silu_mul_merged_quantize_fp8_static_bf16",
            torch::kCUDA,
