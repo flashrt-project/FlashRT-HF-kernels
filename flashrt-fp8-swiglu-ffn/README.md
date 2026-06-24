@@ -25,8 +25,12 @@ Tensor conventions:
 - `input`: FP8 E4M3, shape `(M, K)`
 - `gate_up_weight`: FP8 E4M3, shape `(2 * H, K)`, row layout `[gate_weight | up_weight]`
 - `down_weight`: FP8 E4M3, shape `(N, H)`
-- scale tensors: CUDA `float32` scalar tensors
+- scale tensors: device `float32` scalar tensors
 - output: BF16, shape `(M, N)`
+
+CUDA artifacts use `torch.float8_e4m3fn`. ROCm artifacts currently target AMD
+CDNA3 `gfx942` and use `torch.float8_e4m3fnuz`. CDNA4/OCP-FP8 and RDNA targets
+are not claimed by this package version.
 
 ## Minimal Usage
 

@@ -13,6 +13,8 @@ The strongest current surface is FP8 quantization epilogue fusion:
 - BF16 input plus optional BF16 bias.
 - GELU(tanh) or per-channel scaling.
 - Direct FP8 e4m3 output.
+- CUDA uses `torch.float8_e4m3fn`; ROCm artifacts currently target CDNA3
+  `gfx942` with `torch.float8_e4m3fnuz`.
 
 The BF16 GEMM epilogue wrappers are included for completeness and selected
 decode shapes, but they are shape-sensitive and should not be used as the main
@@ -79,6 +81,10 @@ HF builder validation has passed for the torch211 CUDA 12.8, CUDA 12.6, and
 CUDA 13.0 variants. Host-side CUDA correctness smoke has passed on the local
 RTX 5090 environment. See `VALIDATION.md` for exact variants, commands,
 environment, and known gaps.
+
+ROCm support is packaged for AMD CDNA3 `gfx942` and uses the ROCm FNUZ FP8
+format. CDNA4/OCP-FP8 and RDNA targets are intentionally not claimed by this
+package version.
 
 See `examples/fp8_quant_epilogue_block.py` for a minimal HF-style module that
 replaces BF16 post-projection epilogue work with the FP8 quantization helpers.

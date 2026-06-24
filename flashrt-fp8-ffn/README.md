@@ -20,7 +20,11 @@ Inputs and weights are row-major FP8 E4M3 tensors:
 - activation/input: `(M, K)`
 - weight: `(N, K)`
 - output: `(M, N)` BF16
-- scale tensors: CUDA float32 scalars
+- scale tensors: device `float32` scalars
+
+CUDA artifacts use `torch.float8_e4m3fn`. ROCm artifacts currently target AMD
+CDNA3 `gfx942` and use `torch.float8_e4m3fnuz`. CDNA4/OCP-FP8 and RDNA targets
+are not claimed by this package version.
 
 The first version uses per-tensor scales because this mirrors the production
 FlashRT FP8 descale paths used by the current PI0.5/GROOT RTX frontends. Native
