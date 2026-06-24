@@ -35,9 +35,12 @@ https://github.com/LiangSu8899/FlashRT-HF-kernels/blob/main/examples/replace_tor
 
 - CUDA 12.8+
 - FP8-capable NVIDIA GPUs with cuBLASLt FP8 support
+- ROCm artifacts currently target AMD CDNA3 `gfx942` and use
+  `torch.float8_e4m3fnuz`
 
-Current local validation is on RTX 5090. Other hardware should be added to the
-benchmark matrix before broader claims.
+Current local CUDA validation is on RTX 5090. ROCm validation for this package
+is scoped to the AMD `gfx942` FP8-FNUZ path. CDNA4/OCP-FP8 and RDNA targets are
+not claimed by this package version.
 
 ## Notes
 

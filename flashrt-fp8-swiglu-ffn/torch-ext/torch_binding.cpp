@@ -6,15 +6,15 @@
 #include <limits>
 
 #if defined(CUDA_KERNEL)
-#include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
-#define FLASHRT_DEVICE_GUARD(tensor) at::cuda::CUDAGuard device_guard((tensor).device())
-#define FLASHRT_CURRENT_STREAM(tensor) at::cuda::getCurrentCUDAStream((tensor).get_device()).stream()
+#include <c10/cuda/CUDAStream.h>
+#define FLASHRT_DEVICE_GUARD(tensor) c10::cuda::CUDAGuard device_guard((tensor).device())
+#define FLASHRT_CURRENT_STREAM(tensor) c10::cuda::getCurrentCUDAStream((tensor).get_device()).stream()
 #elif defined(ROCM_KERNEL)
-#include <ATen/hip/HIPContext.h>
 #include <c10/hip/HIPGuard.h>
+#include <c10/hip/HIPStream.h>
 #define FLASHRT_DEVICE_GUARD(tensor) c10::hip::HIPGuard device_guard((tensor).device())
-#define FLASHRT_CURRENT_STREAM(tensor) at::hip::getCurrentHIPStream((tensor).get_device()).stream()
+#define FLASHRT_CURRENT_STREAM(tensor) c10::hip::getCurrentHIPStream((tensor).get_device()).stream()
 #endif
 
 #if defined(CUDA_KERNEL)

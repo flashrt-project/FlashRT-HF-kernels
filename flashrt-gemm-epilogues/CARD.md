@@ -3,6 +3,7 @@ tags:
 - flashrt
 - kernel
 - cuda
+- rocm
 - gemm
 - fp8
 - nvfp4
@@ -54,6 +55,10 @@ as a broad claim.
 CUDA GPUs with BF16 tensor core support are expected for the GEMM path. FP8
 output helpers additionally require PyTorch and hardware/runtime support for
 `torch.float8_e4m3fn`.
+
+ROCm artifacts for this package currently target AMD CDNA3 `gfx942` and use
+`torch.float8_e4m3fnuz` for FP8 outputs. CDNA4/OCP-FP8 (`gfx950`) and RDNA
+targets are not claimed by this package version.
 
 ## Validation
 
