@@ -133,7 +133,7 @@ class SourceOps:
         if hidden is None:
             hidden = torch.empty((x.shape[0], up_w.shape[0]), device=x.device, dtype=torch.bfloat16)
         if hidden_fp8 is None:
-            hidden_fp8 = torch.empty_like(hidden, dtype=torch.float8_e4m3fn)
+            hidden_fp8 = torch.empty_like(hidden, dtype=fp8_dtype())
         if out is None:
             out = torch.empty((x.shape[0], down_w.shape[0]), device=x.device, dtype=torch.bfloat16)
         self._ops.fp8_gelu_mlp_bf16(
@@ -207,8 +207,19 @@ def load_hub_ops(repo_id: str, version: int):
     return get_kernel(repo_id, version=version)
 
 
+def fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
+def fp8_max() -> float:
+    return 240.0 if torch.version.hip is not None else 448.0
+
+
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    return torch.clamp(x.float() / scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+    limit = fp8_max()
+    return torch.clamp(x.float() / scale.float(), -limit, limit).to(fp8_dtype())
 
 
 def dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
@@ -242,7 +253,8 @@ stable_bf16_bias_add = compiler_disable(bf16_bias_add_boundary)
 def torch_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s):
     hidden = (dequant_fp8(x, x_s) @ dequant_fp8(up_w, up_s).T).to(torch.bfloat16)
     hidden = torch.nn.functional.gelu(hidden + up_b.float(), approximate="tanh")
-    hidden_fp8 = torch.clamp(hidden / hid_s.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+    limit = fp8_max()
+    hidden_fp8 = torch.clamp(hidden / hid_s.float(), -limit, limit).to(fp8_dtype())
     out = (dequant_fp8(hidden_fp8, hid_s) @ dequant_fp8(down_w, dn_s).T).to(torch.bfloat16)
     return (out + down_b.float()).to(torch.bfloat16)
 
@@ -274,7 +286,7 @@ def make_inputs(M: int, K: int, H: int, N: int, layers: int):
     up_bs = [torch.randn((H,), device="cuda", dtype=torch.bfloat16) for _ in range(layers)]
     down_bs = [torch.randn((N,), device="cuda", dtype=torch.bfloat16) for _ in range(layers)]
     hidden = [torch.empty((M, H), device="cuda", dtype=torch.bfloat16) for _ in range(layers)]
-    hidden_fp8 = [torch.empty((M, H), device="cuda", dtype=torch.float8_e4m3fn) for _ in range(layers)]
+    hidden_fp8 = [torch.empty((M, H), device="cuda", dtype=fp8_dtype()) for _ in range(layers)]
     outs = [torch.empty((M, N), device="cuda", dtype=torch.bfloat16) for _ in range(layers)]
     return xs, up_ws, up_bs, down_ws, down_bs, x_scale, up_scale, hidden_scale, down_scale, hidden, hidden_fp8, outs
 

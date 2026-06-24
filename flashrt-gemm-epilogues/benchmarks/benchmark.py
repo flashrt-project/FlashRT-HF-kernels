@@ -6,8 +6,24 @@ from kernels.benchmark import Benchmark
 _original_allclose = torch.allclose
 
 
+def _fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
+def _fp8_max() -> float:
+    return 240.0 if torch.version.hip is not None else 448.0
+
+
+def _is_fp8_dtype(dtype: torch.dtype) -> bool:
+    return dtype == torch.float8_e4m3fn or (
+        hasattr(torch, "float8_e4m3fnuz") and dtype == torch.float8_e4m3fnuz
+    )
+
+
 def _flashrt_allclose(input, other, rtol=1e-05, atol=1e-08, equal_nan=False):
-    if input.dtype == torch.float8_e4m3fn or other.dtype == torch.float8_e4m3fn:
+    if _is_fp8_dtype(input.dtype) or _is_fp8_dtype(other.dtype):
         return _original_allclose(
             input.float(),
             other.float(),
@@ -47,13 +63,14 @@ class BiasGeluFp8QuantizeBenchmark(Benchmark):
         self.input = torch.randn((m, n), device=self.device, dtype=torch.bfloat16)
         self.bias = torch.randn((n,), device=self.device, dtype=torch.bfloat16)
         self.scale = torch.tensor([0.25], device=self.device, dtype=torch.float32)
-        self.out = torch.empty_like(self.input, dtype=torch.float8_e4m3fn)
+        self.out = torch.empty_like(self.input, dtype=_fp8_dtype())
 
     def _reference(self) -> torch.Tensor:
         y = self.input.float() + self.bias.float()
         y = torch.nn.functional.gelu(y, approximate="tanh")
-        y = torch.clamp(y / self.scale.float(), -448.0, 448.0)
-        return y.to(torch.float8_e4m3fn)
+        limit = _fp8_max()
+        y = torch.clamp(y / self.scale.float(), -limit, limit)
+        return y.to(_fp8_dtype())
 
     def setup_decode_m1(self) -> None:
         self._setup_shape(1, 4096)
@@ -158,12 +175,13 @@ class GeluFp8QuantizeBenchmark(Benchmark):
     def _setup_shape(self, m: int, n: int) -> None:
         self.input = torch.randn((m, n), device=self.device, dtype=torch.bfloat16)
         self.scale = torch.tensor([0.25], device=self.device, dtype=torch.float32)
-        self.out = torch.empty_like(self.input, dtype=torch.float8_e4m3fn)
+        self.out = torch.empty_like(self.input, dtype=_fp8_dtype())
 
     def _reference(self) -> torch.Tensor:
         y = torch.nn.functional.gelu(self.input.float(), approximate="tanh")
-        y = torch.clamp(y / self.scale.float(), -448.0, 448.0)
-        return y.to(torch.float8_e4m3fn)
+        limit = _fp8_max()
+        y = torch.clamp(y / self.scale.float(), -limit, limit)
+        return y.to(_fp8_dtype())
 
     def setup_decode_m1(self) -> None:
         self._setup_shape(1, 4096)

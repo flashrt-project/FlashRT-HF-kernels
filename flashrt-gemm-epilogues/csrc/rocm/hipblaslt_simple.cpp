@@ -198,10 +198,17 @@ void hipblaslt_matmul_fp8_e4m3fnuz_bf16(
 
   LtContext& ctx = context();
   MatmulDesc op(HIPBLAS_COMPUTE_32F_FAST_8F_FNUZ);
+  const hipblasOperation_t trans_a = HIPBLAS_OP_T;
+  check_hipblas(
+      hipblasLtMatmulDescSetAttribute(
+          op.value, HIPBLASLT_MATMUL_DESC_TRANSA, &trans_a, sizeof(trans_a)),
+      "set transA");
   set_scalar_fp8_scale(op.value, b_scale, a_scale);
 
-  MatrixLayout b_as_lhs(HIP_R_8F_E4M3_FNUZ, static_cast<uint64_t>(n),
-                        static_cast<uint64_t>(k), n);
+  // Row-major (N, K) FP8 weight memory is column-major (K, N). Transpose it
+  // so the logical lhs is (N, K), then compute out^T = weight @ input^T.
+  MatrixLayout b_as_lhs(HIP_R_8F_E4M3_FNUZ, static_cast<uint64_t>(k),
+                        static_cast<uint64_t>(n), k);
   MatrixLayout a_as_rhs(HIP_R_8F_E4M3_FNUZ, static_cast<uint64_t>(k),
                         static_cast<uint64_t>(m), k);
   MatrixLayout out_t(HIP_R_16BF, static_cast<uint64_t>(n),
@@ -242,11 +249,6 @@ void hipblaslt_linear_bf16(
 
   LtContext& ctx = context();
   MatmulDesc op(HIPBLAS_COMPUTE_32F);
-  const hipblasOperation_t trans_a = HIPBLAS_OP_T;
-  check_hipblas(
-      hipblasLtMatmulDescSetAttribute(
-          op.value, HIPBLASLT_MATMUL_DESC_TRANSA, &trans_a, sizeof(trans_a)),
-      "set transA");
 
   if (bias != nullptr) {
     const hipblasLtEpilogue_t epilogue = HIPBLASLT_EPILOGUE_BIAS;
@@ -268,8 +270,10 @@ void hipblaslt_linear_bf16(
         "set bias dtype");
   }
 
-  MatrixLayout weight_layout(HIP_R_16BF, static_cast<uint64_t>(k),
-                             static_cast<uint64_t>(n), k);
+  // Row-major (K, N) weight memory is column-major (N, K). Compute
+  // out^T = weight^T @ x^T directly into row-major out storage.
+  MatrixLayout weight_layout(HIP_R_16BF, static_cast<uint64_t>(n),
+                             static_cast<uint64_t>(k), n);
   MatrixLayout x_rhs(HIP_R_16BF, static_cast<uint64_t>(k),
                      static_cast<uint64_t>(m), k);
   MatrixLayout out_t(HIP_R_16BF, static_cast<uint64_t>(n),

@@ -100,7 +100,7 @@ class SourceOps:
             out = torch.empty(
                 (gate_up.shape[0], gate_up.shape[1] // 2),
                 device=gate_up.device,
-                dtype=torch.float8_e4m3fn,
+                dtype=fp8_dtype(),
             )
         self._ops.silu_mul_merged_quantize_fp8_static_bf16(gate_up, scale, out)
         return out
@@ -128,7 +128,7 @@ class SourceOps:
             hidden_fp8 = torch.empty(
                 (x.shape[0], gate_up_w.shape[0] // 2),
                 device=x.device,
-                dtype=torch.float8_e4m3fn,
+                dtype=fp8_dtype(),
             )
         if out is None:
             out = torch.empty((x.shape[0], down_w.shape[0]), device=x.device, dtype=torch.bfloat16)
@@ -201,8 +201,19 @@ def load_hub_ops(repo_id: str, version: int):
     return get_kernel(repo_id, version=version)
 
 
+def fp8_dtype() -> torch.dtype:
+    if torch.version.hip is not None and hasattr(torch, "float8_e4m3fnuz"):
+        return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
+def fp8_max() -> float:
+    return 240.0 if torch.version.hip is not None else 448.0
+
+
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
-    return torch.clamp(x.float() / scale.float(), -448.0, 448.0).to(torch.float8_e4m3fn)
+    limit = fp8_max()
+    return torch.clamp(x.float() / scale.float(), -limit, limit).to(fp8_dtype())
 
 
 def dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
@@ -247,7 +258,7 @@ def make_case(M: int, K: int, H: int, N: int):
     )
     down_w = quantize_fp8(torch.randn((N, H), device="cuda", dtype=torch.bfloat16), dn_s)
     scratch_gate_up = torch.empty((M, 2 * H), device="cuda", dtype=torch.bfloat16)
-    scratch_hidden = torch.empty((M, H), device="cuda", dtype=torch.float8_e4m3fn)
+    scratch_hidden = torch.empty((M, H), device="cuda", dtype=fp8_dtype())
     out = torch.empty((M, N), device="cuda", dtype=torch.bfloat16)
     return x, gate_up_w, down_w, x_s, gu_s, hid_s, dn_s, scratch_gate_up, scratch_hidden, out
 

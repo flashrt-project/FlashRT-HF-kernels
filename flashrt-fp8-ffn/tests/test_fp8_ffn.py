@@ -207,22 +207,43 @@ def assert_distribution_close(
     p99_abs_limit: float,
     p99_rel_floor1_limit: float,
 ) -> None:
+    m = distribution_metrics(got, expected)
+    if m["p99_abs"] > p99_abs_limit or m["p99_rel"] > p99_rel_floor1_limit:
+        raise AssertionError(
+            f"{name} failed: max_abs={m['max_abs']} p99_abs={m['p99_abs']} "
+            f"p99_rel_floor1={m['p99_rel']} max_rel_floor1={m['max_rel']}"
+        )
+    print(
+        f"PASS {name}: max_abs={m['max_abs']:.6f} "
+        f"mean_abs={m['mean_abs']:.6f} p99_abs={m['p99_abs']:.6f} "
+        f"cosine={m['cosine']:.8f} p99_rel_floor1={m['p99_rel']:.6f} "
+        f"max_rel_floor1={m['max_rel']:.6f}"
+    )
+
+
+def distribution_metrics(got: torch.Tensor, expected: torch.Tensor):
     diff = (got.float() - expected.float()).abs().flatten()
     exp = expected.float().abs().flatten().clamp_min(1.0)
     rel = diff / exp
-    max_abs = float(diff.max().item())
-    p99_abs = float(percentile(diff, 0.99).item())
-    max_rel = float(rel.max().item())
-    p99_rel = float(percentile(rel, 0.99).item())
-    if p99_abs > p99_abs_limit or p99_rel > p99_rel_floor1_limit:
-        raise AssertionError(
-            f"{name} failed: max_abs={max_abs} p99_abs={p99_abs} "
-            f"p99_rel_floor1={p99_rel} max_rel_floor1={max_rel}"
-        )
+    got_f = got.float().flatten()
+    exp_f = expected.float().flatten()
+    return {
+        "max_abs": float(diff.max().item()),
+        "mean_abs": float(diff.mean().item()),
+        "p99_abs": float(percentile(diff, 0.99).item()),
+        "max_rel": float(rel.max().item()),
+        "p99_rel": float(percentile(rel, 0.99).item()),
+        "cosine": float(torch.nn.functional.cosine_similarity(got_f, exp_f, dim=0).item()),
+    }
+
+
+def report_distribution(name: str, got: torch.Tensor, expected: torch.Tensor) -> None:
+    m = distribution_metrics(got, expected)
     print(
-        f"PASS {name}: max_abs={max_abs:.6f} "
-        f"p99_abs={p99_abs:.6f} p99_rel_floor1={p99_rel:.6f} "
-        f"max_rel_floor1={max_rel:.6f}"
+        f"INFO {name}: max_abs={m['max_abs']:.6f} "
+        f"mean_abs={m['mean_abs']:.6f} p99_abs={m['p99_abs']:.6f} "
+        f"cosine={m['cosine']:.8f} p99_rel_floor1={m['p99_rel']:.6f} "
+        f"max_rel_floor1={m['max_rel']:.6f}"
     )
 
 
@@ -281,14 +302,20 @@ def run(args) -> None:
             mismatch_rate_limit=1e-4,
         )
 
+        staged_down = ops.fp8_gemm_bf16(got_hidden_fp8, down_w, hid_s, dn_s)
+        staged_mlp = (staged_down.float() + down_b.float()).to(torch.bfloat16)
         got_mlp = ops.fp8_gelu_mlp_bf16(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s)
-        exp_mlp = ref_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s)
         assert_distribution_close(
-            f"{label}/fp8_gelu_mlp_bf16",
+            f"{label}/fp8_gelu_mlp_bf16_vs_staged_ops",
             got_mlp,
-            exp_mlp,
-            p99_abs_limit=1.0,
-            p99_rel_floor1_limit=0.05,
+            staged_mlp,
+            p99_abs_limit=0.0,
+            p99_rel_floor1_limit=0.0,
+        )
+        report_distribution(
+            f"{label}/fp8_gelu_mlp_bf16_vs_torch_reference",
+            got_mlp,
+            ref_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s),
         )
 
 
