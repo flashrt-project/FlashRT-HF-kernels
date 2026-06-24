@@ -3,9 +3,16 @@
 
 #include <limits>
 
-#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
+#if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#define FLASHRT_DEVICE_GUARD(tensor) at::cuda::CUDAGuard device_guard((tensor).device())
+#define FLASHRT_CURRENT_STREAM(tensor) at::cuda::getCurrentCUDAStream((tensor).get_device()).stream()
+#elif defined(ROCM_KERNEL)
+#include <ATen/hip/HIPContext.h>
+#include <c10/hip/HIPGuard.h>
+#define FLASHRT_DEVICE_GUARD(tensor) c10::hip::HIPGuard device_guard((tensor).device())
+#define FLASHRT_CURRENT_STREAM(tensor) at::hip::getCurrentHIPStream((tensor).get_device()).stream()
 #endif
 
 #if defined(CUDA_KERNEL)
@@ -65,8 +72,8 @@ void launch_bias_gelu_quantize(
   const long long M = input.numel() / N;
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(input.device());
-  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(input);
+  auto stream = FLASHRT_CURRENT_STREAM(input);
   flash_rt::quantize::bias_gelu_quantize_fp8_static_bf16(
       input.data_ptr(),
       bias_ptr,
@@ -205,8 +212,8 @@ void bf16_linear_bf16(
   const int N = static_cast<int>(w.size(1));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(x.device());
-  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(x);
+  auto stream = FLASHRT_CURRENT_STREAM(x);
   flash_rt::gemm::bf16_gemm(
       x.data_ptr(),
       w.data_ptr(),
@@ -231,8 +238,8 @@ void bf16_linear_bias_bf16(
   const int N = static_cast<int>(w.size(1));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(x.device());
-  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(x);
+  auto stream = FLASHRT_CURRENT_STREAM(x);
   flash_rt::gemm::bf16_gemm_bias(
       x.data_ptr(),
       w.data_ptr(),
@@ -258,8 +265,8 @@ void bf16_gemm_bias_gelu(
   const int N = static_cast<int>(b.size(1));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(a.device());
-  auto stream = at::cuda::getCurrentCUDAStream(a.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(a);
+  auto stream = FLASHRT_CURRENT_STREAM(a);
   flash_rt::gemm::bf16_gemm_bias_gelu(
       a.data_ptr(),
       b.data_ptr(),
@@ -285,8 +292,8 @@ void bf16_gemm_bias(
   const int N = static_cast<int>(b.size(1));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(a.device());
-  auto stream = at::cuda::getCurrentCUDAStream(a.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(a);
+  auto stream = FLASHRT_CURRENT_STREAM(a);
   flash_rt::gemm::bf16_gemm_bias(
       a.data_ptr(),
       b.data_ptr(),
@@ -350,8 +357,8 @@ void channel_scale_quantize_fp8_static_bf16(
   const long long M = input.numel() / K;
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(input.device());
-  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(input);
+  auto stream = FLASHRT_CURRENT_STREAM(input);
   flash_rt::quantize::channel_scale_quantize_fp8_static_bf16(
       input.data_ptr(),
       channel_scale.data_ptr(),

@@ -5,9 +5,16 @@
 
 #include <limits>
 
-#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
+#if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#define FLASHRT_DEVICE_GUARD(tensor) at::cuda::CUDAGuard device_guard((tensor).device())
+#define FLASHRT_CURRENT_STREAM(tensor) at::cuda::getCurrentCUDAStream((tensor).get_device()).stream()
+#elif defined(ROCM_KERNEL)
+#include <ATen/hip/HIPContext.h>
+#include <c10/hip/HIPGuard.h>
+#define FLASHRT_DEVICE_GUARD(tensor) c10::hip::HIPGuard device_guard((tensor).device())
+#define FLASHRT_CURRENT_STREAM(tensor) at::hip::getCurrentHIPStream((tensor).get_device()).stream()
 #endif
 
 #if defined(CUDA_KERNEL)
@@ -101,8 +108,8 @@ void launch_fp8_gemm_bf16(
   const int N = static_cast<int>(weight.size(0));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(input.device());
-  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(input);
+  auto stream = FLASHRT_CURRENT_STREAM(input);
   flash_rt::fp8_ffn::fp8_gemm_descale_bf16out(
       input.data_ptr(),
       weight.data_ptr(),
@@ -127,8 +134,8 @@ void launch_bias_gelu_quant(
   const int N = static_cast<int>(hidden_bf16.size(1));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(hidden_bf16.device());
-  auto stream = at::cuda::getCurrentCUDAStream(hidden_bf16.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(hidden_bf16);
+  auto stream = FLASHRT_CURRENT_STREAM(hidden_bf16);
   flash_rt::fp8_ffn::bias_gelu_quantize_fp8_static_bf16(
       hidden_bf16.data_ptr(),
       bias.data_ptr(),
@@ -147,8 +154,8 @@ void launch_add_bias_bf16(torch::Tensor& out, torch::Tensor const& bias) {
   const int N = static_cast<int>(out.size(1));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(out.device());
-  auto stream = at::cuda::getCurrentCUDAStream(out.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(out);
+  auto stream = FLASHRT_CURRENT_STREAM(out);
   flash_rt::fp8_ffn::add_bias_bf16(
       out.data_ptr(), bias.data_ptr(), M, N, stream);
 #else

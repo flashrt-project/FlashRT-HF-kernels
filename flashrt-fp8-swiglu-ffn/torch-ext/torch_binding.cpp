@@ -5,9 +5,16 @@
 
 #include <limits>
 
-#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
+#if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#define FLASHRT_DEVICE_GUARD(tensor) at::cuda::CUDAGuard device_guard((tensor).device())
+#define FLASHRT_CURRENT_STREAM(tensor) at::cuda::getCurrentCUDAStream((tensor).get_device()).stream()
+#elif defined(ROCM_KERNEL)
+#include <ATen/hip/HIPContext.h>
+#include <c10/hip/HIPGuard.h>
+#define FLASHRT_DEVICE_GUARD(tensor) c10::hip::HIPGuard device_guard((tensor).device())
+#define FLASHRT_CURRENT_STREAM(tensor) at::hip::getCurrentHIPStream((tensor).get_device()).stream()
 #endif
 
 #if defined(CUDA_KERNEL)
@@ -109,8 +116,8 @@ void launch_fp8_gemm_bf16(
   const int N = static_cast<int>(weight.size(0));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(input.device());
-  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(input);
+  auto stream = FLASHRT_CURRENT_STREAM(input);
   flash_rt::fp8_swiglu_ffn::fp8_gemm_descale_bf16out(
       input.data_ptr(),
       weight.data_ptr(),
@@ -135,9 +142,8 @@ void launch_swiglu_quant(
   const int H = static_cast<int>(out_fp8.size(1));
 
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
-  at::cuda::CUDAGuard device_guard(gate_up_bf16.device());
-  auto stream =
-      at::cuda::getCurrentCUDAStream(gate_up_bf16.get_device()).stream();
+  FLASHRT_DEVICE_GUARD(gate_up_bf16);
+  auto stream = FLASHRT_CURRENT_STREAM(gate_up_bf16);
   if (use_gelu) {
     flash_rt::fp8_swiglu_ffn::gelu_mul_merged_quantize_fp8_static_bf16(
         gate_up_bf16.data_ptr(),
