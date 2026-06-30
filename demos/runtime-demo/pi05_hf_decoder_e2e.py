@@ -85,10 +85,12 @@ class BridgeResult:
     max_abs: float
     mean_abs: float
     p99_abs: float
+    mse: float
     cosine: float
     official_flashrt_max_abs: float | None
     official_flashrt_mean_abs: float | None
     official_flashrt_p99_abs: float | None
+    official_flashrt_mse: float | None
     official_flashrt_cosine: float | None
     encoder_reference_p99_abs: float | None
     encoder_reference_cosine: float | None
@@ -123,13 +125,15 @@ def _percentile(x: torch.Tensor, q: float) -> torch.Tensor:
     return flat.kthvalue(k).values
 
 
-def _compare(got: torch.Tensor, expected: torch.Tensor) -> tuple[float, float, float, float]:
+def _compare(got: torch.Tensor, expected: torch.Tensor) -> tuple[float, float, float, float, float]:
     diff = (got.float() - expected.float()).abs()
+    sq = (got.float() - expected.float()).pow(2)
     return (
         float(diff.max().item()),
         float(diff.mean().item()),
         float(_percentile(diff, 0.99).item()),
         float(F.cosine_similarity(got.float().flatten(), expected.float().flatten(), dim=0).item()),
+        float(sq.mean().item()),
     )
 
 
@@ -991,7 +995,7 @@ def run_hf_decoder(args: argparse.Namespace) -> BridgeResult:
     got = runtime()
     torch.cuda.synchronize()
     first_us = (time.perf_counter() - t0) * 1_000_000.0
-    max_abs, mean_abs, p99_abs, cosine = _compare(got, expected)
+    max_abs, mean_abs, p99_abs, cosine, mse = _compare(got, expected)
     if p99_abs > args.p99_abs_limit or cosine < args.cosine_limit:
         raise RuntimeError(
             f"correctness failed: max_abs={max_abs:.6f} "
@@ -1009,7 +1013,7 @@ def run_hf_decoder(args: argparse.Namespace) -> BridgeResult:
         except Exception as exc:  # noqa: BLE001
             graph_status = f"unsupported: {type(exc).__name__}: {exc}"
 
-    official_metrics = (None, None, None, None)
+    official_metrics = (None, None, None, None, None)
     official_out = bundle.get("official_decoder_out")
     if torch.is_tensor(official_out):
         official_metrics = _compare(
@@ -1043,10 +1047,12 @@ def run_hf_decoder(args: argparse.Namespace) -> BridgeResult:
         max_abs=max_abs,
         mean_abs=mean_abs,
         p99_abs=p99_abs,
+        mse=mse,
         cosine=cosine,
         official_flashrt_max_abs=official_metrics[0],
         official_flashrt_mean_abs=official_metrics[1],
         official_flashrt_p99_abs=official_metrics[2],
+        official_flashrt_mse=official_metrics[4],
         official_flashrt_cosine=official_metrics[3],
         encoder_reference_p99_abs=None,
         encoder_reference_cosine=None,
@@ -1193,7 +1199,7 @@ def run_hf_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
     got = combined()
     torch.cuda.synchronize()
     first_us = (time.perf_counter() - t0) * 1_000_000.0
-    max_abs, mean_abs, p99_abs, cosine = _compare(got, expected)
+    max_abs, mean_abs, p99_abs, cosine, mse = _compare(got, expected)
     if p99_abs > args.p99_abs_limit or cosine < args.cosine_limit:
         raise RuntimeError(
             f"combined correctness failed: max_abs={max_abs:.6f} "
@@ -1211,7 +1217,7 @@ def run_hf_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         except Exception as exc:  # noqa: BLE001
             graph_status = f"unsupported: {type(exc).__name__}: {exc}"
 
-    official_metrics = (None, None, None, None)
+    official_metrics = (None, None, None, None, None)
     official_out = bundle.get("official_decoder_out")
     if torch.is_tensor(official_out) and full_official_shape and steps == int(bundle["steps"]):
         official_metrics = _compare(
@@ -1245,10 +1251,12 @@ def run_hf_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         max_abs=max_abs,
         mean_abs=mean_abs,
         p99_abs=p99_abs,
+        mse=mse,
         cosine=cosine,
         official_flashrt_max_abs=official_metrics[0],
         official_flashrt_mean_abs=official_metrics[1],
         official_flashrt_p99_abs=official_metrics[2],
+        official_flashrt_mse=official_metrics[4],
         official_flashrt_cosine=official_metrics[3],
         encoder_reference_p99_abs=encoder_reference_p99,
         encoder_reference_cosine=encoder_reference_cos,
@@ -1615,7 +1623,7 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
     got = combined()
     torch.cuda.synchronize()
     first_us = (time.perf_counter() - t0) * 1_000_000.0
-    max_abs, mean_abs, p99_abs, cosine = _compare(got, expected)
+    max_abs, mean_abs, p99_abs, cosine, mse = _compare(got, expected)
     if p99_abs > args.p99_abs_limit or cosine < args.cosine_limit:
         raise RuntimeError(
             f"combined correctness failed: max_abs={max_abs:.6f} "
@@ -1633,7 +1641,7 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         except Exception as exc:  # noqa: BLE001
             graph_status = f"unsupported: {type(exc).__name__}: {exc}"
 
-    official_metrics = (None, None, None, None)
+    official_metrics = (None, None, None, None, None)
     official_out = bundle.get("official_decoder_out")
     if torch.is_tensor(official_out) and full_official_shape and steps == int(bundle["steps"]):
         official_metrics = _compare(
@@ -1668,10 +1676,12 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
         max_abs=max_abs,
         mean_abs=mean_abs,
         p99_abs=p99_abs,
+        mse=mse,
         cosine=cosine,
         official_flashrt_max_abs=official_metrics[0],
         official_flashrt_mean_abs=official_metrics[1],
         official_flashrt_p99_abs=official_metrics[2],
+        official_flashrt_mse=official_metrics[4],
         official_flashrt_cosine=official_metrics[3],
         encoder_reference_p99_abs=encoder_reference_p99,
         encoder_reference_cosine=encoder_reference_cos,
