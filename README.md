@@ -308,6 +308,8 @@ Second-batch VLA/runtime packages target the model-demo hot path:
   video/world-model/VAE-style blocks.
 - `sageattention2-blackwell`: SageAttention2-style Blackwell prefill
   attention for Wan/video self-attention and Qwen causal GQA prefill.
+- `speculative-draft-primitives`: model-neutral BF16 logits argmax and
+  accepted-prefix kernels for drafter/verify speculative decoding loops.
 
 ```text
 FP8 input -> FP8 gate/up GEMM -> SiLU(gate) * up -> FP8 requant -> FP8 down GEMM -> BF16 output
@@ -365,6 +367,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `fp4-fused-ops` | Native FP4 package | FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels for continuous low-bit transformer/diffuser paths. |
 | `fp4-gemm` | Native FP4 package | NVFP4 W4A16 GEMM with BF16 output for Blackwell low-bit linear layers. |
 | `sageattention2-blackwell` | Attention package | SageAttention2-style prefill attention for Wan non-causal and Qwen causal GQA shapes on Blackwell. |
+| `speculative-draft-primitives` | Transformers package | BF16 logits argmax and accepted-prefix kernels for drafter/verify speculative decoding loops. |
 
 ## Repository Status
 

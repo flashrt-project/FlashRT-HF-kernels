@@ -45,6 +45,7 @@ on:
           - turboquant-kv
           - vl-transformer-primitives
           - world-model-conv
+          - speculative-draft-primitives
 
 permissions:
   contents: read
@@ -94,6 +95,7 @@ jobs:
           - turboquant-kv
           - vl-transformer-primitives
           - world-model-conv
+          - speculative-draft-primitives
 
     steps:
       - uses: actions/checkout@v4
