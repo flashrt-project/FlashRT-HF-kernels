@@ -1,11 +1,6 @@
 name: Mirror FlashRT Kernels For Legacy Clients
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/mirror-kernels-legacy-model.yml"
-      - "scripts/mirror_kernel_legacy_model.py"
   workflow_dispatch:
     inputs:
       package:
@@ -46,6 +41,7 @@ on:
           - vl-transformer-primitives
           - world-model-conv
           - speculative-draft-primitives
+          - int8-transformer-primitives
 
 permissions:
   contents: read
@@ -96,6 +92,7 @@ jobs:
           - vl-transformer-primitives
           - world-model-conv
           - speculative-draft-primitives
+          - int8-transformer-primitives
 
     steps:
       - uses: actions/checkout@v4

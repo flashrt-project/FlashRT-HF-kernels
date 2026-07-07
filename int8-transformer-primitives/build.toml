@@ -1,0 +1,37 @@
+[general]
+name = "int8-transformer-primitives"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/int8-transformer-primitives"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.int8_transformer_primitives]
+backend = "cuda"
+depends = ["torch", "cutlass_4_0"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["8.0", "8.6", "8.9", "9.0", "12.0a"]
+src = [
+  "csrc/int8_transformer_primitives.cu",
+  "csrc/int8_transformer_primitives.cuh",
+  "csrc/gemm/cutlass_sm80_int8_rowwise.cu",
+  "csrc/gemm/cutlass_sm80_int8_rowwise_t64x128.cu",
+  "csrc/gemm/cutlass_sm80_int8_silu_gated.cu",
+]
+cuda-flags = [
+  "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT16_OPERATORS__",
+  "-U__CUDA_NO_BFLOAT162_OPERATORS__",
+]

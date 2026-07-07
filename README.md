@@ -310,6 +310,9 @@ Second-batch VLA/runtime packages target the model-demo hot path:
   attention for Wan/video self-attention and Qwen causal GQA prefill.
 - `speculative-draft-primitives`: model-neutral BF16 logits argmax and
   accepted-prefix kernels for drafter/verify speculative decoding loops.
+- `int8-transformer-primitives`: model-neutral INT8 activation producers,
+  rowwise INT8 linear, and SiLU-gated INT8 epilogue primitives for
+  transformer blocks.
 
 ```text
 FP8 input -> FP8 gate/up GEMM -> SiLU(gate) * up -> FP8 requant -> FP8 down GEMM -> BF16 output
@@ -319,6 +322,7 @@ decode Q/K/V -> RMSNorm Q/K -> rotate-half RoPE Q/K -> Q stage / KV cache write
 video/action/und residuals -> gated residual updates -> BF16 segment outputs
 style -> AdaRMSNorm/style gate -> BF16 or static-FP8 activation
 BF16 x/style -> AdaLayerNorm -> FP8 or NVFP4 activation producer
+BF16 activation -> rowwise INT8 producer -> INT8 rowwise linear / gated epilogue -> BF16 output
 NCDHW latent -> BLC tokens / temporal unshuffle / channel-bias / cache update
 ```
 
@@ -368,6 +372,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `fp4-gemm` | Native FP4 package | NVFP4 W4A16 GEMM with BF16 output for Blackwell low-bit linear layers. |
 | `sageattention2-blackwell` | Attention package | SageAttention2-style prefill attention for Wan non-causal and Qwen causal GQA shapes on Blackwell. |
 | `speculative-draft-primitives` | Transformers package | BF16 logits argmax and accepted-prefix kernels for drafter/verify speculative decoding loops. |
+| `int8-transformer-primitives` | Transformers package | INT8 rowwise quantization, RMSNorm-to-INT8 producers, rowwise INT8 linear, and SiLU-gated INT8 epilogue primitives. |
 
 ## Repository Status
 

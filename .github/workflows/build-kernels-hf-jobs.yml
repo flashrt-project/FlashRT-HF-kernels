@@ -36,6 +36,7 @@ on:
       - "adaptive-layernorm-producers/**"
       - "sageattention2-blackwell/**"
       - "speculative-draft-primitives/**"
+      - "int8-transformer-primitives/**"
   workflow_dispatch:
     inputs:
       package:
@@ -76,6 +77,7 @@ on:
           - adaptive-layernorm-producers
           - sageattention2-blackwell
           - speculative-draft-primitives
+          - int8-transformer-primitives
 
 permissions:
   contents: read
@@ -123,6 +125,7 @@ jobs:
           - adaptive-layernorm-producers
           - sageattention2-blackwell
           - speculative-draft-primitives
+          - int8-transformer-primitives
 
     steps:
       - uses: actions/checkout@v4
