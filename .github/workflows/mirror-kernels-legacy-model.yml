@@ -42,6 +42,7 @@ on:
           - world-model-conv
           - speculative-draft-primitives
           - int8-transformer-primitives
+          - transformer-layout-primitives
 
 permissions:
   contents: read
@@ -93,6 +94,7 @@ jobs:
           - world-model-conv
           - speculative-draft-primitives
           - int8-transformer-primitives
+          - transformer-layout-primitives
 
     steps:
       - uses: actions/checkout@v4

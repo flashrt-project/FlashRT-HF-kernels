@@ -1,0 +1,33 @@
+[general]
+name = "transformer-layout-primitives"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/transformer-layout-primitives"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.transformer_layout_primitives]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+src = [
+  "csrc/transformer_layout_primitives.cu",
+  "csrc/transformer_layout_primitives.cuh",
+]
+cuda-flags = [
+  "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT16_OPERATORS__",
+  "-U__CUDA_NO_BFLOAT162_OPERATORS__",
+]

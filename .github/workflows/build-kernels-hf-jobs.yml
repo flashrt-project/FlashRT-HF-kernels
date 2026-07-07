@@ -37,6 +37,7 @@ on:
       - "sageattention2-blackwell/**"
       - "speculative-draft-primitives/**"
       - "int8-transformer-primitives/**"
+      - "transformer-layout-primitives/**"
   workflow_dispatch:
     inputs:
       package:
@@ -78,6 +79,7 @@ on:
           - sageattention2-blackwell
           - speculative-draft-primitives
           - int8-transformer-primitives
+          - transformer-layout-primitives
 
 permissions:
   contents: read
@@ -126,6 +128,7 @@ jobs:
           - sageattention2-blackwell
           - speculative-draft-primitives
           - int8-transformer-primitives
+          - transformer-layout-primitives
 
     steps:
       - uses: actions/checkout@v4

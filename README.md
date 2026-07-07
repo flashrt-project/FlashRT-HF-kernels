@@ -156,6 +156,11 @@ demos:
   prefill self-attention for Wan non-causal and Qwen causal GQA shapes.
 - `adaptive-layernorm-producers/benchmarks`: AdaLayerNorm/no-affine LayerNorm
   producer fusion to FP8/NVFP4 activations for DiT/Wan/video blocks.
+- `int8-transformer-primitives/benchmarks`: model-neutral INT8 producer,
+  RMSNorm-quant, rowwise GEMM, and gated-linear primitives for Transformers
+  integration experiments.
+- `transformer-layout-primitives/benchmarks`: BF16 layout, GQA repeat,
+  text-state gather/scatter, RoPE, and fused Q/K RMSNorm+RoPE primitives.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
   preallocated buffers and CUDA Graph replay for PI0.5/GROOT-shaped FFN chains.
 - `demos/runtime-demo`: multi-package PI0.5-shaped runtime prototype using
