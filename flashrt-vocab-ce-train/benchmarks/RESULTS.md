@@ -37,12 +37,24 @@ N=46 (N=126: 9.17 -> 6.13):
 3. cp.async double-buffered staging + N-adaptive H-chunk (64 for N<=64,
    32 above) keeping two CTAs per SM where the tiles fit.
 
-Remaining ladder to the targets (both parts already in the spec):
-1. fwd 2.32 -> ~1.4 ms: deepen the pipeline (4 stages x 32-float chunks)
-   and/or widen kVTile — the 2-stage commit granularity still leaves
-   transfer bubbles (52% of bandwidth).
-2. backward: fused dW pass (read saved logits once, produce dW and
-   dlogits in the same W-sized sweep) replaces the torch dlogits chain +
-   one cuBLAS GEMM, worth ~0.4-1.5 ms depending on N.
+Measured negative: deeper pipelines with smaller chunks (3-4 stages x
+32-float) are SLOWER than 2 stages x 64 (2.56/6.49 vs 2.32/6.13) — sync
+and commit overhead beats the extra overlap at these tile sizes. Also
+fixed en route: the smem-attribute latch (configure with the kMaxRows
+size, or a larger-N launch silently fails after a smaller-N first call)
++ C10_CUDA_KERNEL_LAUNCH_CHECK in the binding.
+
+## Sober gate re-assessment (clean baselines)
+
+- N=46: plain/cuBLAS is already near floor (sum 5.33 with GEMMs at
+  62-88%). Our theoretical best ~= 4.4-4.8 ms (fwd ~1.4 + dX 1.33 +
+  fused-dW ~1.4 + merge) = 1.1-1.2x over plain — BELOW the 1.3x ship
+  gate. The tiny-N case is likely not winnable by the required margin;
+  proposal: narrow the primary target to N in [64, 128].
+- N=126: reachable (~6.0-6.3 vs target 6.0) but needs three more pieces:
+  fwd retile (kVTile=64: halves smem reads per FMA and fixes the
+  1-CTA/SM occupancy at N>64), a custom dX pass (cuBLAS sits at ~50%
+  there too), and the fused-dW backward. Estimated 2-3 focused
+  iterations.
 
 Not wired into any model path until Gate 2 passes.

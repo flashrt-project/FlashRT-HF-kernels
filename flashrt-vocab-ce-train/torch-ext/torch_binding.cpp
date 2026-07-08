@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <ATen/cuda/CUDAContext.h>
+#include <c10/cuda/CUDAException.h>
 #include <torch/all.h>
 #include <torch/library.h>
 
@@ -44,6 +45,7 @@ vocab_ce_fwd_stream(const torch::Tensor& hidden, const torch::Tensor& weight,
                           pmax.data_ptr<float>(), psum.data_ptr<float>(),
                           label_logit.data_ptr<float>(), (int)rows, (int)v,
                           (int)h, stream.stream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
   return {logits, pmax, psum, label_logit};
 }
 

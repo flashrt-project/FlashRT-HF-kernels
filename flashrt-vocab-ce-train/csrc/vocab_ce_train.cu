@@ -47,7 +47,7 @@ __device__ __forceinline__ void stage_chunk(const float* __restrict__ hidden,
   }
 }
 
-template <int kJn, int kHChunk>
+template <int kJn, int kHChunk, int kStages>
 __global__ void __launch_bounds__(kThreads) vocab_ce_fwd_kernel(
     const float* __restrict__ hidden, const float* __restrict__ weight,
     const long* __restrict__ labels, float* __restrict__ logits,
@@ -57,9 +57,14 @@ __global__ void __launch_bounds__(kThreads) vocab_ce_fwd_kernel(
   constexpr int kStride = kHChunk + kPad;
   const int h_buf_elems = rows * kStride;
   const int w_buf_elems = kVTile * kStride;
-  // layout: h[0], h[1], w[0], w[1]
-  float* h_bufs[2] = {smem, smem + h_buf_elems};
-  float* w_bufs[2] = {smem + 2 * h_buf_elems, smem + 2 * h_buf_elems + w_buf_elems};
+  // layout: h[0..kStages-1], w[0..kStages-1]
+  float* h_bufs[kStages];
+  float* w_bufs[kStages];
+#pragma unroll
+  for (int i = 0; i < kStages; ++i) {
+    h_bufs[i] = smem + i * h_buf_elems;
+    w_bufs[i] = smem + kStages * h_buf_elems + i * w_buf_elems;
+  }
 
   const int v0 = blockIdx.x * kVTile;
   const int lane = threadIdx.x & 31;  // vocab row within the tile
@@ -72,18 +77,24 @@ __global__ void __launch_bounds__(kThreads) vocab_ce_fwd_kernel(
 #pragma unroll
   for (int j = 0; j < kJn; ++j) acc[j] = 0.0f;
 
-  stage_chunk<kHChunk>(hidden, weight, h_bufs[0], w_bufs[0], v0, 0, rows, h);
-  __pipeline_commit();
+  // prologue: fill kStages-1 buffers ahead
+  for (int k = 0; k < kStages - 1 && k < num_chunks; ++k) {
+    stage_chunk<kHChunk>(hidden, weight, h_bufs[k], w_bufs[k], v0,
+                         k * kHChunk, rows, h);
+    __pipeline_commit();
+  }
 
   for (int k = 0; k < num_chunks; ++k) {
-    const int buf = k & 1;
-    if (k + 1 < num_chunks) {
-      stage_chunk<kHChunk>(hidden, weight, h_bufs[buf ^ 1], w_bufs[buf ^ 1],
-                           v0, (k + 1) * kHChunk, rows, h);
+    const int buf = k % kStages;
+    const int ahead = k + kStages - 1;
+    if (ahead < num_chunks) {
+      stage_chunk<kHChunk>(hidden, weight, h_bufs[ahead % kStages],
+                           w_bufs[ahead % kStages], v0, ahead * kHChunk, rows,
+                           h);
       __pipeline_commit();
-      __pipeline_wait_prior(1);
+      __pipeline_wait_prior(kStages - 1);
     } else {
-      __pipeline_wait_prior(0);
+      __pipeline_wait_prior(num_chunks - 1 - k);
     }
     __syncthreads();
 
@@ -103,7 +114,7 @@ __global__ void __launch_bounds__(kThreads) vocab_ce_fwd_kernel(
         }
       }
     }
-    __syncthreads();  // buf is re-staged two iterations from now
+    __syncthreads();  // buf is re-staged kStages iterations from now
   }
 
   // epilogue: logits write, label gather, per-tile online-softmax partials
@@ -128,43 +139,38 @@ __global__ void __launch_bounds__(kThreads) vocab_ce_fwd_kernel(
   }
 }
 
-template <int kHChunk>
+template <int kHChunk, int kStages>
 int smem_bytes_for(int rows) {
-  return 2 * (rows + kVTile) * (kHChunk + kPad) * (int)sizeof(float);
+  return kStages * (rows + kVTile) * (kHChunk + kPad) * (int)sizeof(float);
 }
 
-template <int kHChunk>
+template <int kHChunk, int kStages>
 void launch_all_jn(const float* hidden, const float* weight,
                    const long* labels, float* logits, float* partial_max,
                    float* partial_sum, float* label_logit, int rows, int v,
                    int h, cudaStream_t stream) {
-  const int smem = smem_bytes_for<kHChunk>(rows);
+  const int smem = smem_bytes_for<kHChunk, kStages>(rows);
   const int jn = (rows + kWarps - 1) / kWarps;
   dim3 grid(v / kVTile), block(kThreads);
 #define CASE(J)                                                               \
   case J: {                                                                   \
     static bool configured_##J = false;                                       \
     if (!configured_##J) {                                                    \
-      cudaFuncSetAttribute(vocab_ce_fwd_kernel<J, kHChunk>,                   \
+      cudaFuncSetAttribute(vocab_ce_fwd_kernel<J, kHChunk, kStages>,          \
                            cudaFuncAttributeMaxDynamicSharedMemorySize,       \
-                           smem_bytes_for<kHChunk>(kMaxRows));                \
+                           smem_bytes_for<kHChunk, kStages>(kMaxRows));       \
       configured_##J = true;                                                  \
     }                                                                         \
-    vocab_ce_fwd_kernel<J, kHChunk><<<grid, block, smem, stream>>>(           \
+    vocab_ce_fwd_kernel<J, kHChunk, kStages><<<grid, block, smem, stream>>>(  \
         hidden, weight, labels, logits, partial_max, partial_sum,             \
         label_logit, rows, v, h);                                             \
     break;                                                                    \
   }
   switch (jn) {
     CASE(1) CASE(2) CASE(3) CASE(4) CASE(5) CASE(6) CASE(7) CASE(8)
-    CASE(9) CASE(10) CASE(11) CASE(12) CASE(13) CASE(14) CASE(15)
+    CASE(9) CASE(10) CASE(11) CASE(12) CASE(13) CASE(14) CASE(15) CASE(16)
     default:
-      cudaFuncSetAttribute(vocab_ce_fwd_kernel<16, kHChunk>,
-                           cudaFuncAttributeMaxDynamicSharedMemorySize,
-                           smem_bytes_for<kHChunk>(kMaxRows));
-      vocab_ce_fwd_kernel<16, kHChunk><<<grid, block, smem, stream>>>(
-          hidden, weight, labels, logits, partial_max, partial_sum,
-          label_logit, rows, v, h);
+      break;  // rows > kMaxRows rejected by the binding
   }
 #undef CASE
 }
@@ -175,14 +181,16 @@ void vocab_ce_fwd_launch(const float* hidden, const float* weight,
                          const long* labels, float* logits, float* partial_max,
                          float* partial_sum, float* label_logit, int rows,
                          int v, int h, cudaStream_t stream) {
-  // Adaptive chunking: keep two CTAs per SM resident where possible
-  // (double-buffered staging is what hides the global-memory latency).
+  // Adaptive chunking: keep two CTAs per SM resident where possible; the
+  // cp.async double buffer hides the global-memory latency. Deeper
+  // pipelines with smaller chunks measured slower (sync + commit overhead
+  // outweighs the extra overlap at these tile sizes).
   if (rows <= 64 && h % 64 == 0) {
-    launch_all_jn<64>(hidden, weight, labels, logits, partial_max, partial_sum,
-                      label_logit, rows, v, h, stream);
+    launch_all_jn<64, 2>(hidden, weight, labels, logits, partial_max,
+                         partial_sum, label_logit, rows, v, h, stream);
   } else {
-    launch_all_jn<32>(hidden, weight, labels, logits, partial_max, partial_sum,
-                      label_logit, rows, v, h, stream);
+    launch_all_jn<32, 2>(hidden, weight, labels, logits, partial_max,
+                         partial_sum, label_logit, rows, v, h, stream);
   }
 }
 
