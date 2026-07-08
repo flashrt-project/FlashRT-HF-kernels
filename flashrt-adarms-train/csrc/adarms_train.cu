@@ -101,6 +101,37 @@ __device__ __forceinline__ void store_vec(T* row, int idx, const float* in) {
   *reinterpret_cast<uint4*>(row + idx) = raw;
 }
 
+// Load/store kLanes(T) elements from a row of a possibly different dtype TM
+// (the pi-style selective-bf16 recipe keeps norm weights and modulation in
+// fp32 while activations are bf16). Alignment holds: idx is a multiple of
+// kLanes(T) and kLanes(T) is a multiple of kLanes(TM) whenever TM is wider.
+template <typename T, typename TM>
+__device__ __forceinline__ void load_vec_as(const TM* row, int idx, float* out) {
+  constexpr int kL = VecTraits<T>::kLanes;
+  constexpr int kLM = VecTraits<TM>::kLanes;
+#pragma unroll
+  for (int j = 0; j < kL / kLM; ++j) {
+    uint4 raw = *reinterpret_cast<const uint4*>(row + idx + j * kLM);
+    const TM* v = reinterpret_cast<const TM*>(&raw);
+#pragma unroll
+    for (int i = 0; i < kLM; ++i) out[j * kLM + i] = to_f32(v[i]);
+  }
+}
+
+template <typename T, typename TM>
+__device__ __forceinline__ void store_vec_as(TM* row, int idx, const float* in) {
+  constexpr int kL = VecTraits<T>::kLanes;
+  constexpr int kLM = VecTraits<TM>::kLanes;
+#pragma unroll
+  for (int j = 0; j < kL / kLM; ++j) {
+    uint4 raw;
+    TM* v = reinterpret_cast<TM*>(&raw);
+#pragma unroll
+    for (int i = 0; i < kLM; ++i) v[i] = from_f32<TM>(in[j * kLM + i]);
+    *reinterpret_cast<uint4*>(row + idx + j * kLM) = raw;
+  }
+}
+
 template <typename T>
 __device__ __forceinline__ const T* mod_row(ModView m, int b, int t) {
   return reinterpret_cast<const T*>(m.ptr) + (long)b * m.batch_stride +
@@ -111,11 +142,11 @@ __device__ __forceinline__ const T* mod_row(ModView m, int b, int t) {
 // forward
 // ---------------------------------------------------------------------------
 
-template <typename T, bool kAdaptive, bool kResGate, int kNVec>
+template <typename T, typename TM, bool kAdaptive, bool kResGate, int kNVec>
 __global__ void adarms_fwd_kernel(const T* __restrict__ x,
                                   const T* __restrict__ hbr,
                                   const T* __restrict__ gate, ModView scale,
-                                  ModView shift, const T* __restrict__ weight,
+                                  ModView shift, const TM* __restrict__ weight,
                                   T* __restrict__ r, T* __restrict__ y,
                                   float* __restrict__ rstd_out, int tokens,
                                   int h, float eps) {
@@ -158,16 +189,16 @@ __global__ void adarms_fwd_kernel(const T* __restrict__ x,
   const float rstd = rsqrtf(block_reduce_sum(sq) / (float)h + eps);
   if (threadIdx.x == 0) rstd_out[row] = rstd;
 
-  const T* srow = kAdaptive ? mod_row<T>(scale, b, t) : nullptr;
-  const T* frow = kAdaptive ? mod_row<T>(shift, b, t) : nullptr;
+  const TM* srow = kAdaptive ? mod_row<TM>(scale, b, t) : nullptr;
+  const TM* frow = kAdaptive ? mod_row<TM>(shift, b, t) : nullptr;
   int v = 0;
   for (int idx = threadIdx.x * kLanes; idx < h; idx += kThreads * kLanes, ++v) {
     float sc[kLanes], sf[kLanes];
     if (kAdaptive) {
-      load_vec<T>(srow, idx, sc);
-      load_vec<T>(frow, idx, sf);
+      load_vec_as<T, TM>(srow, idx, sc);
+      load_vec_as<T, TM>(frow, idx, sf);
     } else {
-      load_vec<T>(weight, idx, sc);
+      load_vec_as<T, TM>(weight, idx, sc);
     }
     float out[kLanes];
 #pragma unroll
@@ -195,13 +226,13 @@ __global__ void adarms_fwd_kernel(const T* __restrict__ x,
 // across their rows and write ONE partial row per CTA — the (grid, H)
 // partials are summed by the caller (per-column atomics across thousands of
 // rows serialize badly).
-template <typename T, bool kAdaptive, bool kResGate, int kNVec>
+template <typename T, typename TM, bool kAdaptive, bool kResGate, int kNVec>
 __global__ void adarms_bwd_kernel(
     const T* __restrict__ dy, const T* __restrict__ dyr,
     const T* __restrict__ xin, const T* __restrict__ hbr,
-    const T* __restrict__ gate, ModView scale, const T* __restrict__ weight,
+    const T* __restrict__ gate, ModView scale, const TM* __restrict__ weight,
     const float* __restrict__ rstd_in, T* __restrict__ dx,
-    T* __restrict__ dh, T* __restrict__ dg, T* __restrict__ dscale_elem,
+    T* __restrict__ dh, T* __restrict__ dg, TM* __restrict__ dscale_elem,
     int rows, int tokens, int h) {
   constexpr int kLanes = VecTraits<T>::kLanes;
 
@@ -214,7 +245,7 @@ __global__ void adarms_bwd_kernel(
   if (!kAdaptive) {
     int nv = 0;
     for (int idx = threadIdx.x * kLanes; idx < h; idx += kThreads * kLanes, ++nv) {
-      load_vec<T>(weight, idx, wv[nv]);
+      load_vec_as<T, TM>(weight, idx, wv[nv]);
 #pragma unroll
       for (int i = 0; i < kLanes; ++i) dw[nv][i] = 0.0f;
     }
@@ -228,14 +259,14 @@ __global__ void adarms_bwd_kernel(
     float xv[kNVec][kLanes];
     float dyv[kNVec][kLanes];
     float scv[kNVec][kLanes];
-    const T* srow = kAdaptive ? mod_row<T>(scale, b, t) : nullptr;
+    const TM* srow = kAdaptive ? mod_row<TM>(scale, b, t) : nullptr;
 
     float dot = 0.0f;
     int nvec = 0;
     for (int idx = threadIdx.x * kLanes; idx < h; idx += kThreads * kLanes, ++nvec) {
       load_vec<T>(xin + (long)row * h, idx, xv[nvec]);
       load_vec<T>(dy + (long)row * h, idx, dyv[nvec]);
-      if (kAdaptive) load_vec<T>(srow, idx, scv[nvec]);
+      if (kAdaptive) load_vec_as<T, TM>(srow, idx, scv[nvec]);
 #pragma unroll
       for (int i = 0; i < kLanes; ++i) {
         const float sc = kAdaptive ? scv[nvec][i] : wv[nvec][i];
@@ -284,7 +315,7 @@ __global__ void adarms_bwd_kernel(
         store_vec<T>(dx + (long)row * h, idx, out);
       }
       if (kAdaptive) {
-        store_vec<T>(dscale_elem + (long)row * h, idx, dsc);
+        store_vec_as<T, TM>(dscale_elem + (long)row * h, idx, dsc);
       } else {
 #pragma unroll
         for (int i = 0; i < kLanes; ++i) dw[v][i] += dsc[i];
@@ -303,29 +334,29 @@ __global__ void adarms_bwd_kernel(
   }
 }
 
-template <typename T, bool A, bool R, typename... Args>
+template <typename T, typename TM, bool A, bool R, typename... Args>
 void launch_fwd_nvec(int nvec, dim3 grid, dim3 block, cudaStream_t stream,
                      Args... args) {
   switch (nvec) {
-    case 1: adarms_fwd_kernel<T, A, R, 1><<<grid, block, 0, stream>>>(args...); break;
-    case 2: adarms_fwd_kernel<T, A, R, 2><<<grid, block, 0, stream>>>(args...); break;
-    case 3: adarms_fwd_kernel<T, A, R, 3><<<grid, block, 0, stream>>>(args...); break;
-    default: adarms_fwd_kernel<T, A, R, 4><<<grid, block, 0, stream>>>(args...); break;
+    case 1: adarms_fwd_kernel<T, TM, A, R, 1><<<grid, block, 0, stream>>>(args...); break;
+    case 2: adarms_fwd_kernel<T, TM, A, R, 2><<<grid, block, 0, stream>>>(args...); break;
+    case 3: adarms_fwd_kernel<T, TM, A, R, 3><<<grid, block, 0, stream>>>(args...); break;
+    default: adarms_fwd_kernel<T, TM, A, R, 4><<<grid, block, 0, stream>>>(args...); break;
   }
 }
 
-template <typename T, bool A, bool R, typename... Args>
+template <typename T, typename TM, bool A, bool R, typename... Args>
 void launch_bwd_nvec(int nvec, dim3 grid, dim3 block, cudaStream_t stream,
                      Args... args) {
   switch (nvec) {
-    case 1: adarms_bwd_kernel<T, A, R, 1><<<grid, block, 0, stream>>>(args...); break;
-    case 2: adarms_bwd_kernel<T, A, R, 2><<<grid, block, 0, stream>>>(args...); break;
-    case 3: adarms_bwd_kernel<T, A, R, 3><<<grid, block, 0, stream>>>(args...); break;
-    default: adarms_bwd_kernel<T, A, R, 4><<<grid, block, 0, stream>>>(args...); break;
+    case 1: adarms_bwd_kernel<T, TM, A, R, 1><<<grid, block, 0, stream>>>(args...); break;
+    case 2: adarms_bwd_kernel<T, TM, A, R, 2><<<grid, block, 0, stream>>>(args...); break;
+    case 3: adarms_bwd_kernel<T, TM, A, R, 3><<<grid, block, 0, stream>>>(args...); break;
+    default: adarms_bwd_kernel<T, TM, A, R, 4><<<grid, block, 0, stream>>>(args...); break;
   }
 }
 
-template <typename T>
+template <typename T, typename TM>
 void fwd_dispatch(const void* x, const void* hbr, const void* gate,
                   ModView scale, ModView shift, const void* weight, void* r,
                   void* y, float* rstd, int rows, int tokens, int h, float eps,
@@ -335,10 +366,10 @@ void fwd_dispatch(const void* x, const void* hbr, const void* gate,
                    (kThreads * VecTraits<T>::kLanes);
   dim3 grid(rows), block(kThreads);
 #define LAUNCH(A, R)                                                          \
-  launch_fwd_nvec<T, A, R>(nvec, grid, block, stream,                     \
+  launch_fwd_nvec<T, TM, A, R>(nvec, grid, block, stream,                     \
       reinterpret_cast<const T*>(x), reinterpret_cast<const T*>(hbr),         \
       reinterpret_cast<const T*>(gate), scale, shift,                         \
-      reinterpret_cast<const T*>(weight), reinterpret_cast<T*>(r),            \
+      reinterpret_cast<const TM*>(weight), reinterpret_cast<T*>(r),           \
       reinterpret_cast<T*>(y), rstd, tokens, h, eps)
   if (adaptive && resgate) LAUNCH(true, true);
   else if (adaptive) LAUNCH(true, false);
@@ -347,7 +378,7 @@ void fwd_dispatch(const void* x, const void* hbr, const void* gate,
 #undef LAUNCH
 }
 
-template <typename T>
+template <typename T, typename TM>
 void bwd_dispatch(const void* dy, const void* dyr, const void* xin,
                   const void* hbr, const void* gate, ModView scale,
                   const void* weight, const float* rstd, void* dx, void* dh,
@@ -358,13 +389,13 @@ void bwd_dispatch(const void* dy, const void* dyr, const void* xin,
                    (kThreads * VecTraits<T>::kLanes);
   dim3 grid(adaptive ? rows : bwd_weight_grid(rows)), block(kThreads);
 #define LAUNCH(A, R)                                                          \
-  launch_bwd_nvec<T, A, R>(nvec, grid, block, stream,                     \
+  launch_bwd_nvec<T, TM, A, R>(nvec, grid, block, stream,                     \
       reinterpret_cast<const T*>(dy), reinterpret_cast<const T*>(dyr),        \
       reinterpret_cast<const T*>(xin), reinterpret_cast<const T*>(hbr),       \
       reinterpret_cast<const T*>(gate), scale,                                \
-      reinterpret_cast<const T*>(weight), rstd, reinterpret_cast<T*>(dx),     \
+      reinterpret_cast<const TM*>(weight), rstd, reinterpret_cast<T*>(dx),    \
       reinterpret_cast<T*>(dh), reinterpret_cast<T*>(dg),                     \
-      reinterpret_cast<T*>(dscale_elem), rows, tokens, h)
+      reinterpret_cast<TM*>(dscale_elem), rows, tokens, h)
   if (adaptive && resgate) LAUNCH(true, true);
   else if (adaptive) LAUNCH(true, false);
   else if (resgate) LAUNCH(false, true);
@@ -376,42 +407,61 @@ void bwd_dispatch(const void* dy, const void* dyr, const void* xin,
 
 void adarms_fwd_launch(const void* x, ModView scale, ModView shift,
                        const void* weight, void* y, float* rstd, int rows,
-                       int tokens, int h, float eps, bool bf16,
+                       int tokens, int h, float eps, bool bf16, bool mod_fp32,
                        cudaStream_t stream) {
-  if (bf16)
-    fwd_dispatch<__nv_bfloat16>(x, nullptr, nullptr, scale, shift, weight,
-                                nullptr, y, rstd, rows, tokens, h, eps, false,
-                                stream);
+  if (bf16 && mod_fp32)
+    fwd_dispatch<__nv_bfloat16, float>(x, nullptr, nullptr, scale, shift,
+                                       weight, nullptr, y, rstd, rows, tokens,
+                                       h, eps, false, stream);
+  else if (bf16)
+    fwd_dispatch<__nv_bfloat16, __nv_bfloat16>(x, nullptr, nullptr, scale,
+                                               shift, weight, nullptr, y, rstd,
+                                               rows, tokens, h, eps, false,
+                                               stream);
   else
-    fwd_dispatch<float>(x, nullptr, nullptr, scale, shift, weight, nullptr, y,
-                        rstd, rows, tokens, h, eps, false, stream);
+    fwd_dispatch<float, float>(x, nullptr, nullptr, scale, shift, weight,
+                               nullptr, y, rstd, rows, tokens, h, eps, false,
+                               stream);
 }
 
 void adarms_bwd_launch(const void* dy, const void* x, ModView scale,
                        const void* weight, const float* rstd, void* dx,
                        void* dscale_elem, int rows, int tokens,
-                       int h, bool bf16, cudaStream_t stream) {
-  if (bf16)
-    bwd_dispatch<__nv_bfloat16>(dy, nullptr, x, nullptr, nullptr, scale,
-                                weight, rstd, dx, nullptr, nullptr,
-                                dscale_elem, rows, tokens, h, false, stream);
+                       int h, bool bf16, bool mod_fp32, cudaStream_t stream) {
+  if (bf16 && mod_fp32)
+    bwd_dispatch<__nv_bfloat16, float>(dy, nullptr, x, nullptr, nullptr, scale,
+                                       weight, rstd, dx, nullptr, nullptr,
+                                       dscale_elem, rows, tokens, h, false,
+                                       stream);
+  else if (bf16)
+    bwd_dispatch<__nv_bfloat16, __nv_bfloat16>(dy, nullptr, x, nullptr,
+                                               nullptr, scale, weight, rstd,
+                                               dx, nullptr, nullptr,
+                                               dscale_elem, rows, tokens, h,
+                                               false, stream);
   else
-    bwd_dispatch<float>(dy, nullptr, x, nullptr, nullptr, scale, weight, rstd,
-                        dx, nullptr, nullptr, dscale_elem, rows,
-                        tokens, h, false, stream);
+    bwd_dispatch<float, float>(dy, nullptr, x, nullptr, nullptr, scale, weight,
+                               rstd, dx, nullptr, nullptr, dscale_elem, rows,
+                               tokens, h, false, stream);
 }
 
 void resgate_adarms_fwd_launch(const void* x, const void* hbr,
                                const void* gate, ModView scale, ModView shift,
                                const void* weight, void* r, void* y,
                                float* rstd, int rows, int tokens, int h,
-                               float eps, bool bf16, cudaStream_t stream) {
-  if (bf16)
-    fwd_dispatch<__nv_bfloat16>(x, hbr, gate, scale, shift, weight, r, y, rstd,
-                                rows, tokens, h, eps, true, stream);
+                               float eps, bool bf16, bool mod_fp32,
+                               cudaStream_t stream) {
+  if (bf16 && mod_fp32)
+    fwd_dispatch<__nv_bfloat16, float>(x, hbr, gate, scale, shift, weight, r,
+                                       y, rstd, rows, tokens, h, eps, true,
+                                       stream);
+  else if (bf16)
+    fwd_dispatch<__nv_bfloat16, __nv_bfloat16>(x, hbr, gate, scale, shift,
+                                               weight, r, y, rstd, rows,
+                                               tokens, h, eps, true, stream);
   else
-    fwd_dispatch<float>(x, hbr, gate, scale, shift, weight, r, y, rstd, rows,
-                        tokens, h, eps, true, stream);
+    fwd_dispatch<float, float>(x, hbr, gate, scale, shift, weight, r, y, rstd,
+                               rows, tokens, h, eps, true, stream);
 }
 
 void resgate_adarms_bwd_launch(const void* dy, const void* dyr, const void* r,
@@ -420,15 +470,20 @@ void resgate_adarms_bwd_launch(const void* dy, const void* dyr, const void* r,
                                const float* rstd, void* dr_total, void* dh,
                                void* dg, void* dscale_elem,
                                int rows, int tokens, int h, bool bf16,
-                               cudaStream_t stream) {
-  if (bf16)
-    bwd_dispatch<__nv_bfloat16>(dy, dyr, r, hbr, gate, scale, weight, rstd,
-                                dr_total, dh, dg, dscale_elem, rows,
-                                tokens, h, true, stream);
+                               bool mod_fp32, cudaStream_t stream) {
+  if (bf16 && mod_fp32)
+    bwd_dispatch<__nv_bfloat16, float>(dy, dyr, r, hbr, gate, scale, weight,
+                                       rstd, dr_total, dh, dg, dscale_elem,
+                                       rows, tokens, h, true, stream);
+  else if (bf16)
+    bwd_dispatch<__nv_bfloat16, __nv_bfloat16>(dy, dyr, r, hbr, gate, scale,
+                                               weight, rstd, dr_total, dh, dg,
+                                               dscale_elem, rows, tokens, h,
+                                               true, stream);
   else
-    bwd_dispatch<float>(dy, dyr, r, hbr, gate, scale, weight, rstd, dr_total,
-                        dh, dg, dscale_elem, rows, tokens, h, true,
-                        stream);
+    bwd_dispatch<float, float>(dy, dyr, r, hbr, gate, scale, weight, rstd,
+                               dr_total, dh, dg, dscale_elem, rows, tokens, h,
+                               true, stream);
 }
 
 }  // namespace adarms_train

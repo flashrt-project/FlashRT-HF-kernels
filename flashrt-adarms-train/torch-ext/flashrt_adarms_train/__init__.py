@@ -92,10 +92,14 @@ def reference_resgate_adarms(
 # ---------------------------------------------------------------------------
 
 
-def _kernel_supported(x: torch.Tensor) -> bool:
+def _kernel_supported(x: torch.Tensor, mod: torch.Tensor) -> bool:
     if not (_HAS_OPS and x.is_cuda and x.dim() == 3):
         return False
     if x.dtype not in (torch.bfloat16, torch.float32):
+        return False
+    # the modulation/weight may be fp32 alongside bf16 activations (pi-style
+    # selective-bf16 keeps norm parameters in fp32)
+    if mod.dtype not in (x.dtype, torch.float32):
         return False
     lanes = 8 if x.dtype == torch.bfloat16 else 4
     return x.shape[-1] % lanes == 0 and x.shape[-1] <= 256 * lanes * 4
@@ -164,9 +168,9 @@ class _AdaRMSFn(torch.autograd.Function):
         dx, dmod = ops.adarms_bwd(dy, x, scale, weight, rstd)
         if scale is not None:
             dscale = _reduce_broadcast(dmod, scale)
-            dshift = _reduce_broadcast(dy, scale)
+            dshift = _reduce_broadcast(dy, scale).to(scale.dtype)
             return dx, dscale, dshift, None, None
-        return dx, None, None, dmod.to(weight.dtype), None
+        return dx, None, None, dmod, None
 
 
 class _ResGateAdaRMSFn(torch.autograd.Function):
@@ -189,9 +193,9 @@ class _ResGateAdaRMSFn(torch.autograd.Function):
         dg_out = dg if gate_in is not None else None
         if scale is not None:
             dscale = _reduce_broadcast(dmod, scale)
-            dshift = _reduce_broadcast(dy, scale)
+            dshift = _reduce_broadcast(dy, scale).to(scale.dtype)
             return dr, dh, dg_out, dscale, dshift, None, None
-        return dr, dh, dg_out, None, None, dmod.to(weight.dtype), None
+        return dr, dh, dg_out, None, None, dmod, None
 
 
 def _split_modulation(x: torch.Tensor, modulation: torch.Tensor):
@@ -207,13 +211,13 @@ def adarms(
     adaptive: bool = True,
 ):
     """AdaRMS with fused CUDA fwd+bwd. Returns (y, gate_or_None)."""
-    if not _kernel_supported(x):
+    if not _kernel_supported(x, modulation_or_weight):
         y, gate, _ = reference_adarms(x, modulation_or_weight, eps, adaptive)
         return y, gate
     if adaptive:
         scale, shift, gate = _split_modulation(x, modulation_or_weight)
         y = _AdaRMSFn.apply(x.contiguous(), scale, shift, None, eps)
-        return y, gate
+        return y, gate.to(x.dtype)
     y = _AdaRMSFn.apply(x.contiguous(), None, None, modulation_or_weight, eps)
     return y, None
 
@@ -227,28 +231,57 @@ def resgate_adarms(
     adaptive: bool = True,
 ):
     """r = x + h * gate_in, then AdaRMS(r). Returns (r, y, gate_or_None)."""
-    if not _kernel_supported(x):
+    if not _kernel_supported(x, modulation_or_weight):
         r, y, gate, _ = reference_resgate_adarms(
             x, h, gate_in, modulation_or_weight, eps, adaptive
         )
         return r, y, gate
     gate_in_c = None
     if gate_in is not None:
+        gate_in_c = gate_in.to(x.dtype)
         gate_in_c = (
-            gate_in.expand_as(x).contiguous()
-            if gate_in.shape != x.shape
-            else gate_in.contiguous()
+            gate_in_c.expand_as(x).contiguous()
+            if gate_in_c.shape != x.shape
+            else gate_in_c.contiguous()
         )
     if adaptive:
         scale, shift, gate = _split_modulation(x, modulation_or_weight)
         r, y = _ResGateAdaRMSFn.apply(
             x.contiguous(), h.contiguous(), gate_in_c, scale, shift, None, eps
         )
-        return r, y, gate
+        return r, y, gate.to(x.dtype)
     r, y = _ResGateAdaRMSFn.apply(
         x.contiguous(), h.contiguous(), gate_in_c, None, None, modulation_or_weight, eps
     )
     return r, y, None
+
+
+def adarms_forward(
+    x: torch.Tensor,
+    modulation_or_weight: torch.Tensor,
+    eps: float = 1e-6,
+    adaptive: bool = True,
+):
+    """Compatibility wrapper returning (y, gate_or_None, rstd)."""
+    y, gate = adarms(x, modulation_or_weight, eps, adaptive)
+    _, _, rstd = reference_adarms(x, modulation_or_weight, eps, adaptive)
+    return y, gate, rstd
+
+
+def resgate_adarms_forward(
+    x: torch.Tensor,
+    h: torch.Tensor,
+    gate_in: torch.Tensor | None,
+    modulation_or_weight: torch.Tensor,
+    eps: float = 1e-6,
+    adaptive: bool = True,
+):
+    """Compatibility wrapper returning (r, y, gate_or_None, rstd)."""
+    r, y, gate = resgate_adarms(x, h, gate_in, modulation_or_weight, eps, adaptive)
+    _, _, _, rstd = reference_resgate_adarms(
+        x, h, gate_in, modulation_or_weight, eps, adaptive
+    )
+    return r, y, gate, rstd
 
 
 class FlashRTAdaRMSNorm(nn.Module):
@@ -284,6 +317,8 @@ def backend_marker(x: torch.Tensor) -> torch.Tensor:
 __all__ = [
     "adarms",
     "resgate_adarms",
+    "adarms_forward",
+    "resgate_adarms_forward",
     "reference_adarms",
     "reference_resgate_adarms",
     "FlashRTAdaRMSNorm",

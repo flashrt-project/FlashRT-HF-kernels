@@ -33,7 +33,9 @@ ModView mod_view(const c10::optional<torch::Tensor>& m, const torch::Tensor& x,
   if (!m.has_value()) return ModView{nullptr, 0, 0};
   const torch::Tensor& t = m.value();
   TORCH_CHECK(t.is_cuda() && t.dim() == 3, name, " must be CUDA (B, 1|T, H)");
-  TORCH_CHECK(t.scalar_type() == x.scalar_type(), name, " dtype must match x");
+  TORCH_CHECK(t.scalar_type() == x.scalar_type() ||
+                  t.scalar_type() == torch::kFloat32,
+              name, " dtype must match x or be fp32");
   TORCH_CHECK(t.stride(2) == 1, name, " last dim must be contiguous");
   TORCH_CHECK(t.size(0) == x.size(0) && t.size(2) == x.size(2), name,
               " shape mismatch");
@@ -48,8 +50,10 @@ const void* weight_ptr(const c10::optional<torch::Tensor>& w,
   if (!w.has_value()) return nullptr;
   const torch::Tensor& t = w.value();
   TORCH_CHECK(t.is_cuda() && t.is_contiguous() && t.dim() == 1 &&
-                  t.size(0) == x.size(-1) && t.scalar_type() == x.scalar_type(),
-              "weight must be contiguous CUDA (H,) matching x dtype");
+                  t.size(0) == x.size(-1) &&
+                  (t.scalar_type() == x.scalar_type() ||
+                   t.scalar_type() == torch::kFloat32),
+              "weight must be contiguous CUDA (H,) in x dtype or fp32");
   return t.data_ptr();
 }
 
@@ -57,6 +61,19 @@ void check_mode(const c10::optional<torch::Tensor>& scale,
                 const c10::optional<torch::Tensor>& weight) {
   TORCH_CHECK(scale.has_value() != weight.has_value(),
               "exactly one of scale/shift or weight is required");
+}
+
+torch::ScalarType mod_dtype(const c10::optional<torch::Tensor>& scale,
+                            const c10::optional<torch::Tensor>& weight) {
+  return scale.has_value() ? scale.value().scalar_type()
+                           : weight.value().scalar_type();
+}
+
+bool mod_is_fp32_mixed(const torch::Tensor& x,
+                       const c10::optional<torch::Tensor>& scale,
+                       const c10::optional<torch::Tensor>& weight) {
+  return x.scalar_type() == torch::kBFloat16 &&
+         mod_dtype(scale, weight) == torch::kFloat32;
 }
 
 }  // namespace
@@ -80,7 +97,8 @@ std::tuple<torch::Tensor, torch::Tensor> adarms_fwd(
       x.data_ptr(), mod_view(scale, x, "scale"), mod_view(shift, x, "shift"),
       weight_ptr(weight, x), y.data_ptr(), rstd.data_ptr<float>(),
       (int)(x.size(0) * x.size(1)), (int)x.size(1), (int)x.size(2), (float)eps,
-      x.scalar_type() == torch::kBFloat16, stream.stream());
+      x.scalar_type() == torch::kBFloat16, mod_is_fp32_mixed(x, scale, weight),
+      stream.stream());
   return {y, rstd};
 }
 
@@ -95,18 +113,19 @@ std::tuple<torch::Tensor, torch::Tensor> adarms_bwd(
   const int rows = (int)(x.size(0) * x.size(1));
   // Adaptive: per-row dscale elements. Weight mode: per-CTA fp32 partial
   // weight-grad rows, summed below.
+  const int partial_rows = flashrt_hub::adarms_train::bwd_weight_grid(rows);
   auto dmod_elem =
       scale.has_value()
-          ? torch::empty_like(x)
-          : torch::empty({flashrt_hub::adarms_train::bwd_weight_grid(rows),
-                          x.size(-1)},
+          ? torch::empty_like(x, x.options().dtype(mod_dtype(scale, weight)))
+          : torch::empty({partial_rows, x.size(-1)},
                          x.options().dtype(torch::kFloat32));
   auto stream = at::cuda::getCurrentCUDAStream();
   flashrt_hub::adarms_train::adarms_bwd_launch(
       dy.data_ptr(), x.data_ptr(), mod_view(scale, x, "scale"),
       weight_ptr(weight, x), rstd.data_ptr<float>(), dx.data_ptr(),
       dmod_elem.data_ptr(), rows, (int)x.size(1), (int)x.size(2),
-      x.scalar_type() == torch::kBFloat16, stream.stream());
+      x.scalar_type() == torch::kBFloat16, mod_is_fp32_mixed(x, scale, weight),
+      stream.stream());
   torch::Tensor dmod =
       scale.has_value() ? dmod_elem : dmod_elem.sum(0);
   return {dx, dmod};
@@ -136,7 +155,8 @@ std::tuple<torch::Tensor, torch::Tensor, torch::Tensor> resgate_adarms_fwd(
       mod_view(scale, x, "scale"), mod_view(shift, x, "shift"),
       weight_ptr(weight, x), r.data_ptr(), y.data_ptr(), rstd.data_ptr<float>(),
       (int)(x.size(0) * x.size(1)), (int)x.size(1), (int)x.size(2), (float)eps,
-      x.scalar_type() == torch::kBFloat16, stream.stream());
+      x.scalar_type() == torch::kBFloat16, mod_is_fp32_mixed(x, scale, weight),
+      stream.stream());
   return {r, y, rstd};
 }
 
@@ -159,11 +179,11 @@ resgate_adarms_bwd(const torch::Tensor& dy,
   auto dg = gate.has_value() ? torch::empty_like(r)
                              : torch::empty({0}, r.options());
   const int rows = (int)(r.size(0) * r.size(1));
+  const int partial_rows = flashrt_hub::adarms_train::bwd_weight_grid(rows);
   auto dmod_elem =
       scale.has_value()
-          ? torch::empty_like(r)
-          : torch::empty({flashrt_hub::adarms_train::bwd_weight_grid(rows),
-                          r.size(-1)},
+          ? torch::empty_like(r, r.options().dtype(mod_dtype(scale, weight)))
+          : torch::empty({partial_rows, r.size(-1)},
                          r.options().dtype(torch::kFloat32));
   auto stream = at::cuda::getCurrentCUDAStream();
   flashrt_hub::adarms_train::resgate_adarms_bwd_launch(
@@ -173,8 +193,8 @@ resgate_adarms_bwd(const torch::Tensor& dy,
       mod_view(scale, r, "scale"), weight_ptr(weight, r),
       rstd.data_ptr<float>(), dr.data_ptr(), dh.data_ptr(),
       gate.has_value() ? dg.data_ptr() : nullptr, dmod_elem.data_ptr(), rows,
-      (int)r.size(1), (int)r.size(2),
-      r.scalar_type() == torch::kBFloat16, stream.stream());
+      (int)r.size(1), (int)r.size(2), r.scalar_type() == torch::kBFloat16,
+      mod_is_fp32_mixed(r, scale, weight), stream.stream());
   torch::Tensor dmod =
       scale.has_value() ? dmod_elem : dmod_elem.sum(0);
   return {dr, dh, dg, dmod};

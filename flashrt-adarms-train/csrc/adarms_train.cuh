@@ -22,24 +22,24 @@ struct ModView {
 // reduces broadcasts). Weight-mode backward writes per-CTA fp32 partial
 // weight-grad rows of shape (bwd_weight_grid(rows), H) into the same output
 // slot; the caller sums dim 0.
-inline int bwd_weight_grid(int rows) { return rows < 1536 ? rows : 1536; }
+inline int bwd_weight_grid(int rows) { return rows < 128 ? rows : 128; }
 
 void adarms_fwd_launch(const void* x, ModView scale, ModView shift,
                        const void* weight, void* y, float* rstd, int rows,
-                       int tokens, int h, float eps, bool bf16,
+                       int tokens, int h, float eps, bool bf16, bool mod_fp32,
                        cudaStream_t stream);
 
 void adarms_bwd_launch(const void* dy, const void* x, ModView scale,
                        const void* weight, const float* rstd, void* dx,
-                       void* dscale_elem,  // (rows, H) io dtype
-                       int rows, int tokens, int h, bool bf16,
+                       void* dscale_elem,  // (rows, H) modulation dtype
+                       int rows, int tokens, int h, bool bf16, bool mod_fp32,
                        cudaStream_t stream);
 
 void resgate_adarms_fwd_launch(const void* x, const void* hbr, const void* gate,
                                ModView scale, ModView shift, const void* weight,
                                void* r, void* y, float* rstd, int rows,
                                int tokens, int h, float eps, bool bf16,
-                               cudaStream_t stream);
+                               bool mod_fp32, cudaStream_t stream);
 
 void resgate_adarms_bwd_launch(const void* dy, const void* dyr,  // dyr may be nullptr
                                const void* r, const void* hbr, const void* gate,
@@ -47,7 +47,7 @@ void resgate_adarms_bwd_launch(const void* dy, const void* dyr,  // dyr may be n
                                const float* rstd, void* dr_total, void* dh,
                                void* dg,  // nullptr if gate == nullptr
                                void* dscale_elem, int rows,
-                               int tokens, int h, bool bf16,
+                               int tokens, int h, bool bf16, bool mod_fp32,
                                cudaStream_t stream);
 
 }  // namespace adarms_train

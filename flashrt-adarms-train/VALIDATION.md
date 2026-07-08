@@ -11,7 +11,9 @@ After HF Jobs publishing:
 
 ```python
 from kernels import get_kernel
-ops = get_kernel("flashrt/flashrt-adarms-train", version=1)
+ops = get_kernel("flashrt/flashrt-adarms-train", revision="v1")
 ```
 
-Run the package test with the installed artifact path. Performance acceptance is not claimed until the CUDA optimized implementation clears `kernel_acceptance_specs.md`.
+Run the package test with the installed artifact path. Correctness Gate 1 must
+remain zero-fail. Gate 2 is reported in `benchmarks/RESULTS.md`; do not convert
+conditional rows into public performance claims.
