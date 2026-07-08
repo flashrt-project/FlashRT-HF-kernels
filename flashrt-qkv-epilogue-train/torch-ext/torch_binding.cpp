@@ -10,7 +10,7 @@ torch::Tensor flashrt_training_package_marker(torch::Tensor x) { return x; }
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("_flashrt_training_package_marker(Tensor x) -> Tensor");
-  ops.impl("_flashrt_training_package_marker", torch::kCompositeExplicitAutograd, &flashrt_training_package_marker);
+  ops.impl("_flashrt_training_package_marker", c10::DispatchKey::CompositeExplicitAutograd, &flashrt_training_package_marker);
 }
 
 REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
