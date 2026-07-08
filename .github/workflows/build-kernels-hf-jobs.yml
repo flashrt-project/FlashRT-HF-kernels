@@ -38,6 +38,11 @@ on:
       - "speculative-draft-primitives/**"
       - "int8-transformer-primitives/**"
       - "transformer-layout-primitives/**"
+      - "flashrt-siglip-fwd-fusion/**"
+      - "flashrt-qkv-epilogue-train/**"
+      - "flashrt-rope-train/**"
+      - "flashrt-vocab-ce-train/**"
+      - "flashrt-adarms-train/**"
   workflow_dispatch:
     inputs:
       package:
@@ -80,6 +85,11 @@ on:
           - speculative-draft-primitives
           - int8-transformer-primitives
           - transformer-layout-primitives
+          - flashrt-siglip-fwd-fusion
+          - flashrt-qkv-epilogue-train
+          - flashrt-rope-train
+          - flashrt-vocab-ce-train
+          - flashrt-adarms-train
 
 permissions:
   contents: read
@@ -129,6 +139,11 @@ jobs:
           - speculative-draft-primitives
           - int8-transformer-primitives
           - transformer-layout-primitives
+          - flashrt-siglip-fwd-fusion
+          - flashrt-qkv-epilogue-train
+          - flashrt-rope-train
+          - flashrt-vocab-ce-train
+          - flashrt-adarms-train
 
     steps:
       - uses: actions/checkout@v4

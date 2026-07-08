@@ -161,6 +161,11 @@ demos:
   integration experiments.
 - `transformer-layout-primitives/benchmarks`: BF16 layout, GQA repeat,
   text-state gather/scatter, RoPE, and fused Q/K RMSNorm+RoPE primitives.
+- `flashrt-adarms-train`: AdaRMS + gated residual training API skeleton with eager/autograd reference.
+- `flashrt-vocab-ce-train`: huge-vocab linear CE training API skeleton with eager/autograd reference.
+- `flashrt-rope-train`: RoPE fwd/bwd training API skeleton.
+- `flashrt-qkv-epilogue-train`: QKV projection + RoPE/split training API skeleton.
+- `flashrt-siglip-fwd-fusion`: FP32 SigLIP no-grad forward-fusion API skeleton.
 - `demos/pi05-hf-runtime`: HF Kernel Hub runtime-overhead prototype with
   preallocated buffers and CUDA Graph replay for PI0.5/GROOT-shaped FFN chains.
 - `demos/runtime-demo`: multi-package PI0.5-shaped runtime prototype using

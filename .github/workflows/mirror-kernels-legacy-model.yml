@@ -43,6 +43,11 @@ on:
           - speculative-draft-primitives
           - int8-transformer-primitives
           - transformer-layout-primitives
+          - flashrt-adarms-train
+          - flashrt-vocab-ce-train
+          - flashrt-rope-train
+          - flashrt-qkv-epilogue-train
+          - flashrt-siglip-fwd-fusion
 
 permissions:
   contents: read
@@ -95,6 +100,11 @@ jobs:
           - speculative-draft-primitives
           - int8-transformer-primitives
           - transformer-layout-primitives
+          - flashrt-adarms-train
+          - flashrt-vocab-ce-train
+          - flashrt-rope-train
+          - flashrt-qkv-epilogue-train
+          - flashrt-siglip-fwd-fusion
 
     steps:
       - uses: actions/checkout@v4
