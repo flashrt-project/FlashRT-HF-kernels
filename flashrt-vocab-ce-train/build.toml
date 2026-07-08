@@ -17,12 +17,12 @@ src = [
   "torch-ext/torch_binding.h",
 ]
 
-[kernel.flashrt_vocab_ce_train_stub]
+[kernel.flashrt_vocab_ce_train]
 backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
 cuda-minver = "12.8"
 src = [
-  "csrc/stub.cu",
-  "csrc/stub.cuh",
+  "csrc/vocab_ce_train.cu",
+  "csrc/vocab_ce_train.cuh",
 ]
