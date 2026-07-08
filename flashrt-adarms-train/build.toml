@@ -17,12 +17,12 @@ src = [
   "torch-ext/torch_binding.h",
 ]
 
-[kernel.flashrt_adarms_train_stub]
+[kernel.flashrt_adarms_train]
 backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
 cuda-minver = "12.8"
 src = [
-  "csrc/stub.cu",
-  "csrc/stub.cuh",
+  "csrc/adarms_train.cu",
+  "csrc/adarms_train.cuh",
 ]
