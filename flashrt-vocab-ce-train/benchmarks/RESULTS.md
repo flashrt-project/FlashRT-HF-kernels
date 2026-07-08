@@ -20,18 +20,29 @@ Composite fwd+bwd (kernel path vs plain vs compiled-plain, same harness):
 | 126 | 17.11 | 11.16 | 9.82 | <= 6.0 |
 | 504 (fallback) | 34.21 | 34.11 | 29.01 | no-regress: PASS |
 
-Isolated fwd kernel: N=46 4.16 ms (518 GB/s), N=126 9.17 ms. Journey so
-far: 10.6 -> 4.16 via (a) exact-JN templating — a variable-bound loop over
-a locally indexed accumulator array spilled to local memory (11% of
-bandwidth), (b) float4 shared-memory reads (16B row padding).
+Composite fwd+bwd with persistent leaves (no per-iteration weight clone),
+kernel vs plain vs compiled-plain:
 
-Known bottlenecks, next in line:
-1. Staging is now dominant (staging-only variant measures 3.12 ms at 675
-   GB/s): synchronous smem loads with two barriers per H-chunk expose full
-   memory latency — cp.async double-buffering is the designed fix.
-2. N>64 drops to 1 CTA/SM (h tile 66+ KB smem): make kHChunk adaptive in N
-   to hold >= 2 CTAs/SM.
-Path to the targets: max(staging, compute) overlap ~1.3-1.5 ms fwd at
-N=46, plus the fused-dW backward pass from the spec.
+| N | kernel | plain | compiled | target |
+|---|---|---|---|---|
+| 46 | 5.65 | 5.43 | 4.88 | <= 3.9 |
+| 126 | 11.88 | 8.99 | 7.82 | <= 6.0 |
+| 504 (fallback) | 32.04 | 31.97 | 27.07 | no-regress: PASS |
+
+Isolated fwd kernel journey: 10.6 -> 4.16 -> **2.32 ms (930 GB/s)** at
+N=46 (N=126: 9.17 -> 6.13):
+1. exact-JN templating — a variable-bound loop over a locally indexed
+   accumulator array spilled to local memory (11% of bandwidth);
+2. float4 shared-memory reads (16B row padding);
+3. cp.async double-buffered staging + N-adaptive H-chunk (64 for N<=64,
+   32 above) keeping two CTAs per SM where the tiles fit.
+
+Remaining ladder to the targets (both parts already in the spec):
+1. fwd 2.32 -> ~1.4 ms: deepen the pipeline (4 stages x 32-float chunks)
+   and/or widen kVTile — the 2-stage commit granularity still leaves
+   transfer bubbles (52% of bandwidth).
+2. backward: fused dW pass (read saved logits once, produce dW and
+   dlogits in the same W-sized sweep) replaces the torch dlogits chain +
+   one cuBLAS GEMM, worth ~0.4-1.5 ms depending on N.
 
 Not wired into any model path until Gate 2 passes.
