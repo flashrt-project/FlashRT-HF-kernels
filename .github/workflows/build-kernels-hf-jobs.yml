@@ -43,6 +43,7 @@ on:
       - "flashrt-rope-train/**"
       - "flashrt-vocab-ce-train/**"
       - "flashrt-adarms-train/**"
+      - "flashrt-flex-attention-train/**"
   workflow_dispatch:
     inputs:
       package:
@@ -90,6 +91,7 @@ on:
           - flashrt-rope-train
           - flashrt-vocab-ce-train
           - flashrt-adarms-train
+          - flashrt-flex-attention-train
 
 permissions:
   contents: read
@@ -144,6 +146,7 @@ jobs:
           - flashrt-rope-train
           - flashrt-vocab-ce-train
           - flashrt-adarms-train
+          - flashrt-flex-attention-train
 
     steps:
       - uses: actions/checkout@v4

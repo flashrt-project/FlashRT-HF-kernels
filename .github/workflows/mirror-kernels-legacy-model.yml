@@ -48,6 +48,7 @@ on:
           - flashrt-rope-train
           - flashrt-qkv-epilogue-train
           - flashrt-siglip-fwd-fusion
+          - flashrt-flex-attention-train
 
 permissions:
   contents: read
@@ -105,6 +106,7 @@ jobs:
           - flashrt-rope-train
           - flashrt-qkv-epilogue-train
           - flashrt-siglip-fwd-fusion
+          - flashrt-flex-attention-train
 
     steps:
       - uses: actions/checkout@v4
