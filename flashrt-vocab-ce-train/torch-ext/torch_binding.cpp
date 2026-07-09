@@ -49,6 +49,25 @@ vocab_ce_fwd_stream(const torch::Tensor& hidden, const torch::Tensor& weight,
   return {logits, pmax, psum, label_logit};
 }
 
+std::tuple<torch::Tensor, torch::Tensor> vocab_ce_stats(
+    const torch::Tensor& logits) {
+  namespace vc = flashrt_hub::vocab_ce_train;
+  TORCH_CHECK(logits.is_cuda() && logits.is_contiguous() && logits.dim() == 2 &&
+                  logits.scalar_type() == torch::kFloat32,
+              "logits must be contiguous CUDA fp32 (N, V)");
+  const long rows = logits.size(0);
+  const long v = logits.size(1);
+  TORCH_CHECK(v % 32 == 0, "V must be a multiple of 32");
+  auto pmax = torch::empty({rows, (long)vc::kStatsSplits}, logits.options());
+  auto psum = torch::empty({rows, (long)vc::kStatsSplits}, logits.options());
+  auto stream = at::cuda::getCurrentCUDAStream();
+  vc::vocab_ce_stats_launch(logits.data_ptr<float>(), pmax.data_ptr<float>(),
+                            psum.data_ptr<float>(), (int)rows, (int)v,
+                            stream.stream());
+  C10_CUDA_KERNEL_LAUNCH_CHECK();
+  return {pmax, psum};
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("_flashrt_training_package_marker(Tensor x) -> Tensor");
   ops.impl("_flashrt_training_package_marker",
@@ -58,6 +77,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
       "vocab_ce_fwd_stream(Tensor hidden, Tensor weight, Tensor labels) -> "
       "(Tensor, Tensor, Tensor, Tensor)");
   ops.impl("vocab_ce_fwd_stream", torch::kCUDA, &vocab_ce_fwd_stream);
+  ops.def("vocab_ce_stats(Tensor logits) -> (Tensor, Tensor)");
+  ops.impl("vocab_ce_stats", torch::kCUDA, &vocab_ce_stats);
 }
 
 REGISTER_EXTENSION(TORCH_EXTENSION_NAME)

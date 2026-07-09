@@ -1,10 +1,12 @@
-"""FlashRT streaming linear-CE for small-N, huge-vocab heads (training).
+"""FlashRT fused linear-CE for small-N, huge-vocab heads (training).
 
-Forward reads the fp32 (V, H) head exactly once in a custom streaming
-kernel that emits the logits (saved for backward), the label logits and
-per-vocab-tile online-softmax partials; the logsumexp merge and the scalar
-loss are tiny (N,)-sized torch ops. Backward reconstructs dlogits from the
-saved logits/lse and runs the two GEMMs through cuBLAS.
+Hybrid forward: the logits GEMM stays on cuBLAS (measured faster than any
+streaming variant at these shapes — the GEMM is bandwidth-optimal there
+already), then one fused kernel pass over the materialized logits produces
+per-row online-softmax partials, replacing the separate cross-entropy +
+logsumexp passes. The merge and the scalar loss are tiny (N,)-sized torch
+ops. Backward reconstructs dlogits from the saved logits/lse and runs the
+two GEMMs through cuBLAS.
 
 Semantics match the materialized-logits reference exactly:
 ``ignore_index`` positions contribute nothing, the loss is
@@ -20,19 +22,20 @@ import torch.nn.functional as F
 try:
     from ._ops import ops
 
-    _HAS_OPS = hasattr(ops, "vocab_ce_fwd_stream")
+    _HAS_OPS = hasattr(ops, "vocab_ce_fwd_stream") and hasattr(ops, "vocab_ce_stats")
 except Exception:  # source-tree tests before kernel-builder creates _ops.py
     ops = None
     _HAS_OPS = False
 
 _MAX_ROWS = 128
+_STATS_SPLITS = 8
 
 
 def _use_ops(namespace_ops) -> None:
     """Install a manually built extension (dev/testing path)."""
     global ops, _HAS_OPS
     ops = namespace_ops
-    _HAS_OPS = hasattr(ops, "vocab_ce_fwd_stream")
+    _HAS_OPS = hasattr(ops, "vocab_ce_fwd_stream") and hasattr(ops, "vocab_ce_stats")
     _register_fakes()
 
 
@@ -84,6 +87,14 @@ def _register_fakes() -> None:
                 hidden.new_empty((rows, tiles)),
                 hidden.new_empty((rows,)),
             )
+
+        @torch.library.register_fake(f"{namespace}::vocab_ce_stats")
+        def _(logits):
+            rows = logits.shape[0]
+            return (
+                logits.new_empty((rows, _STATS_SPLITS)),
+                logits.new_empty((rows, _STATS_SPLITS)),
+            )
     except Exception:
         pass
 
@@ -94,7 +105,9 @@ _register_fakes()
 class _VocabCEFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, hidden, weight, labels, z_loss_weight, ignore_index):
-        logits, pmax, psum, label_logit = ops.vocab_ce_fwd_stream(hidden, weight, labels)
+        logits = torch.mm(hidden, weight.t())
+        pmax, psum = ops.vocab_ce_stats(logits)
+        label_logit = logits.gather(1, labels.clamp(min=0)[:, None]).squeeze(1)
         m = pmax.max(dim=1).values
         lse = m + torch.log((psum * torch.exp(pmax - m[:, None])).sum(dim=1))
         valid = (labels != ignore_index).to(lse.dtype)

@@ -21,5 +21,14 @@ void vocab_ce_fwd_launch(const float* hidden,  // (rows, H) fp32 contiguous
                          float* label_logit,   // (rows,) pre-filled 0
                          int rows, int v, int h, cudaStream_t stream);
 
+// One streaming pass over materialized logits: per-row online-softmax
+// partials, kStatsSplits per row (merged downstream like the fwd partials).
+constexpr int kStatsSplits = 8;
+
+void vocab_ce_stats_launch(const float* logits,  // (rows, V) fp32 contiguous
+                           float* partial_max,   // (rows, kStatsSplits)
+                           float* partial_sum,   // (rows, kStatsSplits)
+                           int rows, int v, cudaStream_t stream);
+
 }  // namespace vocab_ce_train
 }  // namespace flashrt_hub
