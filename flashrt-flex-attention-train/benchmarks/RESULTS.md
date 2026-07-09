@@ -64,16 +64,27 @@ CUDA with no dropout, SDPA elsewhere.
   (128x128 for P>=896-class shapes).
 - A100/H100/H200: SDPA path (see the verdict table).
 
-## Next levers (not yet implemented)
+## Measured and closed follow-up levers (2026-07-09)
 
-1. Structural 3-GEMM split: the prefix part computes a dense P x P even
-   though the (att=0 rows x att=1 cols) quadrant is fully masked
-   (~20% wasted FLOPs at p700) and the action part's cross-chunk block
-   is near-empty. Splitting Q into (group-0, group-1, action) rows cuts
-   both.
-2. Custom autograd saving bf16 probabilities only (halves saved-activation
-   bytes and backward traffic).
-3. Native CUDA fused kernel: manual sits at ~20% of bf16 peak on the
+1. **bf16-saved-p custom autograd (`manual_attention_part_v2`): REJECTED
+   end-to-end.** Against the EAGER composed part it wins 1.32-1.48x
+   fwd+bwd (fused softmax-gradient chain) — but the production form is
+   the composed part under `torch.compile`, where AOTAutograd's
+   partitioner already generates a fused backward and manages what gets
+   saved; the hand-written Function blocks that whole-graph treatment
+   and measured slower on the real model (text step 341.6 vs 333.3 ms
+   on a 5090). The symbol stays exported for API stability and as the
+   documented negative. Lesson (third time this project): compare
+   against the PRODUCTION form of the baseline, not its eager form.
+2. **Structural 3-GEMM split: DOWNGRADED.** The synthetic harness's
+   half/half att pattern overstates it — on the real model, flow-step
+   prefixes are fully bidirectional (no maskable quadrant) and text-step
+   causal spans vary per sample (no uniform split). The remaining
+   uniform win is the action cross-chunk block (~7% of attention
+   FLOPs); not scheduled.
+
+## Next levers (not yet implemented)
+1. Native CUDA fused kernel: manual sits at ~20% of bf16 peak on the
    5090 (harness-inclusive); an FA2-style specialized kernel
    (D=256, GQA, prefix-dense + action-block) targeting 40-50% would be
    another ~2x. Entry per house rules: only after 1-2 are in and the

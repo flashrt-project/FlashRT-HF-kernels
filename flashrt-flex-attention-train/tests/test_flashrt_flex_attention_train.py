@@ -163,11 +163,39 @@ def test_manual_matches_reference(flex_ops, mode: str) -> None:
     torch.testing.assert_close(via_impl, got.detach(), atol=tol, rtol=tol)
 
 
+def test_part_v2_matches_v1(flex_ops, mode: str) -> None:
+    device, dtype, bsz, heads, prefix, action, dim = _shape(mode)
+    kv_heads = 1 if mode == "full" else heads
+    torch.manual_seed(31)
+    total = prefix + action
+    q1 = torch.randn(bsz, heads, total, dim, device=device, dtype=dtype, requires_grad=True)
+    k1 = torch.randn(bsz, kv_heads, total, dim, device=device, dtype=dtype, requires_grad=True)
+    v1 = torch.randn_like(k1, requires_grad=True)
+    q2 = q1.detach().clone().requires_grad_(True)
+    k2 = k1.detach().clone().requires_grad_(True)
+    v2 = v1.detach().clone().requires_grad_(True)
+    mask = torch.zeros(bsz, 1, total, total, device=device, dtype=dtype)
+    mask[:, :, :, total // 2 :] = float(torch.finfo(dtype).min if dtype.is_floating_point else -1e9)
+    scale = dim**-0.5
+
+    ref = flex_ops.manual_attention_part(q1, k1, v1, mask, scale)
+    got = flex_ops.manual_attention_part_v2(q2, k2, v2, mask, scale)
+    tol = 2e-2 if dtype == torch.bfloat16 else 1e-5
+    torch.testing.assert_close(got, ref, atol=tol, rtol=tol)
+    ref.float().square().mean().backward()
+    got.float().square().mean().backward()
+    for a, b in ((q1, q2), (k1, k2), (v1, v2)):
+        denom = torch.linalg.vector_norm(a.grad.float()).clamp_min(1e-12)
+        rel = torch.linalg.vector_norm((a.grad - b.grad).float()) / denom
+        assert float(rel) <= 2e-2, f"v2 grad rel diff {float(rel)}"
+
+
 def run(flex_ops, mode: str) -> None:
     test_matches_explicit_sdpa(flex_ops, mode)
     test_detached_prefix_semantics(flex_ops, mode)
     test_dense_attention_mask_path(flex_ops, mode)
     test_manual_matches_reference(flex_ops, mode)
+    test_part_v2_matches_v1(flex_ops, mode)
     x = torch.ones(1)
     torch.testing.assert_close(flex_ops.backend_marker(x), x)
     print(f"flashrt-flex-attention-train {mode}: passed")

@@ -317,6 +317,85 @@ def _manual_attention_part(qs, ks, vs, mask, scale):
 # per-part op and assemble masks/splits themselves.
 manual_attention_part = _manual_attention_part
 
+
+def _softmax_bwd_chain(p, dp, scale):
+    p32 = p.float()
+    dp32 = dp.float()
+    return (p32 * (dp32 - (dp32 * p32).sum(dim=-1, keepdim=True)) * scale).to(p.dtype)
+
+
+_softmax_bwd_compiled = None
+
+
+def _get_softmax_bwd():
+    global _softmax_bwd_compiled
+    if _softmax_bwd_compiled is None:
+        _softmax_bwd_compiled = torch.compile(_softmax_bwd_chain, dynamic=False)
+    return _softmax_bwd_compiled
+
+
+class _ManualAttentionPartFn(torch.autograd.Function):
+    """Manual attention part with bf16-saved probabilities.
+
+    Same math as :func:`_manual_attention_part`; the backward is written
+    out so only the io-dtype probability tensor is saved (autograd on the
+    composed version keeps the fp32 softmax output alive — 3x the bytes).
+    The softmax gradient itself is still computed in fp32.
+    """
+
+    @staticmethod
+    def forward(ctx, q, k, v, mask, scale):
+        B, H, Sq, D = q.shape
+        Hk = k.shape[1]
+        if Hk != H:
+            g = H // Hk
+            q2 = q.reshape(B, Hk, g * Sq, D)
+            logits = (q2 @ k.transpose(-1, -2)).reshape(B, H, Sq, -1)
+        else:
+            logits = q @ k.transpose(-1, -2)
+        logits = logits * scale
+        if mask is not None:
+            logits = logits + mask
+        p = logits.float().softmax(dim=-1).to(q.dtype)
+        if Hk != H:
+            out = (p.reshape(B, Hk, g * Sq, -1) @ v).reshape(B, H, Sq, D)
+        else:
+            out = p @ v
+        ctx.save_for_backward(q, k, v, p)
+        ctx.scale = scale
+        return out
+
+    @staticmethod
+    def backward(ctx, dout):
+        q, k, v, p = ctx.saved_tensors
+        scale = ctx.scale
+        B, H, Sq, D = q.shape
+        Hk = k.shape[1]
+        dout = dout.contiguous()
+        if Hk != H:
+            g = H // Hk
+            dout2 = dout.reshape(B, Hk, g * Sq, D)
+            p2 = p.reshape(B, Hk, g * Sq, -1)
+            dp = (dout2 @ v.transpose(-1, -2)).reshape(B, H, Sq, -1)
+            dv = p2.transpose(-1, -2) @ dout2
+        else:
+            dp = dout @ v.transpose(-1, -2)
+            dv = p.transpose(-1, -2) @ dout
+        ds = _get_softmax_bwd()(p, dp, scale)
+        if Hk != H:
+            ds2 = ds.reshape(B, Hk, g * Sq, -1)
+            dq = (ds2 @ k).reshape(B, H, Sq, D)
+            dk = ds2.transpose(-1, -2) @ q.reshape(B, Hk, g * Sq, D)
+        else:
+            dq = ds @ k
+            dk = ds.transpose(-1, -2) @ q
+        return dq, dk, dv, None, None
+
+
+def manual_attention_part_v2(q, k, v, mask, scale):
+    """bf16-saved-p variant of :func:`manual_attention_part` (fwd+bwd)."""
+    return _ManualAttentionPartFn.apply(q, k, v, mask, scale)
+
 _manual_part_compiled = None
 
 
@@ -488,5 +567,6 @@ __all__ = [
     "flex_attention_forward",
     "manual_attention",
     "manual_attention_part",
+    "manual_attention_part_v2",
     "reference_flex_attention",
 ]
