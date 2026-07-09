@@ -313,6 +313,10 @@ def _manual_attention_part(qs, ks, vs, mask, scale):
     return out
 
 
+# Public alias: integrations (e.g. the LeRobot pi052 flag) consume the raw
+# per-part op and assemble masks/splits themselves.
+manual_attention_part = _manual_attention_part
+
 _manual_part_compiled = None
 
 
@@ -483,5 +487,6 @@ __all__ = [
     "flex_attention",
     "flex_attention_forward",
     "manual_attention",
+    "manual_attention_part",
     "reference_flex_attention",
 ]
