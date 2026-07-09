@@ -1,0 +1,28 @@
+[general]
+name = "flashrt-flex-attention-train"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/flashrt-flex-attention-train"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.flashrt_flex_attention_train_stub]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+src = [
+  "csrc/stub.cu",
+  "csrc/stub.cuh",
+]
