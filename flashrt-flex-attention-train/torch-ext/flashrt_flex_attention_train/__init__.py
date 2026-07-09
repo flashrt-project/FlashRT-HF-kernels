@@ -284,6 +284,120 @@ def reference_flex_attention(
     return torch.cat(out_parts, dim=2) if len(out_parts) == 2 else out_parts[0]
 
 
+def _manual_attention_part(qs, ks, vs, mask, scale):
+    """Materialized-logits attention part: cuBLAS GEMMs + fused masked softmax.
+
+    Same math as SDPA with an additive mask (fp32 softmax; logits stored in
+    the io dtype between the GEMM and the softmax). Grouped queries run as a
+    strided batched GEMM over the KV heads, so a 1-head K/V is never
+    repeated. At PI052 training shapes (GQA 8:1, D=256, bf16) this beats
+    both SDPA-with-dense-mask (2.3-3.1x) and the best FlexAttention
+    configuration (1.4-2.9x) on fwd+bwd — see benchmarks/RESULTS.md.
+    """
+    B, H, Sq, D = qs.shape
+    Hk = ks.shape[1]
+    if Hk != H:
+        g = H // Hk
+        q2 = qs.reshape(B, Hk, g * Sq, D)
+        logits = (q2 @ ks.transpose(-1, -2)).reshape(B, H, Sq, -1)
+    else:
+        logits = qs @ ks.transpose(-1, -2)
+    logits = logits * scale
+    if mask is not None:
+        logits = logits + mask
+    p = logits.float().softmax(dim=-1).to(qs.dtype)
+    if Hk != H:
+        out = (p.reshape(B, Hk, g * Sq, -1) @ vs).reshape(B, H, Sq, D)
+    else:
+        out = p @ vs
+    return out
+
+
+_manual_part_compiled = None
+
+
+def _get_manual_part():
+    global _manual_part_compiled
+    if _manual_part_compiled is None:
+        _manual_part_compiled = torch.compile(_manual_attention_part, dynamic=False)
+    return _manual_part_compiled
+
+
+def manual_attention(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    prefix_len: int,
+    action_block_size: int,
+    attention_mask: Optional[torch.Tensor] = None,
+    prefix_valid: Optional[torch.Tensor] = None,
+    prefix_att: Optional[torch.Tensor] = None,
+    non_fast_prefix_len: Optional[int] = None,
+    action_valid: Optional[torch.Tensor] = None,
+    detach_prefix_kv_for_action: bool = True,
+    scale: Optional[float] = None,
+    dropout_p: float = 0.0,
+    compile_part: bool = True,
+) -> torch.Tensor:
+    """Materialized-logits implementation of :func:`reference_flex_attention`.
+
+    Same mask semantics and prefix/action split; each part runs through
+    :func:`_manual_attention_part` instead of SDPA. ``dropout_p`` must be 0
+    (training attention dropout is unused in PI052); other values raise so
+    callers fall back explicitly.
+    """
+    if dropout_p:
+        raise ValueError("manual_attention does not support dropout; use the reference path")
+    _check_qkv(q, k, v)
+    batch, _, total_len, head_dim = q.shape
+    if not (0 <= int(prefix_len) <= total_len):
+        raise ValueError("prefix_len must be in [0, S]")
+    prefix_len = int(prefix_len)
+    action_len = total_len - prefix_len
+    if scale is None:
+        scale = head_dim**-0.5
+
+    if attention_mask is None:
+        prefix_bool, action_bool = build_block_sparse_bool_masks(
+            prefix_valid,
+            prefix_att,
+            batch=batch,
+            prefix_len=prefix_len,
+            action_len=action_len,
+            action_block_size=action_block_size,
+            non_fast_prefix_len=non_fast_prefix_len,
+            action_valid=action_valid,
+            device=q.device,
+        )
+        prefix_mask = _bool_to_sdpa_mask(prefix_bool, q)
+        action_mask = _bool_to_sdpa_mask(action_bool, q)
+    else:
+        prefix_mask = _slice_attention_mask(attention_mask, 0, prefix_len, q)
+        action_mask = _slice_attention_mask(attention_mask, prefix_len, total_len, q)
+        if prefix_mask.dtype == torch.bool:
+            prefix_mask = _bool_to_sdpa_mask(prefix_mask[:, 0], q)
+        if action_mask.dtype == torch.bool:
+            action_mask = _bool_to_sdpa_mask(action_mask[:, 0], q)
+
+    part = _get_manual_part() if compile_part else _manual_attention_part
+    out_parts = []
+    if prefix_len:
+        out_parts.append(part(q[:, :, :prefix_len, :], k, v, prefix_mask, scale))
+    if action_len:
+        k_prefix = k[:, :, :prefix_len, :]
+        v_prefix = v[:, :, :prefix_len, :]
+        if detach_prefix_kv_for_action:
+            k_prefix = k_prefix.detach()
+            v_prefix = v_prefix.detach()
+        k_for_action = torch.cat([k_prefix, k[:, :, prefix_len:, :]], dim=2)
+        v_for_action = torch.cat([v_prefix, v[:, :, prefix_len:, :]], dim=2)
+        out_parts.append(part(q[:, :, prefix_len:, :], k_for_action, v_for_action, action_mask, scale))
+    if not out_parts:
+        return q.new_empty(q.shape)
+    return torch.cat(out_parts, dim=2) if len(out_parts) == 2 else out_parts[0]
+
+
 def flex_attention(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -301,9 +415,34 @@ def flex_attention(
     dropout_p: float = 0.0,
     enable_gqa: Optional[bool] = None,
     force_fallback: bool = False,
+    impl: str = "sdpa",
 ) -> torch.Tensor:
-    """Flex-style block-sparse attention with automatic SDPA fallback."""
+    """Flex-style block-sparse attention.
+
+    ``impl="sdpa"`` (default) keeps the SDPA reference path;
+    ``impl="manual"`` routes through the materialized-logits
+    implementation (recommended for training at PI052 shapes);
+    ``impl="auto"`` picks manual on CUDA with no dropout, SDPA otherwise.
+    """
     _ = force_fallback
+    if impl == "auto":
+        impl = "manual" if (q.is_cuda and not dropout_p) else "sdpa"
+    if impl == "manual":
+        return manual_attention(
+            q,
+            k,
+            v,
+            prefix_len=prefix_len,
+            action_block_size=action_block_size,
+            attention_mask=attention_mask,
+            prefix_valid=prefix_valid,
+            prefix_att=prefix_att,
+            non_fast_prefix_len=non_fast_prefix_len,
+            action_valid=action_valid,
+            detach_prefix_kv_for_action=detach_prefix_kv_for_action,
+            scale=scale,
+            dropout_p=dropout_p,
+        )
     return reference_flex_attention(
         q,
         k,
@@ -339,5 +478,6 @@ __all__ = [
     "build_block_sparse_bool_masks",
     "flex_attention",
     "flex_attention_forward",
+    "manual_attention",
     "reference_flex_attention",
 ]

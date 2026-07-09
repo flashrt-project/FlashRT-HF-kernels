@@ -127,10 +127,47 @@ def test_dense_attention_mask_path(flex_ops, mode: str) -> None:
     torch.testing.assert_close(out_from_dense, out_from_parts, atol=tol, rtol=tol)
 
 
+def test_manual_matches_reference(flex_ops, mode: str) -> None:
+    device, dtype, bsz, heads, prefix, action, dim = _shape(mode)
+    kv_heads = 1 if mode == "full" else heads  # GQA on the real-shape run
+    torch.manual_seed(29)
+    total = prefix + action
+    q1 = torch.randn(bsz, heads, total, dim, device=device, dtype=dtype, requires_grad=True)
+    k1 = torch.randn(bsz, kv_heads, total, dim, device=device, dtype=dtype, requires_grad=True)
+    v1 = torch.randn_like(k1, requires_grad=True)
+    q2 = q1.detach().clone().requires_grad_(True)
+    k2 = k1.detach().clone().requires_grad_(True)
+    v2 = v1.detach().clone().requires_grad_(True)
+    prefix_att = torch.zeros(bsz, prefix, device=device, dtype=torch.bool)
+    prefix_att[:, prefix // 2 :] = True
+    kwargs = dict(prefix_len=prefix, action_block_size=2, prefix_att=prefix_att)
+
+    ref = flex_ops.flex_attention(q1, k1, v1, **kwargs)
+    got = flex_ops.manual_attention(q2, k2, v2, compile_part=device != "cpu", **kwargs)
+    # bf16-logits class: the manual path stores logits in the io dtype
+    # between the GEMM and the fp32 softmax.
+    tol = 2e-2 if dtype == torch.bfloat16 else 1e-5
+    torch.testing.assert_close(got, ref, atol=tol, rtol=tol)
+
+    ref.float().square().mean().backward()
+    got.float().square().mean().backward()
+    for a, b in ((q1, q2), (k1, k2), (v1, v2)):
+        denom = torch.linalg.vector_norm(a.grad.float()).clamp_min(1e-12)
+        rel = torch.linalg.vector_norm((a.grad - b.grad).float()) / denom
+        assert float(rel) <= 2e-2, f"grad rel diff {float(rel)}"
+
+    # impl dispatch reaches the same path
+    via_impl = flex_ops.flex_attention(
+        q2.detach(), k2.detach(), v2.detach(), impl="manual", **kwargs
+    )
+    torch.testing.assert_close(via_impl, got.detach(), atol=tol, rtol=tol)
+
+
 def run(flex_ops, mode: str) -> None:
     test_matches_explicit_sdpa(flex_ops, mode)
     test_detached_prefix_semantics(flex_ops, mode)
     test_dense_attention_mask_path(flex_ops, mode)
+    test_manual_matches_reference(flex_ops, mode)
     x = torch.ones(1)
     torch.testing.assert_close(flex_ops.backend_marker(x), x)
     print(f"flashrt-flex-attention-train {mode}: passed")
