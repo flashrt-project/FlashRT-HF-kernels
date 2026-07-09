@@ -44,14 +44,25 @@ per-iter leaf clones + loss; flex rows are the best of
   ~2e-3). Model-level parity gates (loss rel <= 1e-3, grads <= 1%) are
   the ship test; the fwd-diff gate for manual is tracked separately.
 
+## Per-architecture verdict (final, 2026-07-09)
+
+| arch | local microbench | real-model E2E | verdict |
+| --- | --- | --- | --- |
+| RTX 5090 (sm120 consumer) | manual 2.3-3.1x vs SDPA, 1.4-2.9x vs flex | flow -7.8% / text -11.6% | **manual ON** |
+| A100 (sm80) | manual wins, incl. vs the repeat-interleave production baseline (B1/P1024: 1.98 vs 3.60 ms) | LOSES (text 436 vs 386 ms; action-only scope and eager-vs-compiled both exonerated) | manual OFF — integration-level interaction, parked |
+| H200 (sm90) | manual LOSES the microbench outright (1.80 vs sdpa_repeat 1.18 at B1/P1024) — Hopper FMHA is too strong | not needed | manual OFF |
+| RTX PRO 6000 (sm120 workstation) | pending | pending | expected ON (5090 arch family) |
+
+`flex_attention(impl="auto")` encodes this: manual only on sm120-class
+CUDA with no dropout, SDPA elsewhere.
+
 ## Dispatch recommendation (as of 2026-07-09)
 
-- 5090 training (fwd+bwd): `manual` everywhere; `TORCHINDUCTOR_MAX_AUTOTUNE`
-  optional (+14% fwd).
+- 5090-class training (fwd+bwd): `manual` everywhere;
+  `TORCHINDUCTOR_MAX_AUTOTUNE` optional (+14% fwd).
 - fwd-only (inference prefill): flex `default` autotune, mask 64x64
   (128x128 for P>=896-class shapes).
-- A100: pending the same GQA matrix (flex bwd was already the weak leg
-  there at 8 kv heads; manual expected to win bigger).
+- A100/H100/H200: SDPA path (see the verdict table).
 
 ## Next levers (not yet implemented)
 

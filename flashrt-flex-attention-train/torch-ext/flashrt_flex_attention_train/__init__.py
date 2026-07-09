@@ -421,12 +421,16 @@ def flex_attention(
 
     ``impl="sdpa"`` (default) keeps the SDPA reference path;
     ``impl="manual"`` routes through the materialized-logits
-    implementation (recommended for training at PI052 shapes);
-    ``impl="auto"`` picks manual on CUDA with no dropout, SDPA otherwise.
+    implementation; ``impl="auto"`` picks manual only where it has been
+    measured to win end-to-end — consumer Blackwell (sm120-class) with
+    no dropout. On A100 (sm80) the manual math wins microbenches but
+    loses training-step integration, and on H100/H200 (sm90) the fused
+    FMHA kernels win outright, so auto keeps SDPA there.
     """
     _ = force_fallback
     if impl == "auto":
-        impl = "manual" if (q.is_cuda and not dropout_p) else "sdpa"
+        sm120 = q.is_cuda and torch.cuda.get_device_capability(q.device)[0] == 12
+        impl = "manual" if (sm120 and not dropout_p) else "sdpa"
     if impl == "manual":
         return manual_attention(
             q,
