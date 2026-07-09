@@ -430,6 +430,29 @@ def main() -> None:
 
     manual_part = get_manual_part() if "manual" in backends else None
 
+    def manual_eager_fwd():
+        out_p = _manual_part(q[:, :, : args.prefix_len], k, v, add_mask[:, :, : args.prefix_len], scale)
+        kd = torch.cat([k[:, :, : args.prefix_len].detach(), k[:, :, args.prefix_len :]], dim=2)
+        vd = torch.cat([v[:, :, : args.prefix_len].detach(), v[:, :, args.prefix_len :]], dim=2)
+        out_a = _manual_part(
+            q[:, :, args.prefix_len :], kd, vd, add_mask[:, :, args.prefix_len :], scale
+        )
+        return torch.cat([out_p, out_a], dim=2)
+
+    def manual_eager_fwdbwd():
+        qq = q.detach().clone().requires_grad_(True)
+        kk = k.detach().clone().requires_grad_(True)
+        vv = v.detach().clone().requires_grad_(True)
+        out_p = _manual_part(
+            qq[:, :, : args.prefix_len], kk, vv, add_mask[:, :, : args.prefix_len], scale
+        )
+        kd = torch.cat([kk[:, :, : args.prefix_len].detach(), kk[:, :, args.prefix_len :]], dim=2)
+        vd = torch.cat([vv[:, :, : args.prefix_len].detach(), vv[:, :, args.prefix_len :]], dim=2)
+        out_a = _manual_part(
+            qq[:, :, args.prefix_len :], kd, vd, add_mask[:, :, args.prefix_len :], scale
+        )
+        torch.cat([out_p, out_a], dim=2).float().square().mean().backward()
+
     def _repeat_kv(t):
         # the model's current path: materialize K/V to the q-head count
         return t.repeat_interleave(args.heads // t.shape[1], dim=1)
@@ -539,6 +562,8 @@ def main() -> None:
                 report["manual_peak_bytes"] = peak_bytes(manual_fwd, args.device)
             if gqa:
                 report["sdpa_repeat_fwd_ms"] = bench(sdpa_repeat_fwd, args.warmup, args.iters)
+            if "manual" in backends:
+                report["manual_eager_fwd_ms"] = bench(manual_eager_fwd, args.warmup, args.iters)
             if flex_bundles:
                 report["torch_flex_fwd_ms"] = {}
                 report["torch_flex_fwd_speedup"] = {}
@@ -658,6 +683,8 @@ def main() -> None:
             report["manual_fwdbwd_speedup"] = report["sdpa_fwdbwd_ms"] / report["manual_fwdbwd_ms"]
         if gqa:
             report["sdpa_repeat_fwdbwd_ms"] = bench(sdpa_repeat_fwdbwd, args.warmup, args.iters)
+        if "manual" in backends:
+            report["manual_eager_fwdbwd_ms"] = bench(manual_eager_fwdbwd, args.warmup, args.iters)
         if flex_bundles:
             report["torch_flex_fwdbwd_ms"] = {}
             report["torch_flex_fwdbwd_speedup"] = {}
