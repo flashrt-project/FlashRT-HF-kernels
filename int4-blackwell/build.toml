@@ -1,0 +1,26 @@
+[general]
+name = "int4-blackwell"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "13.0"
+maxver = "13.0"
+
+[general.hub]
+repo-id = "flashrt/int4-blackwell"
+
+[torch]
+pyext = ["py", "cubin"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.int4_blackwell]
+backend = "cuda"
+depends = ["torch"]
+cuda-minver = "13.0"
+cuda-capabilities = ["12.0a"]
+src = ["csrc/arch_guard.cu"]

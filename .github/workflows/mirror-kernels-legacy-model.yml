@@ -49,6 +49,7 @@ on:
           - flashrt-qkv-epilogue-train
           - flashrt-siglip-fwd-fusion
           - flashrt-flex-attention-train
+          - int4-blackwell
 
 permissions:
   contents: read
@@ -107,6 +108,7 @@ jobs:
           - flashrt-qkv-epilogue-train
           - flashrt-siglip-fwd-fusion
           - flashrt-flex-attention-train
+          - int4-blackwell
 
     steps:
       - uses: actions/checkout@v4
