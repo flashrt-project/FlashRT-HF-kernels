@@ -24,13 +24,13 @@ print(int4.codebook_probe("ab"))
 
 # Asynchronous register-resident MMA probe for CUDA-event benchmarking.
 scratch = torch.empty((680, 256), device="cuda", dtype=torch.float32)
-int4.mma_probe("ab", iterations=8192, blocks=680, out=scratch)
+int4.mma_probe("ab", iterations=8192, blocks=680, launches=20, out=scratch)
 ```
 
 Available functions:
 
 - `codebook_probe(mode="ab", device=None) -> Tensor[16]`
-- `mma_probe(mode="ab", iterations=8192, blocks=None, device=None, out=None) -> Tensor`
+- `mma_probe(mode="ab", iterations=8192, blocks=None, launches=1, device=None, out=None) -> Tensor`
 
 Modes are `e2m1`, `a` (INT4 A), `b` (INT4 B), and `ab` (INT4 A and B).
 

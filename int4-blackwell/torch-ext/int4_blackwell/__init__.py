@@ -61,6 +61,7 @@ def mma_probe(
     *,
     iterations: int = 8192,
     blocks: int | None = None,
+    launches: int = 1,
     device: int | torch.device | None = None,
     out: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -70,7 +71,7 @@ def mma_probe(
         blocks = torch.cuda.get_device_properties(dev).multi_processor_count * 4
     if out is None:
         out = torch.empty((blocks, 256), device=f"cuda:{dev}", dtype=torch.float32)
-    ops.run_mma_probe(_cubin(mode), out, iterations, blocks, dev)
+    ops.run_mma_probe(_cubin(mode), out, iterations, blocks, launches, dev)
     return out
 
 
