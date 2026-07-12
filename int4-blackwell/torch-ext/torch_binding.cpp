@@ -15,15 +15,50 @@
 
 namespace {
 
-#define CU_CHECK(expr)                                                        \
-  do {                                                                        \
-    CUresult status = (expr);                                                  \
-    if (status != CUDA_SUCCESS) {                                              \
-      const char* message = nullptr;                                           \
-      cuGetErrorString(status, &message);                                      \
-      TORCH_CHECK(false, #expr, " failed: ", message ? message : "unknown"); \
-    }                                                                         \
-  } while (false)
+struct DriverApi {
+  using ModuleLoadData = CUresult(CUDAAPI*)(CUmodule*, const void*);
+  using ModuleGetFunction = CUresult(CUDAAPI*)(CUfunction*, CUmodule, const char*);
+  using LaunchKernel = CUresult(CUDAAPI*)(CUfunction, unsigned, unsigned, unsigned,
+      unsigned, unsigned, unsigned, unsigned, CUstream, void**, void**);
+  using GetErrorString = CUresult(CUDAAPI*)(CUresult, const char**);
+
+  ModuleLoadData module_load_data = nullptr;
+  ModuleGetFunction module_get_function = nullptr;
+  LaunchKernel launch_kernel = nullptr;
+  GetErrorString get_error_string = nullptr;
+
+  DriverApi() {
+    load("cuModuleLoadData", module_load_data);
+    load("cuModuleGetFunction", module_get_function);
+    load("cuLaunchKernel", launch_kernel);
+    load("cuGetErrorString", get_error_string);
+  }
+
+ private:
+  template <typename T>
+  static void load(const char* name, T& function) {
+    void* entry = nullptr;
+    auto status = cudaGetDriverEntryPoint(name, &entry, 0, nullptr);
+    TORCH_CHECK(status == cudaSuccess && entry != nullptr,
+                "cannot resolve CUDA Driver entry point ", name, ": ",
+                cudaGetErrorString(status));
+    function = reinterpret_cast<T>(entry);
+  }
+};
+
+DriverApi& driver() {
+  static DriverApi api;
+  return api;
+}
+
+void cu_check(CUresult status, const char* expression) {
+  if (status == CUDA_SUCCESS) {
+    return;
+  }
+  const char* message = nullptr;
+  driver().get_error_string(status, &message);
+  TORCH_CHECK(false, expression, " failed: ", message ? message : "unknown");
+}
 
 void check_environment(int64_t device) {
   TORCH_CHECK(device >= 0 && device < at::cuda::device_count(),
@@ -64,7 +99,8 @@ CUmodule load_module(torch::Tensor const& cubin, int64_t device) {
     return it->second;
   }
   CUmodule module = nullptr;
-  CU_CHECK(cuModuleLoadData(&module, cubin.const_data_ptr<uint8_t>()));
+  cu_check(driver().module_load_data(&module, cubin.const_data_ptr<uint8_t>()),
+           "cuModuleLoadData");
   modules.emplace(key, module);
   return module;
 }
@@ -76,7 +112,8 @@ torch::Tensor run_codebook_probe(torch::Tensor const& cubin, int64_t device) {
   c10::cuda::CUDAGuard guard(static_cast<c10::DeviceIndex>(device));
   CUmodule module = load_module(cubin, device);
   CUfunction function = nullptr;
-  CU_CHECK(cuModuleGetFunction(&function, module, "codebook_probe"));
+  cu_check(driver().module_get_function(&function, module, "codebook_probe"),
+           "cuModuleGetFunction(codebook_probe)");
 
   auto output = torch::empty({16, 128}, torch::TensorOptions()
       .device(torch::kCUDA, device).dtype(torch::kFloat32));
@@ -88,7 +125,9 @@ torch::Tensor run_codebook_probe(torch::Tensor const& cubin, int64_t device) {
     void* args[] = {&aword, &bword, &scale_one, &scale_one, &row};
     auto stream = reinterpret_cast<CUstream>(
         at::cuda::getCurrentCUDAStream(static_cast<int>(device)).stream());
-    CU_CHECK(cuLaunchKernel(function, 1, 1, 1, 32, 1, 1, 0, stream, args, nullptr));
+    cu_check(driver().launch_kernel(
+                 function, 1, 1, 1, 32, 1, 1, 0, stream, args, nullptr),
+             "cuLaunchKernel(codebook_probe)");
   }
   return output;
 }
@@ -103,7 +142,8 @@ torch::Tensor run_mma_probe(torch::Tensor const& cubin, int64_t iterations,
   c10::cuda::CUDAGuard guard(static_cast<c10::DeviceIndex>(device));
   CUmodule module = load_module(cubin, device);
   CUfunction function = nullptr;
-  CU_CHECK(cuModuleGetFunction(&function, module, "perf_mma"));
+  cu_check(driver().module_get_function(&function, module, "perf_mma"),
+           "cuModuleGetFunction(perf_mma)");
 
   constexpr int threads = 256;
   auto output = torch::empty({blocks, threads}, torch::TensorOptions()
@@ -116,8 +156,10 @@ torch::Tensor run_mma_probe(torch::Tensor const& cubin, int64_t iterations,
   void* args[] = {&iters, &aword, &bword, &scale_one, &scale_one, &out};
   auto stream = reinterpret_cast<CUstream>(
       at::cuda::getCurrentCUDAStream(static_cast<int>(device)).stream());
-  CU_CHECK(cuLaunchKernel(function, static_cast<unsigned>(blocks), 1, 1,
-                          threads, 1, 1, 0, stream, args, nullptr));
+  cu_check(driver().launch_kernel(
+               function, static_cast<unsigned>(blocks), 1, 1, threads, 1, 1,
+               0, stream, args, nullptr),
+           "cuLaunchKernel(perf_mma)");
   return output;
 }
 
