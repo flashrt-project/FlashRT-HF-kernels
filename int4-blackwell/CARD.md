@@ -35,7 +35,8 @@ Modes are `e2m1`, `a` (INT4 A), `b` (INT4 B), and `ab` (INT4 A and B).
 ## Scope and support
 
 - Exact target: SM120/SM120a.
-- Build toolchain: CUDA 13.0; driver must support CUDA 13.0 cubins.
+- Extension variants: CUDA 12.8 through 13.0; the bundled native cubins were
+  generated with CUDA 13.0 and therefore require a CUDA 13.0-capable driver.
 - The E0M3 selector bits are undocumented. The package ships reproducibly
   patched cubins and rejects other compute capabilities at runtime.
 - This is an instruction/codebook and issue-rate primitive, not a general

@@ -13,6 +13,8 @@ On RTX 5090 (SM120), driver 580.159.03 and CUDA 13.0.88:
   and uniform INT4.
 - A runtime guard rejects devices other than SM120 and drivers older than
   CUDA 13.0 support.
+- The torch211/cu128 extension plus CUDA 13.0 cubin path is validated locally;
+  the extension ABI does not require Torch itself to be a cu130 build.
 
 This validation proves native decode semantics and issue rate. It does not
 claim end-to-end GEMM or model accuracy because the package does not expose a
