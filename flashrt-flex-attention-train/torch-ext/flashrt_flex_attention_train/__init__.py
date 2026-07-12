@@ -318,6 +318,39 @@ def _manual_attention_part(qs, ks, vs, mask, scale):
 manual_attention_part = _manual_attention_part
 
 
+def _manual_attention_part_hp(qs, ks, vs, m, scale):
+    """High-precision variant: fp32 logits end to end.
+
+    Under torch.compile the ``.float()`` upcasts make the QK product an
+    exact fp32 GEMM, removing the bf16 rounding of the logits that
+    dominates the default variant's error (softmax-output max-abs error
+    drops ~16x, 9.8e-4 -> 6.1e-5 at PI052 shapes). Costs roughly 3x on
+    the QK+softmax stage (~5-6 ms per training step at B=2) because the
+    fp32 GEMM does not use the bf16 tensor-core path — use where parity
+    matters more than the last few percent of speed.
+    """
+    B, H, Sq, D = qs.shape
+    Hk = ks.shape[1]
+    if Hk != H:
+        g = H // Hk
+        q2 = qs.reshape(B, Hk, g * Sq, D)
+        logits = (q2.float() @ ks.transpose(-1, -2).float()).reshape(B, H, Sq, -1)
+    else:
+        logits = qs.float() @ ks.transpose(-1, -2).float()
+    logits = logits * scale
+    if m is not None:
+        logits = logits + m.float()
+    p = logits.softmax(dim=-1).to(qs.dtype)
+    if Hk != H:
+        out = (p.reshape(B, Hk, g * Sq, -1) @ vs).reshape(B, H, Sq, D)
+    else:
+        out = p @ vs
+    return out
+
+
+manual_attention_part_hp = _manual_attention_part_hp
+
+
 def _softmax_bwd_chain(p, dp, scale):
     p32 = p.float()
     dp32 = dp.float()
@@ -567,6 +600,7 @@ __all__ = [
     "flex_attention_forward",
     "manual_attention",
     "manual_attention_part",
+    "manual_attention_part_hp",
     "manual_attention_part_v2",
     "reference_flex_attention",
 ]
