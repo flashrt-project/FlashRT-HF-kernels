@@ -16,19 +16,21 @@ same issue rate as NVFP4 E2M1.
 
 ```python
 from kernels import get_kernel
+import torch
 
 int4 = get_kernel("flashrt/int4-blackwell", version=1)
 print(int4.codebook_probe("ab"))
 # tensor([ 0., 1., 2., 3., 4., 5., 6., 7., 0., -1., ..., -7.])
 
 # Asynchronous register-resident MMA probe for CUDA-event benchmarking.
-scratch = int4.mma_probe("ab", iterations=8192)
+scratch = torch.empty((680, 256), device="cuda", dtype=torch.float32)
+int4.mma_probe("ab", iterations=8192, blocks=680, out=scratch)
 ```
 
 Available functions:
 
 - `codebook_probe(mode="ab", device=None) -> Tensor[16]`
-- `mma_probe(mode="ab", iterations=8192, blocks=None, device=None) -> Tensor`
+- `mma_probe(mode="ab", iterations=8192, blocks=None, device=None, out=None) -> Tensor`
 
 Modes are `e2m1`, `a` (INT4 A), `b` (INT4 B), and `ab` (INT4 A and B).
 

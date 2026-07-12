@@ -62,12 +62,16 @@ def mma_probe(
     iterations: int = 8192,
     blocks: int | None = None,
     device: int | torch.device | None = None,
+    out: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Launch the register-resident MMA throughput probe asynchronously."""
     dev = _device_index(device)
     if blocks is None:
         blocks = torch.cuda.get_device_properties(dev).multi_processor_count * 4
-    return ops.run_mma_probe(_cubin(mode), iterations, blocks, dev)
+    if out is None:
+        out = torch.empty((blocks, 256), device=f"cuda:{dev}", dtype=torch.float32)
+    ops.run_mma_probe(_cubin(mode), out, iterations, blocks, dev)
+    return out
 
 
 __all__ = ["codebook_probe", "mma_probe"]

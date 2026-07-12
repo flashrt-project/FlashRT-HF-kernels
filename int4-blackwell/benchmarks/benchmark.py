@@ -15,15 +15,20 @@ def main() -> None:
     blocks = props.multi_processor_count * 4
     warps = blocks * 8
     flops = warps * 4 * args.iterations * 2 * 16 * 8 * 64
+    out = torch.empty((blocks, 256), device="cuda", dtype=torch.float32)
     for mode in ("e2m1", "a", "b", "ab"):
-        int4_blackwell.mma_probe(mode, iterations=args.iterations, blocks=blocks)
+        int4_blackwell.mma_probe(
+            mode, iterations=args.iterations, blocks=blocks, out=out
+        )
         torch.cuda.synchronize()
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         best_ms = float("inf")
         for _ in range(args.repeats):
             start.record()
-            int4_blackwell.mma_probe(mode, iterations=args.iterations, blocks=blocks)
+            int4_blackwell.mma_probe(
+                mode, iterations=args.iterations, blocks=blocks, out=out
+            )
             end.record()
             end.synchronize()
             best_ms = min(best_ms, start.elapsed_time(end))

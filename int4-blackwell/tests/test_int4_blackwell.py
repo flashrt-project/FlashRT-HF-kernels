@@ -27,6 +27,8 @@ def test_codebook(mode, expected):
 
 
 def test_mma_probe_launches():
-    output = int4_blackwell.mma_probe(iterations=16, blocks=1)
+    scratch = torch.empty((1, 256), device="cuda", dtype=torch.float32)
+    output = int4_blackwell.mma_probe(iterations=16, blocks=1, out=scratch)
+    assert output is scratch
     assert output.shape == (1, 256)
     torch.cuda.synchronize()

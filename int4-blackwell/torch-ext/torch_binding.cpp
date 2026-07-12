@@ -132,8 +132,8 @@ torch::Tensor run_codebook_probe(torch::Tensor const& cubin, int64_t device) {
   return output;
 }
 
-torch::Tensor run_mma_probe(torch::Tensor const& cubin, int64_t iterations,
-                            int64_t blocks, int64_t device) {
+void run_mma_probe(torch::Tensor const& cubin, torch::Tensor& output,
+                   int64_t iterations, int64_t blocks, int64_t device) {
   check_environment(device);
   TORCH_CHECK(iterations > 0 && iterations <= std::numeric_limits<int>::max(),
               "iterations must fit in a positive int");
@@ -146,8 +146,12 @@ torch::Tensor run_mma_probe(torch::Tensor const& cubin, int64_t iterations,
            "cuModuleGetFunction(perf_mma)");
 
   constexpr int threads = 256;
-  auto output = torch::empty({blocks, threads}, torch::TensorOptions()
-      .device(torch::kCUDA, device).dtype(torch::kFloat32));
+  TORCH_CHECK(output.is_cuda() && output.get_device() == device,
+              "output must be on the selected CUDA device");
+  TORCH_CHECK(output.scalar_type() == torch::kFloat32 && output.is_contiguous(),
+              "output must be contiguous float32");
+  TORCH_CHECK(output.sizes() == torch::IntArrayRef({blocks, threads}),
+              "output must have shape (blocks, 256)");
   int iters = static_cast<int>(iterations);
   uint32_t aword = 0x25142514u;
   uint32_t bword = 0x13521352u;
@@ -160,14 +164,14 @@ torch::Tensor run_mma_probe(torch::Tensor const& cubin, int64_t iterations,
                function, static_cast<unsigned>(blocks), 1, 1, threads, 1, 1,
                0, stream, args, nullptr),
            "cuLaunchKernel(perf_mma)");
-  return output;
 }
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("run_codebook_probe(Tensor cubin, int device) -> Tensor");
-  ops.def("run_mma_probe(Tensor cubin, int iterations, int blocks, int device) -> Tensor");
+  ops.def("run_mma_probe(Tensor cubin, Tensor! output, int iterations, int blocks, int device) -> ()");
   ops.impl("run_codebook_probe", torch::kCPU, &run_codebook_probe);
   ops.impl("run_mma_probe", torch::kCPU, &run_mma_probe);
+  ops.impl("run_mma_probe", torch::kCUDA, &run_mma_probe);
 }
 
 REGISTER_EXTENSION(TORCH_EXTENSION_NAME)
