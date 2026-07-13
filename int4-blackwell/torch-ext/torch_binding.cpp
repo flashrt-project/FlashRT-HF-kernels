@@ -66,8 +66,9 @@ void check_environment(int64_t device) {
   cudaDeviceProp prop{};
   TORCH_CHECK(cudaGetDeviceProperties(&prop, static_cast<int>(device)) == cudaSuccess,
               "cudaGetDeviceProperties failed");
-  TORCH_CHECK(prop.major == 12 && prop.minor == 0,
-              "int4-blackwell requires SM120; got SM", prop.major, prop.minor);
+  TORCH_CHECK(prop.major == 12 && (prop.minor == 0 || prop.minor == 1),
+              "int4-blackwell requires SM120 or SM121; got SM", prop.major,
+              prop.minor);
   int driver = 0;
   TORCH_CHECK(cudaDriverGetVersion(&driver) == cudaSuccess,
               "cudaDriverGetVersion failed");

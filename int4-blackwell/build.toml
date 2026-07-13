@@ -23,7 +23,7 @@ src = [
 
 [kernel.int4_blackwell]
 backend = "cuda"
-cuda-capabilities = ["12.0a"]
+cuda-capabilities = ["12.0a", "12.1"]
 cuda-minver = "12.8"
 depends = ["torch"]
 src = ["csrc/arch_guard.cu"]

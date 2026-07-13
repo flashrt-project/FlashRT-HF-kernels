@@ -5,8 +5,9 @@ import int4_blackwell
 
 
 pytestmark = pytest.mark.skipif(
-    not torch.cuda.is_available() or torch.cuda.get_device_capability() != (12, 0),
-    reason="int4-blackwell requires SM120",
+    not torch.cuda.is_available()
+    or torch.cuda.get_device_capability() not in {(12, 0), (12, 1)},
+    reason="int4-blackwell requires SM120 or SM121",
 )
 
 
