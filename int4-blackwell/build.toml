@@ -6,7 +6,7 @@ backends = ["cuda"]
 
 [general.cuda]
 minver = "12.8"
-maxver = "13"
+maxver = "13.0"
 
 [general.hub]
 repo-id = "flashrt/int4-blackwell"
