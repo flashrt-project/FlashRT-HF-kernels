@@ -37,8 +37,8 @@ The original SM120 operand-format discovery is credited to the Ling Team and
 @im0qianqian in the package README and Kernel Card:
 <https://zhuanlan.zhihu.com/p/2059376150565089368>
 
-The release flake temporarily pins `LiangSu8899/kernels@0853469`, based on
-`huggingface/kernels@570dcf4`. Its only source change updates the stale Nix
+The release flake temporarily pins `LiangSu8899/kernels@da73ab4`, based on
+the previously validated `huggingface/kernels@81580bb`. Its only source change updates the stale Nix
 fixed-output hash for CUTLASS 4.5.2 from the specified value to the value
 returned by the upstream archive. Switch the flake input back to upstream once
 that one-line fix lands there.
