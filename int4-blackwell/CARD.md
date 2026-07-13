@@ -18,7 +18,7 @@ INT4 codebook `0..7, -0, -1..-7`.
 from kernels import get_kernel
 import torch
 
-int4 = get_kernel("flashrt/int4-blackwell", version=1)
+int4 = get_kernel("flashrt/int4-blackwell", version=2)
 print(int4.codebook_probe("ab"))
 # tensor([ 0., 1., 2., 3., 4., 5., 6., 7., 0., -1., ..., -7.])
 
