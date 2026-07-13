@@ -36,8 +36,16 @@ constant GEMM output by K gives exactly:
 All elements in every output tile are uniform. The stock E2M1 descriptor
 produces 64 for the `0.5 * 0.5 * 256` canary, while descriptor value zero
 produces 256 for `1 * 1 * 256`, proving that the native decode changes rather
-than a host-side reinterpretation. Hub cold-cache artifact validation is a
-separate release gate and is recorded only after upload.
+than a host-side reinterpretation.
+
+Hub v2 cold-cache validation passed on both runtime paths:
+
+- RTX 5090, `torch211-cxx11-cu128-x86_64-linux`: all four SM120 codebooks are
+  exact and `mma_probe` executes successfully.
+- NVIDIA Thor, `torch211-cxx11-cu130-aarch64-linux`: the artifact was fetched
+  through `https://hf-mirror.com`; the 16-value codebook is exact and all three
+  random GEMM shapes below remain bit-exact. During mirror ref propagation,
+  `revision="v2"` can be used before the mirror's version index exposes v2.
 
 Random signed-INT4 GEMMs at `(M,N,K) = (128,128,128)`, `(128,256,256)`, and
 `(256,128,128)` were compared with a FP32 PyTorch matmul rounded to BF16. All
