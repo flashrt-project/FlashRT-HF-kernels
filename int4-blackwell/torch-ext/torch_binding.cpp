@@ -12,6 +12,7 @@
 
 #include "registration.h"
 #include "torch_binding.h"
+#include "gemm/int4_tcgen05_gemm.cuh"
 
 namespace {
 
@@ -60,15 +61,12 @@ void cu_check(CUresult status, const char* expression) {
   TORCH_CHECK(false, expression, " failed: ", message ? message : "unknown");
 }
 
-void check_environment(int64_t device) {
+cudaDeviceProp check_device(int64_t device) {
   TORCH_CHECK(device >= 0 && device < at::cuda::device_count(),
               "device must identify an available CUDA device");
   cudaDeviceProp prop{};
   TORCH_CHECK(cudaGetDeviceProperties(&prop, static_cast<int>(device)) == cudaSuccess,
               "cudaGetDeviceProperties failed");
-  TORCH_CHECK(prop.major == 12 && (prop.minor == 0 || prop.minor == 1),
-              "int4-blackwell requires SM120 or SM121; got SM", prop.major,
-              prop.minor);
   int driver = 0;
   TORCH_CHECK(cudaDriverGetVersion(&driver) == cudaSuccess,
               "cudaDriverGetVersion failed");
@@ -79,6 +77,22 @@ void check_environment(int64_t device) {
   // Driver API. A cold get_kernel process may not have allocated a tensor yet.
   TORCH_CHECK(cudaFree(nullptr) == cudaSuccess,
               "failed to initialize the CUDA primary context");
+  return prop;
+}
+
+void check_sm12_environment(int64_t device) {
+  auto prop = check_device(device);
+  TORCH_CHECK(prop.major == 12 && (prop.minor == 0 || prop.minor == 1),
+              "the OMMA backend requires SM120 or SM121; got SM", prop.major,
+              prop.minor);
+}
+
+void check_tcgen05_environment(int64_t device) {
+  auto prop = check_device(device);
+  TORCH_CHECK((prop.major == 10 && (prop.minor == 0 || prop.minor == 3)) ||
+                  (prop.major == 11 && prop.minor == 0),
+              "the tcgen05 backend requires SM100, SM103, or SM110; got SM",
+              prop.major, prop.minor);
 }
 
 void check_cubin(torch::Tensor const& cubin) {
@@ -109,7 +123,7 @@ CUmodule load_module(torch::Tensor const& cubin, int64_t device) {
 }  // namespace
 
 torch::Tensor run_codebook_probe(torch::Tensor const& cubin, int64_t device) {
-  check_environment(device);
+  check_sm12_environment(device);
   c10::cuda::CUDAGuard guard(static_cast<c10::DeviceIndex>(device));
   CUmodule module = load_module(cubin, device);
   CUfunction function = nullptr;
@@ -136,7 +150,7 @@ torch::Tensor run_codebook_probe(torch::Tensor const& cubin, int64_t device) {
 void run_mma_probe(torch::Tensor const& cubin, torch::Tensor& output,
                    int64_t iterations, int64_t blocks, int64_t launches,
                    int64_t device) {
-  check_environment(device);
+  check_sm12_environment(device);
   TORCH_CHECK(iterations > 0 && iterations <= std::numeric_limits<int>::max(),
               "iterations must fit in a positive int");
   TORCH_CHECK(blocks > 0 && blocks <= std::numeric_limits<unsigned>::max(),
@@ -171,12 +185,63 @@ void run_mma_probe(torch::Tensor const& cubin, torch::Tensor& output,
   }
 }
 
+torch::Tensor tcgen05_int4_gemm_bf16(
+    torch::Tensor const& a_packed, torch::Tensor const& sfa,
+    torch::Tensor const& b_packed, torch::Tensor const& sfb) {
+  TORCH_CHECK(a_packed.is_cuda() && b_packed.is_cuda() && sfa.is_cuda() && sfb.is_cuda(),
+              "A, B, SFA, and SFB must be CUDA tensors");
+  const auto device = a_packed.get_device();
+  TORCH_CHECK(b_packed.get_device() == device && sfa.get_device() == device &&
+                  sfb.get_device() == device,
+              "all inputs must be on the same CUDA device");
+  check_tcgen05_environment(device);
+  TORCH_CHECK(flashrt_int4::has_tcgen05_int4(),
+              "int4-blackwell was built without the tcgen05 backend");
+  TORCH_CHECK(a_packed.scalar_type() == torch::kUInt8 &&
+                  b_packed.scalar_type() == torch::kUInt8 &&
+                  sfa.scalar_type() == torch::kUInt8 &&
+                  sfb.scalar_type() == torch::kUInt8,
+              "packed operands and physical scale-factor storage must be uint8");
+  TORCH_CHECK(a_packed.dim() == 2 && b_packed.dim() == 2,
+              "A and B must have shapes [M, K/2] and [N, K/2]");
+  TORCH_CHECK(a_packed.is_contiguous() && b_packed.is_contiguous() &&
+                  sfa.is_contiguous() && sfb.is_contiguous(),
+              "all inputs must be contiguous");
+  const int64_t m = a_packed.size(0);
+  const int64_t n = b_packed.size(0);
+  const int64_t k = a_packed.size(1) * 2;
+  TORCH_CHECK(b_packed.size(1) * 2 == k, "A and B K dimensions must match");
+  TORCH_CHECK(m > 0 && n > 0 && k > 0 && m % 128 == 0 && n % 128 == 0 &&
+                  k % 128 == 0,
+              "M, N, and K must be positive multiples of 128");
+  TORCH_CHECK(m <= std::numeric_limits<int>::max() &&
+                  n <= std::numeric_limits<int>::max() &&
+                  k <= std::numeric_limits<int>::max(),
+              "M, N, and K must fit in int32");
+  TORCH_CHECK(sfa.numel() >= m * k && sfb.numel() >= n * k,
+              "physical scale storage must contain at least M*K bytes for A "
+              "and N*K bytes for B");
+
+  c10::cuda::CUDAGuard guard(static_cast<c10::DeviceIndex>(device));
+  auto output = torch::empty({m, n}, a_packed.options().dtype(torch::kBFloat16));
+  auto stream = at::cuda::getCurrentCUDAStream(device).stream();
+  int status = flashrt_int4::tcgen05_int4_gemm_bf16(
+      a_packed.const_data_ptr(), sfa.const_data_ptr(),
+      b_packed.const_data_ptr(), sfb.const_data_ptr(), output.data_ptr(),
+      static_cast<int>(m), static_cast<int>(n), static_cast<int>(k),
+      1.0f, 0.0f, stream);
+  TORCH_CHECK(status == 0, "tcgen05 INT4 GEMM failed with status ", status);
+  return output;
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("run_codebook_probe(Tensor cubin, int device) -> Tensor");
   ops.def("run_mma_probe(Tensor cubin, Tensor! output, int iterations, int blocks, int launches, int device) -> ()");
+  ops.def("tcgen05_int4_gemm_bf16(Tensor a_packed, Tensor sfa, Tensor b_packed, Tensor sfb) -> Tensor");
   ops.impl("run_codebook_probe", torch::kCPU, &run_codebook_probe);
   ops.impl("run_mma_probe", torch::kCPU, &run_mma_probe);
   ops.impl("run_mma_probe", torch::kCUDA, &run_mma_probe);
+  ops.impl("tcgen05_int4_gemm_bf16", torch::kCUDA, &tcgen05_int4_gemm_bf16);
 }
 
 REGISTER_EXTENSION(TORCH_EXTENSION_NAME)

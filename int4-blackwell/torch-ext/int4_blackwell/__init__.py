@@ -1,4 +1,4 @@
-"""Experimental native E0M3/INT4 tensor-core primitives for Blackwell SM12x."""
+"""Experimental native E0M3/INT4 tensor-core primitives for Blackwell."""
 
 from __future__ import annotations
 
@@ -30,6 +30,14 @@ def _architecture(device: int) -> str:
         raise RuntimeError(
             f"int4-blackwell supports {supported}; got SM{capability[0]}{capability[1]}"
         ) from error
+
+
+def _capability(device: int) -> tuple[int, int]:
+    return tuple(torch.cuda.get_device_capability(device))
+
+
+def _is_tcgen05(device: int) -> bool:
+    return _capability(device) in {(10, 0), (10, 3), (11, 0)}
 
 
 def _cubin(mode: OperandMode, device: int) -> torch.Tensor:
@@ -69,6 +77,33 @@ def codebook_probe(
     for the A and B operands. The result is synchronized and returned on CPU.
     """
     dev = _device_index(device)
+    if _is_tcgen05(dev):
+        if mode != "ab":
+            raise ValueError(
+                "the tcgen05 backend currently exposes the native INT4 x INT4 "
+                "descriptor; use mode='ab'"
+            )
+        m = n = k = 128
+        b_packed = torch.full(
+            (n, k // 2), 0x11, device=f"cuda:{dev}", dtype=torch.uint8
+        )
+        # Constant-one UE4M3 storage is layout-invariant. Deliberately
+        # overallocate the physical CUTLASS scale-factor tensors for this
+        # instruction canary so no private layout helper leaks into the API.
+        sfa = torch.full((m * k,), 0x38, device=f"cuda:{dev}", dtype=torch.uint8)
+        sfb = torch.full((n * k,), 0x38, device=f"cuda:{dev}", dtype=torch.uint8)
+        values = []
+        for value in range(16):
+            packed = value | (value << 4)
+            a_packed = torch.full(
+                (m, k // 2), packed, device=f"cuda:{dev}", dtype=torch.uint8
+            )
+            tile = ops.tcgen05_int4_gemm_bf16(a_packed, sfa, b_packed, sfb)
+            first = tile[0, 0]
+            if not torch.equal(tile, first.expand_as(tile)):
+                raise RuntimeError("tcgen05 INT4 codebook output is not uniform")
+            values.append(first.float() / k)
+        return torch.stack(values).cpu()
     tile = ops.run_codebook_probe(_cubin(mode, dev), dev)
     torch.cuda.synchronize(dev)
     if not torch.equal(tile, tile[:, :1].expand_as(tile)):
@@ -87,6 +122,11 @@ def mma_probe(
 ) -> torch.Tensor:
     """Launch the register-resident MMA throughput probe asynchronously."""
     dev = _device_index(device)
+    if _is_tcgen05(dev):
+        raise RuntimeError(
+            "mma_probe is the SM120/SM121 register-resident OMMA probe; "
+            "benchmark tcgen05_int4_gemm_bf16 on SM100/SM103/SM110"
+        )
     if blocks is None:
         blocks = torch.cuda.get_device_properties(dev).multi_processor_count * 4
     if out is None:
@@ -95,4 +135,20 @@ def mma_probe(
     return out
 
 
-__all__ = ["codebook_probe", "mma_probe"]
+def tcgen05_int4_gemm_bf16(
+    a_packed: torch.Tensor,
+    sfa_physical: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfb_physical: torch.Tensor,
+) -> torch.Tensor:
+    """Run native E0M3 x E0M3 block-scaled GEMM on SM100/SM103/SM110.
+
+    ``a_packed`` and ``b_packed`` contain two sign-magnitude INT4 values per
+    byte. Scale tensors are the physical CUTLASS UE4M3 block-16 layouts.
+    """
+    return ops.tcgen05_int4_gemm_bf16(
+        a_packed, sfa_physical, b_packed, sfb_physical
+    )
+
+
+__all__ = ["codebook_probe", "mma_probe", "tcgen05_int4_gemm_bf16"]

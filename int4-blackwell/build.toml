@@ -12,6 +12,7 @@ maxver = "13"
 repo-id = "flashrt/int4-blackwell"
 
 [torch]
+include = ["csrc"]
 pyext = [
     "py",
     "cubin",
@@ -27,3 +28,22 @@ cuda-capabilities = ["12.0a", "12.1"]
 cuda-minver = "12.8"
 depends = ["torch"]
 src = ["csrc/arch_guard.cu"]
+
+[kernel.int4_blackwell_tcgen05]
+backend = "cuda"
+cuda-capabilities = ["10.0a", "10.3a", "11.0a"]
+cuda-minver = "13.0"
+depends = ["torch", "cutlass_4_5"]
+include = ["csrc"]
+src = [
+    "csrc/gemm/int4_tcgen05_gemm.cu",
+    "csrc/gemm/int4_tcgen05_gemm.cuh",
+    "csrc/cute/arch/mma_sm100_desc.hpp",
+]
+cuda-flags = [
+    "--expt-relaxed-constexpr",
+    "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+    # CUDA 13 supports sm_103a, but kernel-builder's current default
+    # capability intersection does not enumerate 10.3 yet.
+    "-gencode=arch=compute_103a,code=sm_103a",
+]

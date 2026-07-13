@@ -16,17 +16,33 @@ On RTX 5090 (SM120), driver 580.159.03 and CUDA 13.0.88:
 - The torch211/cu128 extension plus CUDA 13.0 cubin path is validated locally;
   the extension ABI does not require Torch itself to be a cu130 build.
 
-This validation proves native decode semantics and issue rate. It does not
-claim end-to-end GEMM or model accuracy because the package does not expose a
-general GEMM operation.
+This SM120 validation proves native decode semantics and issue rate. It does
+not claim model-level accuracy.
 
 SM121 cubins are generated independently with `sm_121a`. Their unpatched
 `OMMA.SF` instruction encoding matches SM120, and all patch sites are found,
 but SM121 remains a packaged release candidate until the exact codebook and
 throughput tests run on a GB10/Spark device.
 
-On NVIDIA Thor (SM110), CUDA 13.0 rejects the SM120 warp-level block-scale MMA
-for `sm_110a`. NVIDIA CuTeDSL 4.6.0 NVFP4 GEMM passes on the same machine via
-the separate `tcgen05`/`UTCOMMA.4X` path. E0M3 support on that path requires a
-new codebook-validated backend; compiling the NVFP4 baseline alone is not
-evidence of INT4 support.
+On NVIDIA Thor (SM110), CUDA 13.0.48 rejects the SM120 `OMMA.SF` instruction,
+as expected. The separate CUTLASS tcgen05 backend was compiled for `sm_110a`
+and validated with a full 16-code GEMM sweep. Dividing each 128 x 128 x 128
+constant GEMM output by K gives exactly:
+
+```text
+0, 1, 2, 3, 4, 5, 6, 7, -0, -1, -2, -3, -4, -5, -6, -7
+```
+
+All elements in every output tile are uniform. The stock E2M1 descriptor
+produces 64 for the `0.5 * 0.5 * 256` canary, while descriptor value zero
+produces 256 for `1 * 1 * 256`, proving that the native decode changes rather
+than a host-side reinterpretation. Hub cold-cache artifact validation is a
+separate release gate and is recorded only after upload.
+
+Random signed-INT4 GEMMs at `(M,N,K) = (128,128,128)`, `(128,256,256)`, and
+`(256,128,128)` were compared with a FP32 PyTorch matmul rounded to BF16. All
+three results were bit-exact (`max_error=0`, `mean_error=0`). These scale-one
+tests cover packing, A/B layout, accumulation, and BF16 output independently
+of the private physical scale-factor permutation.
+
+SM100 and SM103 are compile targets, not runtime-validated claims.
