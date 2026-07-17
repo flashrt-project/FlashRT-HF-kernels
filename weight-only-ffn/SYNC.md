@@ -10,3 +10,7 @@ The Hub package adds generic Tensor bindings, multi-row weight reuse, W8
 weight-only kernels, FFN region wrappers, strict shape rejection, fake-op
 registration, tests, and benchmarks. Upstream files are read-only inputs; Hub
 changes are maintained in this package.
+
+All CUDA translation units require `--use_fast_math`. Source tests and
+benchmarks use the same flag, and `build.toml` passes it explicitly to
+`kernel-builder` so published artifacts preserve the validated code generation.
