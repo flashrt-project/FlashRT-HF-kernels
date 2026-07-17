@@ -43,3 +43,29 @@ void fp8_geglu_mlp_bf16(
     torch::Tensor& gate_up_bf16,
     torch::Tensor& hidden_fp8,
     torch::Tensor& out);
+
+void bf16_fp8_swiglu_mlp_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& gate_up_weight,
+    torch::Tensor const& down_weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& gate_up_weight_scale,
+    torch::Tensor const& hidden_scale,
+    torch::Tensor const& down_weight_scale,
+    torch::Tensor& input_fp8,
+    torch::Tensor& gate_up_bf16,
+    torch::Tensor& hidden_fp8,
+    torch::Tensor& out);
+
+void bf16_fp8_geglu_mlp_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& gate_up_weight,
+    torch::Tensor const& down_weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& gate_up_weight_scale,
+    torch::Tensor const& hidden_scale,
+    torch::Tensor const& down_weight_scale,
+    torch::Tensor& input_fp8,
+    torch::Tensor& gate_up_bf16,
+    torch::Tensor& hidden_fp8,
+    torch::Tensor& out);

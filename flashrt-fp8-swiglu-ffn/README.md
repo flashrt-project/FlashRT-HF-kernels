@@ -19,6 +19,9 @@ lives in `demos/`, not in the package entry points.
 - `gelu_mul_merged_quantize_fp8_static_bf16(gate_up_bf16, output_scale, out_fp8=None)`
 - `fp8_swiglu_mlp_bf16(input, gate_up_weight, down_weight, input_scale, gate_up_weight_scale, hidden_scale, down_weight_scale, gate_up_bf16=None, hidden_fp8=None, out=None)`
 - `fp8_geglu_mlp_bf16(input, gate_up_weight, down_weight, input_scale, gate_up_weight_scale, hidden_scale, down_weight_scale, gate_up_bf16=None, hidden_fp8=None, out=None)`
+- `bf16_fp8_swiglu_mlp_bf16(input_bf16, gate_up_weight, down_weight, input_scale, gate_up_weight_scale, hidden_scale, down_weight_scale, input_fp8=None, gate_up_bf16=None, hidden_fp8=None, out=None, pad_to=None)`
+- `bf16_fp8_geglu_mlp_bf16(...)`: GeGLU counterpart with the same BF16
+  region-boundary and scratch-buffer contract.
 
 Tensor conventions:
 
@@ -49,12 +52,11 @@ x = torch.randn((10, 1024), device="cuda", dtype=torch.bfloat16)
 gate_up_w = torch.randn((8192, 1024), device="cuda", dtype=torch.bfloat16)
 down_w = torch.randn((1024, 4096), device="cuda", dtype=torch.bfloat16)
 
-x_fp8 = torch.clamp(x.float() / x_scale, -448, 448).to(torch.float8_e4m3fn)
 gate_up_w_fp8 = torch.clamp(gate_up_w.float() / gate_up_scale, -448, 448).to(torch.float8_e4m3fn)
 down_w_fp8 = torch.clamp(down_w.float() / down_scale, -448, 448).to(torch.float8_e4m3fn)
 
-y = ops.fp8_geglu_mlp_bf16(
-    x_fp8,
+y = ops.bf16_fp8_geglu_mlp_bf16(
+    x,
     gate_up_w_fp8,
     down_w_fp8,
     x_scale,
@@ -69,8 +71,14 @@ Use `fp8_geglu_mlp_bf16` for Gemma/PI0.5-style
 `SiLU(gate) * up` blocks.
 
 For hot-path runtime use, load the kernel once, keep weights/scales resident,
-preallocate `gate_up_bf16`, `hidden_fp8`, and `out`, and capture the repeated
-block with CUDA Graph if the shape is static.
+preallocate `input_fp8`, `gate_up_bf16`, `hidden_fp8`, and `out`, and capture
+the repeated block with CUDA Graph if the shape is static. The BF16 entry is
+one traceable custom-op boundary, not one CUDA launch. Both BF16 entry ops
+register fake implementations and pass `torch.compile(fullgraph=True)` plus
+explicit CUDA Graph replay in the package gate.
+The input quantizer uses the production arithmetic order
+`input.float() * (1.0 / input_scale)` so migration parity is checked exactly,
+without widening tolerances around FP8 bin boundaries.
 
 ## Validation
 
@@ -91,8 +99,15 @@ Benchmark:
 ```bash
 python flashrt-fp8-swiglu-ffn/benchmarks/benchmark.py --backend source --shapes headline
 python flashrt-fp8-swiglu-ffn/benchmarks/benchmark.py --backend source --shapes all
+python flashrt-fp8-swiglu-ffn/benchmarks/benchmark_bf16_entry.py \
+  --backend source --activation silu --shapes all --compile-baseline
+python flashrt-fp8-swiglu-ffn/benchmarks/benchmark_bf16_entry.py \
+  --backend source --activation gelu --shapes all --compile-baseline
 ```
 
 The correctness gate reports `max_abs`, `mean_abs`, `p99_abs`, cosine
 similarity, and relative error. Benchmarks compare against PyTorch eager and an
 optional compile-stable PyTorch reference only after the reference is verified.
+The BF16-entry benchmark additionally compares against the old separate input
+quantization path and reports explicit CUDA Graph latency. Its hard migration
+gate is exact equality with the established staged FlashRT ops.

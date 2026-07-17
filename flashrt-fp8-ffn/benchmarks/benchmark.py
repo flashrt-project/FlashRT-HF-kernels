@@ -152,6 +152,56 @@ class SourceOps:
         )
         return out
 
+    def bf16_fp8_gelu_mlp_bf16(
+        self,
+        x,
+        up_w,
+        up_b,
+        down_w,
+        down_b,
+        x_scale,
+        up_w_scale,
+        hidden_scale,
+        down_w_scale,
+        input_fp8=None,
+        hidden_bf16=None,
+        hidden_fp8=None,
+        out=None,
+        *,
+        pad_to=None,
+    ):
+        padded_m = x.shape[0] if pad_to is None else pad_to
+        if input_fp8 is None:
+            input_fp8 = torch.empty(
+                (padded_m, x.shape[1]), device=x.device, dtype=fp8_dtype()
+            )
+        if hidden_bf16 is None:
+            hidden_bf16 = torch.empty(
+                (padded_m, up_w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        if hidden_fp8 is None:
+            hidden_fp8 = torch.empty_like(hidden_bf16, dtype=fp8_dtype())
+        if out is None:
+            out = torch.empty(
+                (padded_m, down_w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        self._ops.bf16_fp8_gelu_mlp_bf16(
+            x,
+            up_w,
+            up_b,
+            down_w,
+            down_b,
+            x_scale,
+            up_w_scale,
+            hidden_scale,
+            down_w_scale,
+            input_fp8,
+            hidden_bf16,
+            hidden_fp8,
+            out,
+        )
+        return out[: x.shape[0]]
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:

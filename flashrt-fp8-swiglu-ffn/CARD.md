@@ -22,6 +22,8 @@ where static FP8 activations and weights are already available.
   scratch buffers.
 - `fp8_geglu_mlp_bf16`: full FP8 GeGLU MLP block with explicit optional
   scratch buffers.
+- `bf16_fp8_swiglu_mlp_bf16`: BF16 region entry for static-scale SwiGLU.
+- `bf16_fp8_geglu_mlp_bf16`: BF16 region entry for static-scale GeGLU.
 
 ## When To Use
 
@@ -33,6 +35,9 @@ Use this package for static-shape model hot paths where the surrounding runtime
 can keep FP8 tensors, weights, scales, and scratch buffers resident. Avoid
 one-off calls between many unfused BF16 operations when reporting end-to-end
 speedups; that measures Python/runtime boundaries instead of kernel value.
+When the host block produces BF16, use a BF16 entry and preallocate its scratch
+buffers to remove the standalone Python quantization boundary and support CUDA
+Graph replay.
 
 ## Hardware
 
@@ -51,3 +56,7 @@ This package is a Tensor API integration layer. The upstream serving source of
 truth remains FlashRT:
 
 https://github.com/LiangSu8899/FlashRT
+
+The BF16 region entries are traceable custom ops containing multiple launches,
+not single-launch megakernels. Their production migration gate is bit-exact
+against the package's established staged FP8 ops.

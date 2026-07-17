@@ -38,6 +38,16 @@ def fp8_max() -> float:
     return 240.0 if torch.version.hip is not None else 448.0
 
 
+def midm_padded_rows(rows: int) -> int:
+    if (
+        torch.version.hip is None
+        and torch.cuda.get_device_capability(0) == (11, 0)
+        and 9 <= rows <= 128
+    ):
+        return ((rows + 63) // 64) * 64
+    return rows
+
+
 class SourceOps:
     def __init__(self, namespace: str) -> None:
         self._ops = getattr(torch.ops, namespace)
@@ -150,6 +160,47 @@ class SourceOps:
         )
         return out
 
+    def _bf16_fp8_glu_mlp_bf16(
+        self, op, x, gate_up_w, down_w, x_scale, gate_up_w_scale,
+        hidden_scale, down_w_scale, input_fp8=None, gate_up_bf16=None,
+        hidden_fp8=None, out=None, *, pad_to=None
+    ):
+        padded_m = x.shape[0] if pad_to is None else pad_to
+        hidden = gate_up_w.shape[0] // 2
+        if input_fp8 is None:
+            input_fp8 = torch.empty(
+                (padded_m, x.shape[1]), device=x.device, dtype=fp8_dtype()
+            )
+        if gate_up_bf16 is None:
+            gate_up_bf16 = torch.empty(
+                (padded_m, gate_up_w.shape[0]), device=x.device,
+                dtype=torch.bfloat16,
+            )
+        if hidden_fp8 is None:
+            hidden_fp8 = torch.empty(
+                (padded_m, hidden), device=x.device, dtype=fp8_dtype()
+            )
+        if out is None:
+            out = torch.empty(
+                (padded_m, down_w.shape[0]), device=x.device,
+                dtype=torch.bfloat16,
+            )
+        op(
+            x, gate_up_w, down_w, x_scale, gate_up_w_scale, hidden_scale,
+            down_w_scale, input_fp8, gate_up_bf16, hidden_fp8, out
+        )
+        return out[: x.shape[0]]
+
+    def bf16_fp8_swiglu_mlp_bf16(self, *args, **kwargs):
+        return self._bf16_fp8_glu_mlp_bf16(
+            self._ops.bf16_fp8_swiglu_mlp_bf16, *args, **kwargs
+        )
+
+    def bf16_fp8_geglu_mlp_bf16(self, *args, **kwargs):
+        return self._bf16_fp8_glu_mlp_bf16(
+            self._ops.bf16_fp8_geglu_mlp_bf16, *args, **kwargs
+        )
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -202,6 +253,12 @@ def load_installed_ops(artifact: str | None):
 
 def quantize_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return torch.clamp(x.float() / scale.float(), -fp8_max(), fp8_max()).to(fp8_dtype())
+
+
+def quantize_fp8_reciprocal(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+    """Match FlashRT's production static-quant arithmetic order exactly."""
+    inv_scale = 1.0 / scale.float()
+    return torch.clamp(x.float() * inv_scale, -fp8_max(), fp8_max()).to(fp8_dtype())
 
 
 def dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
@@ -283,12 +340,14 @@ def assert_distribution_close(
     p99_abs_limit: float,
     p99_rel_floor1_limit: float,
     max_abs_limit: float | None = None,
+    cosine_min: float = 0.0,
 ) -> None:
     m = distribution_metrics(got, expected)
     if (
         m["p99_abs"] > p99_abs_limit
         or m["p99_rel"] > p99_rel_floor1_limit
         or (max_abs_limit is not None and m["max_abs"] > max_abs_limit)
+        or m["cosine"] < cosine_min
     ):
         raise AssertionError(
             f"{name} failed: max_abs={m['max_abs']} p99_abs={m['p99_abs']} "
@@ -459,7 +518,133 @@ def run(args) -> None:
     for label, shape in shapes.items():
         run_shape(ops, label, shape)
 
+    for label, shape in {
+        "midm_decoder_m8": (8, 1024, 4096, 1024),
+        "midm_decoder_m51": (51, 1024, 4096, 1024),
+        "midm_decoder_m64": (64, 1024, 4096, 1024),
+        "midm_decoder_m105": (105, 1024, 4096, 1024),
+        "midm_decoder_m128": (128, 1024, 4096, 1024),
+        "midm_dit_m51": (51, 1536, 6144, 1536),
+    }.items():
+        M, K, H, N = shape
+        x_bf16 = torch.randn((M, K), device="cuda", dtype=torch.bfloat16) * 0.25
+        x_scale = (x_bf16.float().abs().max() / (0.9 * fp8_max())).clamp_min(1e-6).reshape(1)
+        x_fp8 = quantize_fp8_reciprocal(x_bf16, x_scale)
+        _, gate_up_w, down_w, _, gu_s, hid_s, dn_s = make_case(*shape)
+        padded_m = midm_padded_rows(M)
+        input_fp8 = torch.empty(
+            (padded_m, K), device="cuda", dtype=fp8_dtype()
+        )
+        got = ops.bf16_fp8_swiglu_mlp_bf16(
+            x_bf16, gate_up_w, down_w, x_scale, gu_s, hid_s, dn_s,
+            input_fp8=input_fp8, pad_to=padded_m,
+        )
+        staged = ops.fp8_swiglu_mlp_bf16(
+            input_fp8, gate_up_w, down_w, x_scale, gu_s, hid_s, dn_s
+        )[:M]
+        assert_distribution_close(
+            f"{label}/bf16_input_quant", input_fp8[:M], x_fp8,
+            p99_abs_limit=0.0, p99_rel_floor1_limit=0.0,
+            max_abs_limit=0.0,
+        )
+        if padded_m > M:
+            assert_distribution_close(
+                f"{label}/bf16_input_padding",
+                input_fp8[M:],
+                torch.zeros_like(input_fp8[M:]),
+                p99_abs_limit=0.0,
+                p99_rel_floor1_limit=0.0,
+                max_abs_limit=0.0,
+            )
+        assert_distribution_close(
+            f"{label}/bf16_fp8_swiglu_mlp_vs_staged", got, staged,
+            p99_abs_limit=0.0, p99_rel_floor1_limit=0.0,
+            max_abs_limit=0.0,
+        )
+        if M == 51:
+            got_geglu = ops.bf16_fp8_geglu_mlp_bf16(
+                x_bf16, gate_up_w, down_w, x_scale, gu_s, hid_s, dn_s,
+                input_fp8=input_fp8, pad_to=padded_m,
+            )
+            staged_geglu = ops.fp8_geglu_mlp_bf16(
+                input_fp8, gate_up_w, down_w, x_scale, gu_s, hid_s, dn_s
+            )[:M]
+            assert_distribution_close(
+                f"{label}/bf16_fp8_geglu_mlp_vs_staged", got_geglu,
+                staged_geglu, p99_abs_limit=0.0,
+                p99_rel_floor1_limit=0.0, max_abs_limit=0.0,
+            )
+
     run_rejection_tests(ops)
+
+    M, K, H, N = 51, 128, 256, 128
+    x_bf16 = torch.randn((M, K), device="cuda", dtype=torch.bfloat16) * 0.25
+    x_scale = torch.tensor([0.01], device="cuda", dtype=torch.float32)
+    gate_up_scale = torch.tensor([0.02], device="cuda", dtype=torch.float32)
+    hidden_scale = torch.tensor([0.02], device="cuda", dtype=torch.float32)
+    down_scale = torch.tensor([0.02], device="cuda", dtype=torch.float32)
+    gate_up_weight = quantize_fp8(
+        torch.randn((2 * H, K), device="cuda", dtype=torch.bfloat16) * 0.02,
+        gate_up_scale,
+    )
+    down_weight = quantize_fp8(
+        torch.randn((N, H), device="cuda", dtype=torch.bfloat16) * 0.02,
+        down_scale,
+    )
+    padded_m = 64
+    input_fp8 = torch.empty((padded_m, K), device="cuda", dtype=fp8_dtype())
+    gate_up_bf16 = torch.empty((padded_m, 2 * H), device="cuda", dtype=torch.bfloat16)
+    hidden_fp8 = torch.empty((padded_m, H), device="cuda", dtype=fp8_dtype())
+    out = torch.empty((padded_m, N), device="cuda", dtype=torch.bfloat16)
+
+    def region(value):
+        return ops.bf16_fp8_swiglu_mlp_bf16(
+            value, gate_up_weight, down_weight, x_scale, gate_up_scale,
+            hidden_scale, down_scale, input_fp8=input_fp8,
+            gate_up_bf16=gate_up_bf16, hidden_fp8=hidden_fp8, out=out,
+            pad_to=padded_m,
+        )
+
+    expected = region(x_bf16).clone()
+    compiled = torch.compile(region, fullgraph=True)
+    assert_distribution_close(
+        "bf16_region/torch_compile_fullgraph", compiled(x_bf16), expected,
+        p99_abs_limit=0.0, p99_rel_floor1_limit=0.0, max_abs_limit=0.0,
+    )
+    graph = torch.cuda.CUDAGraph()
+    region(x_bf16)
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph):
+        region(x_bf16)
+    graph.replay()
+    torch.cuda.synchronize()
+    assert_distribution_close(
+        "bf16_region/cuda_graph_replay", out[:M], expected,
+        p99_abs_limit=0.0, p99_rel_floor1_limit=0.0, max_abs_limit=0.0,
+    )
+    assert_distribution_close(
+        "bf16_region/padded_input_zero_fill",
+        input_fp8[M:],
+        torch.zeros_like(input_fp8[M:]),
+        p99_abs_limit=0.0,
+        p99_rel_floor1_limit=0.0,
+        max_abs_limit=0.0,
+    )
+    if out.dtype != torch.bfloat16:
+        raise AssertionError(f"output dtype must be bfloat16, got {out.dtype}")
+    print("PASS bf16_region/output_dtype: torch.bfloat16")
+
+    try:
+        ops.bf16_fp8_swiglu_mlp_bf16(
+            x_bf16, gate_up_weight, down_weight, x_scale, gate_up_scale,
+            hidden_scale, down_scale,
+            input_fp8=torch.empty((M - 1, K), device="cuda", dtype=fp8_dtype()),
+            pad_to=M - 1,
+        )
+    except (RuntimeError, ValueError):
+        print("PASS bf16_region/reject_short_padding")
+    else:
+        raise AssertionError("short padded scratch must be rejected")
 
 
 def main() -> None:

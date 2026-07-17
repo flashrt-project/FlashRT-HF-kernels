@@ -56,6 +56,23 @@ __global__ void add_bias_bf16_kernel(
                             static_cast<float>(bias[col]));
 }
 
+__global__ void quantize_fp8_static_bf16_mpad_kernel(
+    const hip_bfloat16* __restrict__ input,
+    __hip_fp8_e4m3_fnuz* __restrict__ output,
+    const float* __restrict__ scale,
+    int logical_m,
+    int K) {
+  const int row = blockIdx.x;
+  const float inv_scale = 1.0f / scale[0];
+  const long long base = static_cast<long long>(row) * K;
+  for (int col = threadIdx.x; col < K; col += blockDim.x) {
+    float q = row < logical_m ? static_cast<float>(input[base + col]) * inv_scale
+                              : 0.0f;
+    q = fminf(fmaxf(q, -kFp8FnuzMax), kFp8FnuzMax);
+    output[base + col] = __hip_fp8_e4m3_fnuz(q);
+  }
+}
+
 }  // namespace
 
 namespace flash_rt {
@@ -74,6 +91,22 @@ void fp8_gemm_descale_bf16out(
   rocm::hipblaslt_matmul_fp8_e4m3fnuz_bf16(
       input_fp8, weight_fp8, input_scale, weight_scale, out_bf16,
       M, N, K, stream);
+}
+
+void quantize_fp8_static_bf16_mpad(
+    const void* input_bf16,
+    void* out_fp8,
+    const float* scale,
+    int logical_m,
+    int padded_m,
+    int K,
+    hipStream_t stream) {
+  if (logical_m <= 0 || padded_m < logical_m || K <= 0) return;
+  hipLaunchKernelGGL(quantize_fp8_static_bf16_mpad_kernel,
+                     dim3(padded_m), dim3(kBlock), 0, stream,
+                     static_cast<const hip_bfloat16*>(input_bf16),
+                     static_cast<__hip_fp8_e4m3_fnuz*>(out_fp8), scale,
+                     logical_m, K);
 }
 
 void bias_gelu_quantize_fp8_static_bf16(

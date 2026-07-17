@@ -162,6 +162,23 @@ __global__ void add_bias_bf16_kernel(
   input[idx] = __float2bfloat16(v);
 }
 
+__global__ void quantize_fp8_static_bf16_mpad_kernel(
+    const __nv_bfloat16* __restrict__ input,
+    __nv_fp8_e4m3* __restrict__ output,
+    const float* __restrict__ scale,
+    int logical_m,
+    int K) {
+  const int row = blockIdx.x;
+  const float inv_scale = 1.0f / *scale;
+  const long long base = static_cast<long long>(row) * K;
+  for (int col = threadIdx.x; col < K; col += blockDim.x) {
+    float q = row < logical_m ? __bfloat162float(input[base + col]) * inv_scale
+                              : 0.0f;
+    q = fminf(fmaxf(q, -kFp8Max), kFp8Max);
+    output[base + col] = __nv_fp8_e4m3(q);
+  }
+}
+
 int quant_block_size(long long M, int N, bool has_bias) {
   const char* value = std::getenv("FLASHRT_FP8_FFN_QUANT_BLOCK_SIZE");
   if (value != nullptr) {
@@ -283,6 +300,20 @@ void fp8_gemm_descale_bf16out(
           &beta, out_bf16, cg.Ddesc, out_bf16, cg.Ddesc, &cg.algo, g_fp8_ws,
           g_fp8_ws_sz, stream),
       name, M, N, K, "cublasLtMatmul");
+}
+
+void quantize_fp8_static_bf16_mpad(
+    const void* input_bf16,
+    void* out_fp8,
+    const float* scale,
+    int logical_m,
+    int padded_m,
+    int K,
+    cudaStream_t stream) {
+  if (logical_m <= 0 || padded_m < logical_m || K <= 0) return;
+  quantize_fp8_static_bf16_mpad_kernel<<<padded_m, 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input_bf16),
+      reinterpret_cast<__nv_fp8_e4m3*>(out_fp8), scale, logical_m, K);
 }
 
 void bias_gelu_quantize_fp8_static_bf16(

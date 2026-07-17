@@ -10,6 +10,9 @@ without exposing raw pointer APIs:
   quantization.
 - `fp8_gelu_mlp_bf16`: complete GELU MLP block:
   `FP8 up GEMM -> bias/GELU -> FP8 quant -> FP8 down GEMM -> bias`.
+- `bf16_fp8_gelu_mlp_bf16`: BF16 region entry that performs the static input
+  quantization and the complete FP8 GELU MLP behind one traceable custom-op
+  boundary.
 
 The API is generic. PI0.5/GROOT/Wan-shaped demos live outside the package.
 
@@ -48,12 +51,11 @@ up_scale = torch.tensor([0.04], device="cuda")
 hidden_scale = torch.tensor([0.25], device="cuda")
 dn_scale = torch.tensor([0.04], device="cuda")
 
-x_fp8 = torch.clamp(x.float() / x_scale, -448, 448).to(torch.float8_e4m3fn)
 w_up_fp8 = torch.clamp(w_up.float() / up_scale, -448, 448).to(torch.float8_e4m3fn)
 w_dn_fp8 = torch.clamp(w_dn.float() / dn_scale, -448, 448).to(torch.float8_e4m3fn)
 
-y = ops.fp8_gelu_mlp_bf16(
-    x_fp8,
+y = ops.bf16_fp8_gelu_mlp_bf16(
+    x,
     w_up_fp8,
     torch.zeros((4096,), device="cuda", dtype=torch.bfloat16),
     w_dn_fp8,
@@ -65,6 +67,18 @@ y = ops.fp8_gelu_mlp_bf16(
 )
 ```
 
+The BF16 entry accepts optional `input_fp8`, `hidden_bf16`, `hidden_fp8`, and
+`out` buffers. Preallocate them for allocation-free CUDA Graph replay. Use a
+static `pad_to` when a deployment intentionally pads M; the returned tensor is
+sliced back to the logical row count. This is one Python/custom-op boundary,
+not a claim that the two GEMMs and quantization execute as one CUDA launch.
+Its input quantizer follows the FlashRT production arithmetic contract exactly:
+`clamp(input.float() * (1.0 / input_scale), -fp8_max, fp8_max)`.
+
+The package registers a fake implementation for `torch.compile`. A static
+region with preallocated scratch passes `torch.compile(fullgraph=True)` and
+explicit CUDA Graph replay in the package correctness gate.
+
 ## Validation
 
 Run from the repository root:
@@ -73,6 +87,8 @@ Run from the repository root:
 python flashrt-fp8-ffn/tests/test_fp8_ffn.py --backend source
 python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes headline --compile-baseline
 python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes all
+python flashrt-fp8-ffn/benchmarks/benchmark_bf16_entry.py \
+  --backend source --shapes all --compile-baseline
 ```
 
 The package benchmark is reported against the PyTorch eager FP8 reference and a
@@ -82,3 +98,11 @@ path graph-breaks the numerically sensitive `GELU -> FP8 requant` and final
 BF16 bias/cast boundaries, while keeping the FP8 dequant GEMM regions compiled.
 Model-block demos should be reported separately from full model generation
 throughput claims.
+
+`benchmark_bf16_entry.py` uses the fair region-boundary comparison: BF16
+PyTorch eager, a verified full-graph BF16 `torch.compile` reference, the old
+separate Python quantization path, FP8 kernel-only timing, and the new BF16
+entry. It does not time FP8 dequantization inside the BF16 baseline. Migration
+correctness requires exact equality with the established FlashRT staged ops;
+the independent BF16 reference is reported separately as a quantization-quality
+metric.

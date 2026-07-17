@@ -16,6 +16,15 @@ void fp8_gemm_descale_bf16out(
     const float* weight_scale,
     hipStream_t stream);
 
+void quantize_fp8_static_bf16_mpad(
+    const void* input_bf16,
+    void* out_fp8,
+    const float* scale,
+    int logical_m,
+    int padded_m,
+    int K,
+    hipStream_t stream);
+
 void bias_gelu_quantize_fp8_static_bf16(
     const void* input_bf16,
     const void* bias_bf16,

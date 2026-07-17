@@ -15,6 +15,8 @@ Required before publishing this package:
    - `gelu_mul_merged_quantize_fp8_static_bf16`
    - `fp8_swiglu_mlp_bf16`
    - `fp8_geglu_mlp_bf16`
+   - `bf16_fp8_swiglu_mlp_bf16`
+   - `bf16_fp8_geglu_mlp_bf16`
    - invalid shape rejection
 
    The full MLP ops must be exact against the staged kernel composition
@@ -31,7 +33,18 @@ Required before publishing this package:
      --shapes all \
      --warmup 5 \
      --iters 20
+   python flashrt-fp8-swiglu-ffn/benchmarks/benchmark_bf16_entry.py \
+     --backend source --activation silu --shapes all --compile-baseline
+   python flashrt-fp8-swiglu-ffn/benchmarks/benchmark_bf16_entry.py \
+     --backend source --activation gelu --shapes all --compile-baseline
    ```
+
+   The BF16 entry requires bit-exact production-order input quantization and
+   bit-exact output against the same staged FlashRT ops. It also checks an
+   explicit `51 -> 64` zero-padded path and requires at least `1.3x` over BF16
+   eager for each M=51 family. The test additionally requires
+   `torch.compile(fullgraph=True)`, explicit CUDA Graph replay, BF16 output,
+   and invalid-padding rejection.
 
 3. Kernel-builder artifact build:
 

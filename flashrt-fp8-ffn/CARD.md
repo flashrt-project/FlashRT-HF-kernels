@@ -16,11 +16,15 @@ should call the same Tensor APIs rather than model-specific entry points.
   FP8 requantization.
 - `fp8_gelu_mlp_bf16`: full FP8 GELU MLP block:
   `FP8 up GEMM -> bias/GELU -> FP8 requant -> FP8 down GEMM -> bias`.
+- `bf16_fp8_gelu_mlp_bf16`: BF16 region entry that performs static input
+  quantization and the full FP8 GELU MLP behind one traceable custom-op call.
 
 ## When To Use
 
 Use this package for model FFN islands where weights are already quantized and
 activation/hidden scales are static for the benchmark or deployment slice.
+Use the BF16 entry when the surrounding Transformers/Diffusers block naturally
+produces BF16 and the old Python-side quantization call is an integration seam.
 
 Do not use it as a one-off Python call between many unfused BF16 operations if
 the goal is end-to-end speed. For best results, keep FP8 tensors flowing across
@@ -51,3 +55,7 @@ included in this generic package.
 The wrappers register fake/meta ops for `torch.compile` tracing. Benchmarks
 only report `torch.compile` baselines when the compiled PyTorch reference is
 verified equivalent to eager.
+
+For a static hot path, preallocate the optional FP8/BF16 scratch tensors and
+capture the call with CUDA Graph. The BF16 entry is a region API containing
+multiple launches; it is not advertised as a single-launch megakernel.

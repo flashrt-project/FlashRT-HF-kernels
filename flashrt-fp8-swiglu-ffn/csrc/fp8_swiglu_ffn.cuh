@@ -17,6 +17,15 @@ void fp8_gemm_descale_bf16out(
     const float* weight_scale,
     cudaStream_t stream);
 
+void quantize_fp8_static_bf16_mpad(
+    const void* input_bf16,
+    void* out_fp8,
+    const float* scale,
+    int logical_m,
+    int padded_m,
+    int K,
+    cudaStream_t stream);
+
 void silu_mul_merged_quantize_fp8_static_bf16(
     const void* gate_up_bf16,
     void* out_fp8,

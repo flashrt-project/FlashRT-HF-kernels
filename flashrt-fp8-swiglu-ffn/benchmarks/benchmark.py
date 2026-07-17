@@ -146,6 +146,115 @@ class SourceOps:
         )
         return out
 
+    def fp8_geglu_mlp_bf16(
+        self,
+        x,
+        gate_up_w,
+        down_w,
+        x_scale,
+        gate_up_w_scale,
+        hidden_scale,
+        down_w_scale,
+        gate_up_bf16=None,
+        hidden_fp8=None,
+        out=None,
+    ):
+        if gate_up_bf16 is None:
+            gate_up_bf16 = torch.empty(
+                (x.shape[0], gate_up_w.shape[0]),
+                device=x.device,
+                dtype=torch.bfloat16,
+            )
+        if hidden_fp8 is None:
+            hidden_fp8 = torch.empty(
+                (x.shape[0], gate_up_w.shape[0] // 2),
+                device=x.device,
+                dtype=fp8_dtype(),
+            )
+        if out is None:
+            out = torch.empty(
+                (x.shape[0], down_w.shape[0]),
+                device=x.device,
+                dtype=torch.bfloat16,
+            )
+        self._ops.fp8_geglu_mlp_bf16(
+            x,
+            gate_up_w,
+            down_w,
+            x_scale,
+            gate_up_w_scale,
+            hidden_scale,
+            down_w_scale,
+            gate_up_bf16,
+            hidden_fp8,
+            out,
+        )
+        return out
+
+    def _bf16_fp8_glu_mlp_bf16(
+        self,
+        op,
+        x,
+        gate_up_w,
+        down_w,
+        x_scale,
+        gate_up_w_scale,
+        hidden_scale,
+        down_w_scale,
+        input_fp8=None,
+        gate_up_bf16=None,
+        hidden_fp8=None,
+        out=None,
+        *,
+        pad_to=None,
+    ):
+        padded_m = x.shape[0] if pad_to is None else pad_to
+        hidden = gate_up_w.shape[0] // 2
+        if input_fp8 is None:
+            input_fp8 = torch.empty(
+                (padded_m, x.shape[1]), device=x.device, dtype=fp8_dtype()
+            )
+        if gate_up_bf16 is None:
+            gate_up_bf16 = torch.empty(
+                (padded_m, gate_up_w.shape[0]),
+                device=x.device,
+                dtype=torch.bfloat16,
+            )
+        if hidden_fp8 is None:
+            hidden_fp8 = torch.empty(
+                (padded_m, hidden), device=x.device, dtype=fp8_dtype()
+            )
+        if out is None:
+            out = torch.empty(
+                (padded_m, down_w.shape[0]),
+                device=x.device,
+                dtype=torch.bfloat16,
+            )
+        op(
+            x,
+            gate_up_w,
+            down_w,
+            x_scale,
+            gate_up_w_scale,
+            hidden_scale,
+            down_w_scale,
+            input_fp8,
+            gate_up_bf16,
+            hidden_fp8,
+            out,
+        )
+        return out[: x.shape[0]]
+
+    def bf16_fp8_swiglu_mlp_bf16(self, *args, **kwargs):
+        return self._bf16_fp8_glu_mlp_bf16(
+            self._ops.bf16_fp8_swiglu_mlp_bf16, *args, **kwargs
+        )
+
+    def bf16_fp8_geglu_mlp_bf16(self, *args, **kwargs):
+        return self._bf16_fp8_glu_mlp_bf16(
+            self._ops.bf16_fp8_geglu_mlp_bf16, *args, **kwargs
+        )
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:

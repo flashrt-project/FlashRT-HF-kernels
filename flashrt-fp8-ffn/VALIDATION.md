@@ -12,7 +12,15 @@ Required before publishing:
 
    ```bash
    python flashrt-fp8-ffn/benchmarks/benchmark.py --compile-baseline
+   python flashrt-fp8-ffn/benchmarks/benchmark_bf16_entry.py \
+     --backend source --shapes all --compile-baseline
    ```
+
+   The BF16-entry matrix covers M `8, 51, 64, 105, 128` for both
+   `1152 -> 4304 -> 1152` and `1536 -> 6144 -> 1536`. Production-order input
+   quantization and the complete output must be bit-exact against the same
+   staged FlashRT ops. The gate also checks explicit `51 -> 64` zero padding,
+   and every M=51 family must reach at least `1.3x` over BF16 eager.
 
    The compiled reference must verify against eager output before timing is
    reported. The current compile-stable reference graph-breaks the
@@ -23,6 +31,9 @@ Required before publishing:
 
    ```bash
    PYTHONPATH=<artifact-path> python flashrt-fp8-ffn/tests/test_fp8_ffn.py --backend installed
+   python flashrt-fp8-ffn/benchmarks/benchmark_bf16_entry.py \
+     --backend installed --artifact <artifact-path> --shapes all \
+     --compile-baseline
    ```
 
 4. Model-block demo:

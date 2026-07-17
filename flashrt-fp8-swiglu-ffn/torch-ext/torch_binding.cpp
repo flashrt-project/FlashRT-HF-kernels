@@ -166,6 +166,26 @@ void launch_swiglu_quant(
 #endif
 }
 
+void launch_quantize_mpad(
+    torch::Tensor const& input,
+    torch::Tensor const& input_scale,
+    torch::Tensor& input_fp8) {
+  const int logical_m = static_cast<int>(input.size(0));
+  const int padded_m = static_cast<int>(input_fp8.size(0));
+  const int K = static_cast<int>(input.size(1));
+#if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
+  FLASHRT_DEVICE_GUARD(input);
+  auto stream = FLASHRT_CURRENT_STREAM(input);
+  flash_rt::fp8_swiglu_ffn::quantize_fp8_static_bf16_mpad(
+      input.data_ptr(), input_fp8.data_ptr(),
+      reinterpret_cast<const float*>(input_scale.data_ptr()), logical_m,
+      padded_m, K, stream);
+#else
+  TORCH_CHECK(false,
+              "flashrt-fp8-swiglu-ffn was not built with CUDA/ROCm support");
+#endif
+}
+
 }  // namespace
 
 void fp8_gemm_bf16(
@@ -282,6 +302,90 @@ void fp8_geglu_mlp_bf16(
                        down_weight_scale, out);
 }
 
+namespace {
+
+void bf16_fp8_glu_mlp_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& gate_up_weight,
+    torch::Tensor const& down_weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& gate_up_weight_scale,
+    torch::Tensor const& hidden_scale,
+    torch::Tensor const& down_weight_scale,
+    torch::Tensor& input_fp8,
+    torch::Tensor& gate_up_bf16,
+    torch::Tensor& hidden_fp8,
+    torch::Tensor& out,
+    bool use_gelu) {
+  check_bf16_matrix(input, "input");
+  check_fp8_output(input_fp8, "input_fp8");
+  check_same_device(input, input_fp8, "input", "input_fp8");
+  check_scale(input_scale, "input_scale", input.get_device());
+  TORCH_CHECK(input_fp8.size(0) >= input.size(0) &&
+                  input_fp8.size(1) == input.size(1),
+              "input_fp8 must have shape (padded_m, input.shape[1]) with "
+              "padded_m >= input.shape[0]");
+  TORCH_CHECK(gate_up_bf16.size(0) == input_fp8.size(0) &&
+                  hidden_fp8.size(0) == input_fp8.size(0) &&
+                  out.size(0) == input_fp8.size(0),
+              "all scratch outputs must use input_fp8.shape[0] padded rows");
+  check_fp8_gemm_args(input_fp8, gate_up_weight, input_scale,
+                      gate_up_weight_scale, gate_up_bf16);
+  check_fp8_gemm_args(hidden_fp8, down_weight, hidden_scale,
+                      down_weight_scale, out);
+  TORCH_CHECK(gate_up_weight.size(0) % 2 == 0,
+              "gate_up_weight.shape[0] must be even");
+  TORCH_CHECK(hidden_fp8.size(1) == gate_up_weight.size(0) / 2,
+              "hidden_fp8 has an invalid hidden dimension");
+  TORCH_CHECK(down_weight.size(1) == hidden_fp8.size(1),
+              "down_weight.shape[1] must match hidden size");
+
+  launch_quantize_mpad(input, input_scale, input_fp8);
+  launch_fp8_gemm_bf16(input_fp8, gate_up_weight, input_scale,
+                       gate_up_weight_scale, gate_up_bf16);
+  launch_swiglu_quant(gate_up_bf16, hidden_scale, hidden_fp8, use_gelu);
+  launch_fp8_gemm_bf16(hidden_fp8, down_weight, hidden_scale,
+                       down_weight_scale, out);
+}
+
+}  // namespace
+
+void bf16_fp8_swiglu_mlp_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& gate_up_weight,
+    torch::Tensor const& down_weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& gate_up_weight_scale,
+    torch::Tensor const& hidden_scale,
+    torch::Tensor const& down_weight_scale,
+    torch::Tensor& input_fp8,
+    torch::Tensor& gate_up_bf16,
+    torch::Tensor& hidden_fp8,
+    torch::Tensor& out) {
+  bf16_fp8_glu_mlp_bf16(
+      input, gate_up_weight, down_weight, input_scale, gate_up_weight_scale,
+      hidden_scale, down_weight_scale, input_fp8, gate_up_bf16, hidden_fp8,
+      out, false);
+}
+
+void bf16_fp8_geglu_mlp_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& gate_up_weight,
+    torch::Tensor const& down_weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& gate_up_weight_scale,
+    torch::Tensor const& hidden_scale,
+    torch::Tensor const& down_weight_scale,
+    torch::Tensor& input_fp8,
+    torch::Tensor& gate_up_bf16,
+    torch::Tensor& hidden_fp8,
+    torch::Tensor& out) {
+  bf16_fp8_glu_mlp_bf16(
+      input, gate_up_weight, down_weight, input_scale, gate_up_weight_scale,
+      hidden_scale, down_weight_scale, input_fp8, gate_up_bf16, hidden_fp8,
+      out, true);
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("fp8_gemm_bf16("
           "Tensor input, Tensor weight, Tensor input_scale, "
@@ -300,6 +404,16 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor input_scale, Tensor gate_up_weight_scale, "
           "Tensor hidden_scale, Tensor down_weight_scale, "
           "Tensor! gate_up_bf16, Tensor! hidden_fp8, Tensor! out) -> ()");
+  ops.def("bf16_fp8_swiglu_mlp_bf16("
+          "Tensor input, Tensor gate_up_weight, Tensor down_weight, "
+          "Tensor input_scale, Tensor gate_up_weight_scale, "
+          "Tensor hidden_scale, Tensor down_weight_scale, Tensor! input_fp8, "
+          "Tensor! gate_up_bf16, Tensor! hidden_fp8, Tensor! out) -> ()");
+  ops.def("bf16_fp8_geglu_mlp_bf16("
+          "Tensor input, Tensor gate_up_weight, Tensor down_weight, "
+          "Tensor input_scale, Tensor gate_up_weight_scale, "
+          "Tensor hidden_scale, Tensor down_weight_scale, Tensor! input_fp8, "
+          "Tensor! gate_up_bf16, Tensor! hidden_fp8, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   ops.impl("fp8_gemm_bf16", torch::kCUDA, &fp8_gemm_bf16);
   ops.impl("silu_mul_merged_quantize_fp8_static_bf16",
@@ -310,6 +424,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
            &gelu_mul_merged_quantize_fp8_static_bf16);
   ops.impl("fp8_swiglu_mlp_bf16", torch::kCUDA, &fp8_swiglu_mlp_bf16);
   ops.impl("fp8_geglu_mlp_bf16", torch::kCUDA, &fp8_geglu_mlp_bf16);
+  ops.impl("bf16_fp8_swiglu_mlp_bf16",
+           torch::kCUDA,
+           &bf16_fp8_swiglu_mlp_bf16);
+  ops.impl("bf16_fp8_geglu_mlp_bf16",
+           torch::kCUDA,
+           &bf16_fp8_geglu_mlp_bf16);
 #endif
 }
 
