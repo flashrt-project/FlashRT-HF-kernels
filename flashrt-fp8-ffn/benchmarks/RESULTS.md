@@ -33,6 +33,38 @@ BF16 input producer, bias/GELU/FP8 producer, and final BF16 bias path. They are
 not Hub built-artifact claims; the published artifact is benchmarked again
 from a cold download before its numbers replace the built-artifact section.
 
+## BF16 Region Entry: RTX 5090 Hub Artifact (2026-07-17)
+
+- Source commit: `f1d4adb328bbdcfd61e385d1c82348a225c3cae4`.
+- Kernel Hub `v1` snapshot: `4c58ce8b74fa26cd7a3d734621afc7988c35f9be`.
+- Variant: `torch211-cxx11-cu130-x86_64-linux`.
+- Torch/CUDA: `2.11.0+cu130` / CUDA 13.0.
+- Binary: `_flashrt_fp8_ffn_cuda_f1d4adb.abi3.so`.
+- Protocol: cold Hub download, `20/100/5` warmup/iterations/rounds, A-B-B-A
+  median timing, preallocated scratch, verified BF16 compile baseline.
+- Correctness: full installed matrix passed; input quantization and complete
+  outputs are bit-exact against the staged FlashRT path. Custom-op compile,
+  CUDA Graph replay, padding, dtype, and rejection gates passed.
+
+| Shape | FlashRT us | Graph us | BF16 eager us | vs eager | BF16 compile us | vs compile |
+|---|---:|---:|---:|---:|---:|---:|
+| siglip M8 | 20.419 | 16.515 | 28.712 | 1.74x | 37.165 | 2.25x |
+| siglip M51 | 22.667 | 21.678 | 52.864 | 2.44x | 61.788 | 2.85x |
+| siglip M64 | 22.586 | 22.539 | 71.576 | 3.18x | 82.104 | 3.64x |
+| siglip M105 | 30.819 | 26.867 | 63.533 | 2.36x | 73.242 | 2.73x |
+| siglip M128 | 30.768 | 24.469 | 65.519 | 2.68x | 74.902 | 3.06x |
+| DiT M8 | 23.750 | 22.561 | 36.920 | 1.64x | 48.403 | 2.15x |
+| DiT M51 | 26.828 | 25.430 | 48.159 | 1.89x | 63.135 | 2.48x |
+| DiT M64 | 26.706 | 24.096 | 49.245 | 2.04x | 64.612 | 2.68x |
+| DiT M105 | 33.768 | 26.723 | 61.356 | 2.30x | 76.453 | 2.86x |
+| DiT M128 | 34.988 | 28.686 | 63.338 | 2.21x | 79.621 | 2.78x |
+
+The speedup columns use explicit CUDA Graph replay because it is the fastest
+production-eligible package path and is labeled separately from regular-call
+latency. Against the immediately preceding Hub snapshot on the same stack,
+regular-call latency improved from `24.191` to `22.667 us` for SigLIP M51
+(`6.3%`) and from `30.372` to `26.828 us` for DiT M51 (`11.7%`).
+
 ## RTX 5090 Source-Extension Results
 
 - Device: NVIDIA GeForce RTX 5090
@@ -134,13 +166,13 @@ so these numbers should be read as strong reusable package results, not a
 proof that the FlashRT production serving path has reached its final optimal
 tile for every shape.
 
-## RTX 5090 Built-Artifact Results
+## Original Full-Shape Built-Artifact Results
 
 - Device: NVIDIA GeForce RTX 5090
 - Compute capability: SM120
 - Driver: 580.82.07
 - Variant: `torch211-cxx11-cu128-x86_64-linux`
-- Built from commit: `21417e6`
+- Historical build commit: `21417e6`
 - Torch inside HF testshell: 2.11.0+cu128
 - Backend: copied `kernel-builder` artifact
 - Precision gate: same as source-extension results.
