@@ -1,9 +1,10 @@
 # Benchmark Results: flashrt-fp8-swiglu-ffn
 
-## BF16 Region Entry: RTX 5090 Source Results
+## BF16 Region Entry: RTX 5090 Source RC (2026-07-17)
 
 - Torch: `2.9.0a0+145a3a7bda.nv25.10`
-- Warmup/iterations: `20/100`
+- Warmup/iterations/rounds: `20/100/5`; primary FlashRT-vs-BF16 timing uses
+  A-B-B-A ordering and reports the median samples.
 - All rows pass exact input quantization, staged numerical gates,
   `torch.compile(fullgraph=True)` for the FlashRT op, and explicit CUDA Graph
   replay. M=51 rows also pass the `>=1.3x` BF16 eager promotion gate.
@@ -12,29 +13,31 @@
 
 | Shape | FlashRT us | Graph us | Separate quant us | Kernel-only us | BF16 eager us | vs eager | BF16 compile us | vs separate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| decoder M8 | 16.339 | 16.409 | 34.281 | 14.368 | 28.375 | 1.74x | 38.172 | 2.10x |
-| decoder M51 | 20.553 | 18.453 | 32.997 | 18.480 | 30.101 | 1.46x | 40.947 | 1.61x |
-| decoder M64 | 20.555 | 18.444 | 32.999 | 18.508 | 31.862 | 1.55x | 40.028 | 1.61x |
-| decoder M105 | 26.693 | 22.555 | 39.093 | 24.636 | 42.831 | 1.60x | 40.294 | 1.46x |
-| decoder M128 | 26.691 | 22.534 | 39.097 | 24.621 | 42.800 | 1.60x | 39.883 | 1.46x |
-| DiT M51 | 30.800 | 26.636 | 41.148 | 26.696 | 49.244 | 1.60x | 93.558 | 1.34x |
-| DiT M128 | 44.953 | 36.882 | 55.462 | 40.993 | 71.689 | 1.59x | 115.039 | 1.23x |
+| decoder M8 | 16.436 | 16.395 | 32.945 | 14.377 | 27.576 | 1.68x | 37.485 | 2.00x |
+| decoder M51 | 20.543 | 18.446 | 32.996 | 18.478 | 30.153 | 1.47x | 38.967 | 1.61x |
+| decoder M64 | 20.547 | 18.439 | 32.953 | 18.510 | 31.963 | 1.56x | 39.387 | 1.60x |
+| decoder M105 | 26.678 | 22.540 | 39.077 | 24.643 | 42.561 | 1.60x | 39.619 | 1.46x |
+| decoder M128 | 26.674 | 22.533 | 39.066 | 24.621 | 42.813 | 1.61x | 39.159 | 1.46x |
+| DiT M51 | 30.775 | 26.631 | 41.117 | 26.675 | 49.236 | 1.60x | 93.361 | 1.34x |
+| DiT M128 | 45.070 | 36.882 | 55.441 | 40.991 | 71.642 | 1.59x | 115.129 | 1.23x |
 
 ### GeGLU
 
 | Shape | FlashRT us | Graph us | Separate quant us | Kernel-only us | BF16 eager us | vs eager | BF16 compile us | vs separate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| decoder M8 | 16.449 | 16.403 | 34.183 | 14.376 | 27.702 | 1.68x | 37.714 | 2.08x |
-| decoder M51 | 20.567 | 18.451 | 33.232 | 18.495 | 32.907 | 1.60x | 40.382 | 1.62x |
-| decoder M64 | 20.562 | 18.453 | 32.968 | 18.482 | 30.950 | 1.51x | 40.129 | 1.60x |
-| decoder M105 | 26.689 | 22.545 | 39.077 | 24.648 | 42.997 | 1.61x | 40.278 | 1.46x |
-| decoder M128 | 26.691 | 22.542 | 39.096 | 24.625 | 42.546 | 1.59x | 40.455 | 1.46x |
-| DiT M51 | 30.608 | 26.633 | 41.140 | 26.609 | 49.240 | 1.61x | 90.764 | 1.34x |
-| DiT M128 | 45.085 | 36.891 | 55.444 | 40.995 | 71.670 | 1.59x | 115.135 | 1.23x |
+| decoder M8 | 16.427 | 16.383 | 33.393 | 14.393 | 28.260 | 1.72x | 37.401 | 2.03x |
+| decoder M51 | 20.543 | 18.440 | 32.992 | 18.487 | 29.018 | 1.41x | 38.984 | 1.61x |
+| decoder M64 | 20.546 | 18.441 | 32.935 | 18.486 | 30.241 | 1.47x | 40.045 | 1.60x |
+| decoder M105 | 26.678 | 22.534 | 39.070 | 24.641 | 42.149 | 1.58x | 39.855 | 1.46x |
+| decoder M128 | 26.675 | 22.538 | 39.082 | 24.621 | 42.021 | 1.58x | 40.084 | 1.47x |
+| DiT M51 | 30.734 | 26.635 | 41.126 | 26.592 | 47.964 | 1.56x | 92.519 | 1.34x |
+| DiT M128 | 45.062 | 36.878 | 55.219 | 40.990 | 71.664 | 1.59x | 115.051 | 1.23x |
 
 The BF16 baseline does not time FP8 dequantization. Random per-tensor FP8
 weight quantization gives BF16-reference cosine `0.99783-0.99790`; migration
 parity is checked separately against the established FP8 staged path.
+These are source-extension release-candidate results, not Hub built-artifact
+claims.
 
 This is a second-batch package under active validation. It implements true
 SwiGLU, not the GELU path from `flashrt-fp8-ffn`.

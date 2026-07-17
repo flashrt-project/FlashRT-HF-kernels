@@ -1,9 +1,10 @@
 # Benchmark Results: flashrt-fp8-ffn
 
-## BF16 Region Entry: RTX 5090 Source Results
+## BF16 Region Entry: RTX 5090 Source RC (2026-07-17)
 
 - Torch: `2.9.0a0+145a3a7bda.nv25.10`
-- Warmup/iterations: `20/100`
+- Warmup/iterations/rounds: `20/100/5`; primary FlashRT-vs-BF16 timing uses
+  A-B-B-A ordering and reports the median samples.
 - Baselines: allocation-free FlashRT BF16 entry, explicit CUDA Graph replay,
   old separate input quantization, FP8 kernel-only, BF16 PyTorch eager, and
   verified BF16 `torch.compile(fullgraph=True)`.
@@ -12,21 +13,23 @@
 
 | Shape | FlashRT us | Graph us | Separate quant us | Kernel-only us | BF16 eager us | vs eager | BF16 compile us | vs separate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| siglip M8 | 18.509 | 16.409 | 29.023 | 16.449 | 28.719 | 1.55x | 39.469 | 1.57x |
-| siglip M51 | 24.613 | 19.557 | 30.805 | 20.543 | 53.389 | 2.17x | 58.255 | 1.25x |
-| siglip M64 | 24.633 | 22.504 | 31.332 | 20.539 | 71.176 | 2.89x | 58.976 | 1.27x |
-| siglip M105 | 30.779 | 24.711 | 37.092 | 26.780 | 63.533 | 2.06x | 47.332 | 1.21x |
-| siglip M128 | 30.765 | 22.547 | 37.021 | 27.351 | 65.574 | 2.13x | 47.335 | 1.20x |
-| DiT M8 | 23.211 | 18.450 | 28.394 | 19.114 | 36.909 | 1.59x | 50.284 | 1.22x |
-| DiT M51 | 28.699 | 23.278 | 34.958 | 24.632 | 47.592 | 1.66x | 65.788 | 1.22x |
-| DiT M64 | 28.721 | 24.371 | 35.287 | 24.754 | 48.856 | 1.70x | 67.437 | 1.23x |
-| DiT M105 | 36.926 | 28.687 | 45.186 | 34.503 | 61.063 | 1.65x | 64.237 | 1.22x |
-| DiT M128 | 36.930 | 28.694 | 43.175 | 32.823 | 63.382 | 1.72x | 65.891 | 1.17x |
+| siglip M8 | 18.493 | 16.375 | 35.177 | 16.444 | 28.724 | 1.55x | 39.539 | 1.90x |
+| siglip M51 | 24.610 | 19.721 | 35.731 | 20.542 | 52.968 | 2.15x | 57.827 | 1.45x |
+| siglip M64 | 24.610 | 22.521 | 35.282 | 20.538 | 71.561 | 2.91x | 58.820 | 1.43x |
+| siglip M105 | 30.753 | 24.831 | 41.116 | 26.679 | 63.504 | 2.06x | 48.569 | 1.34x |
+| siglip M128 | 30.756 | 22.552 | 41.116 | 27.490 | 65.517 | 2.13x | 47.388 | 1.34x |
+| DiT M8 | 23.336 | 18.446 | 35.023 | 19.353 | 36.915 | 1.58x | 49.515 | 1.50x |
+| DiT M51 | 28.670 | 23.512 | 39.086 | 24.624 | 47.818 | 1.67x | 66.315 | 1.36x |
+| DiT M64 | 28.707 | 24.444 | 39.086 | 24.625 | 48.979 | 1.71x | 67.494 | 1.36x |
+| DiT M105 | 36.913 | 28.688 | 49.300 | 34.504 | 60.598 | 1.64x | 63.711 | 1.34x |
+| DiT M128 | 36.913 | 28.690 | 47.260 | 32.836 | 63.338 | 1.72x | 66.031 | 1.28x |
 
 The BF16 baseline uses the original BF16 weights and activations; no FP8
 dequantization is included in its timed region. Random per-tensor FP8 weight
 quantization gives BF16-reference cosine `0.99851-0.99858`; package migration
 parity is checked independently against the established FP8 staged path.
+These are source-extension release-candidate results, not Hub built-artifact
+claims.
 
 ## RTX 5090 Source-Extension Results
 

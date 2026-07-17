@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -94,6 +95,24 @@ def midm_padded_rows(rows: int) -> int:
     ):
         return ((rows + 63) // 64) * 64
     return rows
+
+
+def median_time_us(fn, args) -> float:
+    return statistics.median(
+        base.time_us(fn, warmup=args.warmup, iters=args.iters)
+        for _ in range(args.rounds)
+    )
+
+
+def abba_time_us(a, b, args) -> tuple[float, float]:
+    a_samples = []
+    b_samples = []
+    for _ in range(args.rounds):
+        a_samples.append(base.time_us(a, warmup=args.warmup, iters=args.iters))
+        b_samples.append(base.time_us(b, warmup=args.warmup, iters=args.iters))
+        b_samples.append(base.time_us(b, warmup=args.warmup, iters=args.iters))
+        a_samples.append(base.time_us(a, warmup=args.warmup, iters=args.iters))
+    return statistics.median(a_samples), statistics.median(b_samples)
 
 
 def make_case(M: int, K: int, H: int, N: int):
@@ -234,22 +253,17 @@ def run_shape(ops, name: str, shape, args) -> Result:
     bf16_metrics = metrics(got, bf16_expected)
     staged_compatible = quant_exact and staged_metrics["max_abs"] == 0.0
 
-    flashrt_us = base.time_us(flashrt_call, warmup=args.warmup, iters=args.iters)
+    flashrt_us, eager_us = abba_time_us(
+        flashrt_call, torch_bf16_reference, args
+    )
     graph = torch.cuda.CUDAGraph()
     flashrt_call()
     torch.cuda.synchronize()
     with torch.cuda.graph(graph):
         flashrt_call()
-    graph_us = base.time_us(graph.replay, warmup=args.warmup, iters=args.iters)
-    separate_us = base.time_us(
-        separate_quant_call, warmup=args.warmup, iters=args.iters
-    )
-    kernel_us = base.time_us(
-        staged_call, warmup=args.warmup, iters=args.iters
-    )
-    eager_us = base.time_us(
-        torch_bf16_reference, warmup=args.warmup, iters=args.iters
-    )
+    graph_us = median_time_us(graph.replay, args)
+    separate_us = median_time_us(separate_quant_call, args)
+    kernel_us = median_time_us(staged_call, args)
 
     compile_us = None
     compile_status = "not_requested"
@@ -268,9 +282,7 @@ def run_shape(ops, name: str, shape, args) -> Result:
                     f"{compiled_metrics['cosine']:.8f}"
                 )
             else:
-                compile_us = base.time_us(
-                    compiled, warmup=args.warmup, iters=args.iters
-                )
+                compile_us = median_time_us(compiled, args)
                 compile_status = "fullgraph-ok"
         except Exception as exc:  # noqa: BLE001
             compile_status = f"failed: {type(exc).__name__}: {exc}"
@@ -337,6 +349,7 @@ def main() -> None:
     parser.add_argument("--shapes", default="all")
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iters", type=int, default=100)
+    parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--compile-baseline", action="store_true")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -385,6 +398,8 @@ def main() -> None:
         "torch": torch.__version__,
         "warmup": args.warmup,
         "iters": args.iters,
+        "rounds": args.rounds,
+        "primary_order": "A-B-B-A median",
         "results": [asdict(result) for result in results],
     }
     if args.output:
