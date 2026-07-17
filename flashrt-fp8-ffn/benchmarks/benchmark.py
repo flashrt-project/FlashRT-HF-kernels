@@ -126,14 +126,14 @@ class SourceOps:
         up_w_scale,
         hidden_scale,
         down_w_scale,
-        hidden=None,
+        hidden_bf16=None,
         hidden_fp8=None,
         out=None,
     ):
-        if hidden is None:
-            hidden = torch.empty((x.shape[0], up_w.shape[0]), device=x.device, dtype=torch.bfloat16)
+        if hidden_bf16 is None:
+            hidden_bf16 = torch.empty((x.shape[0], up_w.shape[0]), device=x.device, dtype=torch.bfloat16)
         if hidden_fp8 is None:
-            hidden_fp8 = torch.empty_like(hidden, dtype=fp8_dtype())
+            hidden_fp8 = torch.empty_like(hidden_bf16, dtype=fp8_dtype())
         if out is None:
             out = torch.empty((x.shape[0], down_w.shape[0]), device=x.device, dtype=torch.bfloat16)
         self._ops.fp8_gelu_mlp_bf16(
@@ -146,7 +146,7 @@ class SourceOps:
             up_w_scale,
             hidden_scale,
             down_w_scale,
-            hidden,
+            hidden_bf16,
             hidden_fp8,
             out,
         )

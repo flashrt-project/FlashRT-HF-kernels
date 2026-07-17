@@ -75,6 +75,11 @@ not a claim that the two GEMMs and quantization execute as one CUDA launch.
 Its input quantizer follows the FlashRT production arithmetic contract exactly:
 `clamp(input.float() * (1.0 / input_scale), -fp8_max, fp8_max)`.
 
+For dimensions divisible by four, the BF16 input producer, fused
+bias/GELU/FP8 producer, and final BF16 bias use vectorized loads/stores. The
+same APIs retain scalar fallbacks for other dimensions; callers do not need to
+select an implementation.
+
 The package registers a fake implementation for `torch.compile`. A static
 region with preallocated scratch passes `torch.compile(fullgraph=True)` and
 explicit CUDA Graph replay in the package correctness gate.

@@ -213,7 +213,7 @@ def run_shape(ops, name: str, shape, args) -> Result:
             up_scale,
             hidden_scale,
             down_scale,
-            hidden=staged_hidden,
+            hidden_bf16=staged_hidden,
             hidden_fp8=staged_hidden_fp8,
             out=staged_out,
         )
@@ -232,7 +232,7 @@ def run_shape(ops, name: str, shape, args) -> Result:
             up_scale,
             hidden_scale,
             down_scale,
-            hidden=exact_hidden,
+            hidden_bf16=exact_hidden,
             hidden_fp8=exact_hidden_fp8,
             out=exact_out,
         )[:M]

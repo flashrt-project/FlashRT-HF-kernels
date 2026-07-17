@@ -59,3 +59,9 @@ verified equivalent to eager.
 For a static hot path, preallocate the optional FP8/BF16 scratch tensors and
 capture the call with CUDA Graph. The BF16 entry is a region API containing
 multiple launches; it is not advertised as a single-launch megakernel.
+
+Four-element-aligned dimensions automatically use vectorized BF16 producers
+and packed FP8 stores. Non-aligned dimensions retain the scalar implementation.
+Correctness promotion requires exact output parity with the established staged
+FlashRT path; comparison with an independent BF16 model is reported separately
+as quantization quality rather than migration parity.

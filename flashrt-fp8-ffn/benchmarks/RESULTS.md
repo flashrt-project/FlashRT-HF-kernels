@@ -13,23 +13,25 @@
 
 | Shape | FlashRT us | Graph us | Separate quant us | Kernel-only us | BF16 eager us | vs eager | BF16 compile us | vs separate |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| siglip M8 | 18.493 | 16.375 | 35.177 | 16.444 | 28.724 | 1.55x | 39.539 | 1.90x |
-| siglip M51 | 24.610 | 19.721 | 35.731 | 20.542 | 52.968 | 2.15x | 57.827 | 1.45x |
-| siglip M64 | 24.610 | 22.521 | 35.282 | 20.538 | 71.561 | 2.91x | 58.820 | 1.43x |
-| siglip M105 | 30.753 | 24.831 | 41.116 | 26.679 | 63.504 | 2.06x | 48.569 | 1.34x |
-| siglip M128 | 30.756 | 22.552 | 41.116 | 27.490 | 65.517 | 2.13x | 47.388 | 1.34x |
-| DiT M8 | 23.336 | 18.446 | 35.023 | 19.353 | 36.915 | 1.58x | 49.515 | 1.50x |
-| DiT M51 | 28.670 | 23.512 | 39.086 | 24.624 | 47.818 | 1.67x | 66.315 | 1.36x |
-| DiT M64 | 28.707 | 24.444 | 39.086 | 24.625 | 48.979 | 1.71x | 67.494 | 1.36x |
-| DiT M105 | 36.913 | 28.688 | 49.300 | 34.504 | 60.598 | 1.64x | 63.711 | 1.34x |
-| DiT M128 | 36.913 | 28.690 | 47.260 | 32.836 | 63.338 | 1.72x | 66.031 | 1.28x |
+| siglip M8 | 18.491 | 16.395 | 35.107 | 16.445 | 28.717 | 1.55x | 37.895 | 1.90x |
+| siglip M51 | 22.577 | 19.634 | 36.966 | 20.536 | 52.907 | 2.34x | 57.815 | 1.64x |
+| siglip M64 | 22.579 | 20.496 | 36.550 | 20.542 | 71.414 | 3.16x | 58.674 | 1.62x |
+| siglip M105 | 28.745 | 24.812 | 41.117 | 26.697 | 63.499 | 2.21x | 47.065 | 1.43x |
+| siglip M128 | 28.742 | 22.538 | 41.118 | 27.386 | 65.514 | 2.28x | 47.365 | 1.43x |
+| DiT M8 | 21.430 | 18.451 | 36.800 | 19.130 | 36.913 | 1.72x | 49.692 | 1.72x |
+| DiT M51 | 24.628 | 21.566 | 37.039 | 22.576 | 47.568 | 1.93x | 66.141 | 1.50x |
+| DiT M64 | 26.691 | 24.053 | 39.065 | 24.623 | 48.808 | 1.83x | 67.548 | 1.46x |
+| DiT M105 | 34.886 | 28.679 | 49.283 | 34.513 | 60.481 | 1.73x | 63.454 | 1.41x |
+| DiT M128 | 34.863 | 28.676 | 47.265 | 32.837 | 63.305 | 1.82x | 65.441 | 1.36x |
 
 The BF16 baseline uses the original BF16 weights and activations; no FP8
 dequantization is included in its timed region. Random per-tensor FP8 weight
 quantization gives BF16-reference cosine `0.99851-0.99858`; package migration
 parity is checked independently against the established FP8 staged path.
-These are source-extension release-candidate results, not Hub built-artifact
-claims.
+These are source-extension release-candidate results after vectorizing the
+BF16 input producer, bias/GELU/FP8 producer, and final BF16 bias path. They are
+not Hub built-artifact claims; the published artifact is benchmarked again
+from a cold download before its numbers replace the built-artifact section.
 
 ## RTX 5090 Source-Extension Results
 

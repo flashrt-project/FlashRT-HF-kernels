@@ -16,6 +16,7 @@
 #include <cuda_runtime.h>
 #include <cublasLt.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
@@ -147,6 +148,49 @@ __global__ void bias_gelu_quantize_fp8_static_bf16_kernel(
   out[idx] = __nv_fp8_e4m3(q);
 }
 
+__global__ void bias_gelu_quantize_fp8_static_bf16_vec4_kernel(
+    const __nv_bfloat16* __restrict__ in,
+    const __nv_bfloat16* __restrict__ bias,
+    __nv_fp8_e4m3* __restrict__ out,
+    const float* __restrict__ scale,
+    long long groups,
+    int N,
+    int has_bias) {
+  const long long group = blockIdx.x * static_cast<long long>(blockDim.x) +
+                          threadIdx.x;
+  if (group >= groups) {
+    return;
+  }
+  const long long idx = group * 4;
+  const int col = static_cast<int>(idx % N);
+  const auto* in2 = reinterpret_cast<const __nv_bfloat162*>(in + idx);
+  const __nv_bfloat162 a = in2[0];
+  const __nv_bfloat162 b = in2[1];
+  float values[4] = {
+      __bfloat162float(a.x), __bfloat162float(a.y),
+      __bfloat162float(b.x), __bfloat162float(b.y)};
+  if (has_bias) {
+    const auto* bias2 =
+        reinterpret_cast<const __nv_bfloat162*>(bias + col);
+    const __nv_bfloat162 ba = bias2[0];
+    const __nv_bfloat162 bb = bias2[1];
+    values[0] += __bfloat162float(ba.x);
+    values[1] += __bfloat162float(ba.y);
+    values[2] += __bfloat162float(bb.x);
+    values[3] += __bfloat162float(bb.y);
+  }
+  const float inv_scale = 1.0f / *scale;
+  __nv_fp8_e4m3 packed[4];
+#pragma unroll
+  for (int i = 0; i < 4; ++i) {
+    float q = gelu_tanh(values[i]) * inv_scale;
+    q = fminf(fmaxf(q, -kFp8Max), kFp8Max);
+    packed[i] = __nv_fp8_e4m3(q);
+  }
+  *reinterpret_cast<uint32_t*>(out + idx) =
+      *reinterpret_cast<const uint32_t*>(packed);
+}
+
 __global__ void add_bias_bf16_kernel(
     __nv_bfloat16* __restrict__ input,
     const __nv_bfloat16* __restrict__ bias,
@@ -160,6 +204,33 @@ __global__ void add_bias_bf16_kernel(
   const int col = static_cast<int>(idx % N);
   const float v = __bfloat162float(input[idx]) + __bfloat162float(bias[col]);
   input[idx] = __float2bfloat16(v);
+}
+
+__global__ void add_bias_bf16_vec4_kernel(
+    __nv_bfloat16* __restrict__ input,
+    const __nv_bfloat16* __restrict__ bias,
+    long long groups,
+    int N) {
+  const long long group = blockIdx.x * static_cast<long long>(blockDim.x) +
+                          threadIdx.x;
+  if (group >= groups) {
+    return;
+  }
+  const long long idx = group * 4;
+  const int col = static_cast<int>(idx % N);
+  auto* input2 = reinterpret_cast<__nv_bfloat162*>(input + idx);
+  const auto* bias2 =
+      reinterpret_cast<const __nv_bfloat162*>(bias + col);
+  const __nv_bfloat162 ia = input2[0];
+  const __nv_bfloat162 ib = input2[1];
+  const __nv_bfloat162 ba = bias2[0];
+  const __nv_bfloat162 bb = bias2[1];
+  input2[0] = __floats2bfloat162_rn(
+      __bfloat162float(ia.x) + __bfloat162float(ba.x),
+      __bfloat162float(ia.y) + __bfloat162float(ba.y));
+  input2[1] = __floats2bfloat162_rn(
+      __bfloat162float(ib.x) + __bfloat162float(bb.x),
+      __bfloat162float(ib.y) + __bfloat162float(bb.y));
 }
 
 __global__ void quantize_fp8_static_bf16_mpad_kernel(
@@ -176,6 +247,39 @@ __global__ void quantize_fp8_static_bf16_mpad_kernel(
                               : 0.0f;
     q = fminf(fmaxf(q, -kFp8Max), kFp8Max);
     output[base + col] = __nv_fp8_e4m3(q);
+  }
+}
+
+__global__ void quantize_fp8_static_bf16_mpad_vec4_kernel(
+    const __nv_bfloat16* __restrict__ input,
+    __nv_fp8_e4m3* __restrict__ output,
+    const float* __restrict__ scale,
+    int logical_m,
+    int K) {
+  const int row = blockIdx.x;
+  const float inv_scale = 1.0f / *scale;
+  const long long base = static_cast<long long>(row) * K;
+  for (int col = threadIdx.x * 4; col < K; col += blockDim.x * 4) {
+    float values[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    if (row < logical_m) {
+      const auto* input2 = reinterpret_cast<const __nv_bfloat162*>(
+          input + base + col);
+      const __nv_bfloat162 a = input2[0];
+      const __nv_bfloat162 b = input2[1];
+      values[0] = __bfloat162float(a.x);
+      values[1] = __bfloat162float(a.y);
+      values[2] = __bfloat162float(b.x);
+      values[3] = __bfloat162float(b.y);
+    }
+    __nv_fp8_e4m3 packed[4];
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+      float q = values[i] * inv_scale;
+      q = fminf(fmaxf(q, -kFp8Max), kFp8Max);
+      packed[i] = __nv_fp8_e4m3(q);
+    }
+    *reinterpret_cast<uint32_t*>(output + base + col) =
+        *reinterpret_cast<const uint32_t*>(packed);
   }
 }
 
@@ -311,9 +415,15 @@ void quantize_fp8_static_bf16_mpad(
     int K,
     cudaStream_t stream) {
   if (logical_m <= 0 || padded_m < logical_m || K <= 0) return;
-  quantize_fp8_static_bf16_mpad_kernel<<<padded_m, 256, 0, stream>>>(
-      reinterpret_cast<const __nv_bfloat16*>(input_bf16),
-      reinterpret_cast<__nv_fp8_e4m3*>(out_fp8), scale, logical_m, K);
+  if ((K & 3) == 0) {
+    quantize_fp8_static_bf16_mpad_vec4_kernel<<<padded_m, 256, 0, stream>>>(
+        reinterpret_cast<const __nv_bfloat16*>(input_bf16),
+        reinterpret_cast<__nv_fp8_e4m3*>(out_fp8), scale, logical_m, K);
+  } else {
+    quantize_fp8_static_bf16_mpad_kernel<<<padded_m, 256, 0, stream>>>(
+        reinterpret_cast<const __nv_bfloat16*>(input_bf16),
+        reinterpret_cast<__nv_fp8_e4m3*>(out_fp8), scale, logical_m, K);
+  }
 }
 
 void bias_gelu_quantize_fp8_static_bf16(
@@ -331,6 +441,17 @@ void bias_gelu_quantize_fp8_static_bf16(
 
   const int has_bias = bias_bf16 != nullptr ? 1 : 0;
   const int block_sz = quant_block_size(M, N, has_bias != 0);
+  if ((N & 3) == 0) {
+    const long long groups = total / 4;
+    const int grid = static_cast<int>((groups + block_sz - 1) / block_sz);
+    bias_gelu_quantize_fp8_static_bf16_vec4_kernel
+        <<<grid, block_sz, 0, stream>>>(
+            reinterpret_cast<const __nv_bfloat16*>(input_bf16),
+            reinterpret_cast<const __nv_bfloat16*>(bias_bf16),
+            reinterpret_cast<__nv_fp8_e4m3*>(out_fp8), scale, groups, N,
+            has_bias);
+    return;
+  }
   const long long tiles_per_row =
       (static_cast<long long>(N) + block_sz - 1) / block_sz;
   const unsigned grid = static_cast<unsigned>(M * tiles_per_row);
@@ -356,6 +477,14 @@ void add_bias_bf16(
     return;
   }
   constexpr int block = 256;
+  if ((N & 3) == 0) {
+    const long long groups = total / 4;
+    const int grid = static_cast<int>((groups + block - 1) / block);
+    add_bias_bf16_vec4_kernel<<<grid, block, 0, stream>>>(
+        reinterpret_cast<__nv_bfloat16*>(input_bf16),
+        reinterpret_cast<const __nv_bfloat16*>(bias_bf16), groups, N);
+    return;
+  }
   const int grid = static_cast<int>((total + block - 1) / block);
   add_bias_bf16_kernel<<<grid, block, 0, stream>>>(
       reinterpret_cast<__nv_bfloat16*>(input_bf16),
