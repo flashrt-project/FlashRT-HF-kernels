@@ -35,6 +35,12 @@ CUDA artifacts use `torch.float8_e4m3fn`. ROCm artifacts currently target AMD
 CDNA3 `gfx942` and use `torch.float8_e4m3fnuz`. CDNA4/OCP-FP8 and RDNA targets
 are not claimed by this package version.
 
+The BF16-entry APIs in this revision are published in the current x86_64 CUDA
+and ROCm build matrix. An older aarch64 directory retained by the incremental
+Hub repository predates these APIs and is not a BF16-entry compatibility
+claim. Build and validate a matching aarch64 variant before enabling them
+there.
+
 ## Minimal Usage
 
 ```python
