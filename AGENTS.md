@@ -70,6 +70,27 @@ Before pushing a package change that should rebuild Hub artifacts:
 8. After HF Jobs uploads artifacts, verify by loading through
    `get_kernel("flashrt/<package>", version=1, trust_remote_code=True)` in a
    matching PyTorch/CUDA environment and rerun installed-artifact correctness.
+9. Run `.github/workflows/mirror-kernels-legacy-model.yml` for every new or
+   rebuilt package, then verify both the Kernel Hub `v1` ref and the legacy
+   model-repo `v1` ref. A successful source upload without compiled build
+   variants is not a release.
+10. Use the current upstream builder matrix for normal releases. Do not claim
+    compatibility with retired Torch versions by renaming artifact directories.
+    `torch.stable-abi` is valid only after `kernel-builder check-abi
+    --torch-stable-abi` passes and the binding uses only stable ABI headers.
+
+## Performance Qualification
+
+- Tile every public production path over representative boundary and real-model
+  shapes. Compare against warmed PyTorch eager and an equivalent warmed
+  `torch.compile` reference when compilation is numerically stable.
+- Keep diagnostic tile variants separate from production auto dispatch.
+- Production auto must reject a shape when no measured variant meets the
+  package's performance threshold. Never route a known-slow compatibility path
+  silently.
+- For packages exposing multiple variants, the benchmark must fail when auto
+  is materially slower than the fastest valid diagnostic variant on an
+  accepted shape.
 
 For the PI0.5 runtime demo, do not use random-input OpenPI smoke rows as public
 baselines. Public runtime comparisons should use the real LIBERO bundle path

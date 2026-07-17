@@ -45,6 +45,7 @@ on:
       - "flashrt-adarms-train/**"
       - "flashrt-flex-attention-train/**"
       - "int4-blackwell/**"
+      - "weight-only-ffn/**"
   workflow_dispatch:
     inputs:
       package:
@@ -94,6 +95,7 @@ on:
           - flashrt-adarms-train
           - flashrt-flex-attention-train
           - int4-blackwell
+          - weight-only-ffn
 
 permissions:
   contents: read
@@ -150,6 +152,7 @@ jobs:
           - flashrt-adarms-train
           - flashrt-flex-attention-train
           - int4-blackwell
+          - weight-only-ffn
 
     steps:
       - uses: actions/checkout@v4

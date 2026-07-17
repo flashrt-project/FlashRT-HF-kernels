@@ -18,7 +18,7 @@ def main() -> None:
 
     a_packed, sfa = ops.quantize_fp4_sfa_fp16(x, is_sfb=False)
     b_packed, sfb = ops.quantize_fp4_sfa_fp16(w, is_sfb=True)
-    y = ops.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0)
+    y = ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0)
 
     print("a_packed", tuple(a_packed.shape), a_packed.dtype)
     print("b_packed", tuple(b_packed.shape), b_packed.dtype)

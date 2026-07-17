@@ -23,8 +23,21 @@ def _alloc_fp4(rows: int, dim: int, device: torch.device | str):
     )
 
 
-@torch.library.register_fake(add_op_namespace_prefix("fp4_w4a16_linear_bf16"))
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_bf16"))
 def _linear_fake(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    out: torch.Tensor,
+    alpha: float = 1.0,
+    variant: int = 0,
+) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp4_w4a16_linear_bf16"))
+def _legacy_linear_fake(
     a_packed: torch.Tensor,
     b_packed: torch.Tensor,
     sfa: torch.Tensor,
@@ -70,7 +83,7 @@ def dequantize_fp4_sfa_fp16(
     return out
 
 
-def fp4_w4a16_linear_bf16(
+def nvfp4_gemm_bf16(
     a_packed: torch.Tensor,
     b_packed: torch.Tensor,
     sfa: torch.Tensor,
@@ -81,6 +94,29 @@ def fp4_w4a16_linear_bf16(
 ) -> torch.Tensor:
     if out is None:
         out = torch.empty((a_packed.shape[0], b_packed.shape[0]), device=a_packed.device, dtype=torch.bfloat16)
-    ops.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb, out, float(alpha), int(variant))
+    ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, float(alpha), int(variant))
     return out
 
+
+def fp4_w4a16_linear_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+    variant: int = 0,
+) -> torch.Tensor:
+    """Compatibility alias for :func:`nvfp4_gemm_bf16`."""
+    return nvfp4_gemm_bf16(
+        a_packed, b_packed, sfa, sfb, alpha=alpha, out=out, variant=variant
+    )
+
+
+__all__ = [
+    "dequantize_fp4_sfa_fp16",
+    "fp4_w4a16_linear_bf16",
+    "nvfp4_gemm_bf16",
+    "quantize_fp4_sfa_fp16",
+    "sfa_size_bytes",
+]

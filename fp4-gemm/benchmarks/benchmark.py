@@ -25,8 +25,10 @@ class BenchResult:
     K: int
     variant: int
     flashrt_us: float
-    torch_reference_us: float
-    speedup_vs_reference: float
+    torch_eager_us: float
+    torch_compile_us: float
+    speedup_vs_eager: float
+    speedup_vs_compile: float
     max_abs: float
     mean_abs: float
     p99_abs: float
@@ -70,15 +72,17 @@ def bench_case(helpers, ops, name: str, shape: tuple[int, int, int], warmup: int
     def torch_ref():
         return (a_deq.float() @ b_deq.float().T).to(torch.bfloat16)
 
-    torch_us = measure(torch_ref, warmup, iters)
+    torch_eager_us = measure(torch_ref, warmup, iters)
+    compiled_ref = torch.compile(torch_ref, mode="max-autotune-no-cudagraphs")
+    torch_compile_us = measure(compiled_ref, warmup, iters)
     results: list[BenchResult] = []
     for variant in (0, 1, 2):
         out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
-        ops.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant)
+        ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant)
         torch.cuda.synchronize()
         max_abs, mean_abs, p99_abs, cosine = helpers.metrics(out, expected)
         flashrt_us = measure(
-            lambda: ops.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant),
+            lambda: ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant),
             warmup,
             iters,
         )
@@ -90,8 +94,10 @@ def bench_case(helpers, ops, name: str, shape: tuple[int, int, int], warmup: int
                 K=k,
                 variant=variant,
                 flashrt_us=flashrt_us,
-                torch_reference_us=torch_us,
-                speedup_vs_reference=torch_us / flashrt_us,
+                torch_eager_us=torch_eager_us,
+                torch_compile_us=torch_compile_us,
+                speedup_vs_eager=torch_eager_us / flashrt_us,
+                speedup_vs_compile=torch_compile_us / flashrt_us,
                 max_abs=max_abs,
                 mean_abs=mean_abs,
                 p99_abs=p99_abs,
@@ -104,6 +110,8 @@ def bench_case(helpers, ops, name: str, shape: tuple[int, int, int], warmup: int
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=["source", "installed"], default="source")
+    parser.add_argument("--artifact", default=None)
     parser.add_argument("--mode", choices=["smoke", "headline"], default="headline")
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
@@ -111,7 +119,11 @@ def main() -> int:
     args = parser.parse_args()
 
     helpers = load_helpers()
-    ops = helpers.load_source_ops()
+    ops = (
+        helpers.load_source_ops()
+        if args.backend == "source"
+        else helpers.load_installed_ops(args.artifact)
+    )
     shapes = {
         "small_m16_n128_k128": (16, 128, 128),
         "small_m32_n256_k256": (32, 256, 256),
@@ -124,6 +136,7 @@ def main() -> int:
         results.extend(bench_case(helpers, ops, name, shape, args.warmup, args.iterations))
     payload = {
         "mode": args.mode,
+        "backend": args.backend,
         "device": torch.cuda.get_device_name(),
         "torch": torch.__version__,
         "results": [asdict(item) for item in results],

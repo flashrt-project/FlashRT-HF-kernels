@@ -1,0 +1,53 @@
+[general]
+name = "weight-only-ffn"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/weight-only-ffn"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.weight_only_w4]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a", "12.1"]
+src = [
+  "csrc/w4_weight_only.cu",
+  "csrc/w4a16_gemm_sm120.cu",
+  "csrc/w4a16_gemm_sm120.cuh",
+  "csrc/w4a16_matvec_sm120.cu",
+  "csrc/w4a16_matvec_sm120.cuh",
+]
+
+[kernel.weight_only_w8]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a", "12.1"]
+src = [
+  "csrc/w8_weight_only.cu",
+]
+
+[kernel.weight_only_epilogues]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a", "12.1"]
+src = [
+  "csrc/ffn_epilogues.cu",
+  "csrc/weight_only_ffn.cuh",
+]

@@ -42,7 +42,8 @@ Published v1 packages:
 | `flashrt/flashrt-smallm-gemm` | Shape-specialized SM120 NVFP4 W4A4 decode matvec. | You need a low-batch/decode M=1 W4A4 matvec with BF16 output on supported Blackwell shapes. |
 | `flashrt/flashrt-fused-quant` | Fused activation plus NVFP4 quantization. | You need memory-bound `SiLU(gate) * up` activation and NVFP4 swizzled quantization in one call. |
 | `flashrt/fp4-fused-ops` | Native Blackwell FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels. | You need residual/RMSNorm or SiLU-product activations to stay in packed FP4/SFA form for adjacent low-bit GEMM blocks. |
-| `flashrt/fp4-gemm` | Native Blackwell NVFP4 W4A16 GEMM with BF16 output. | You already have packed FP4 activations/weights plus SFA/SFB buffers and want a low-bit `Linear` replacement. |
+| `flashrt/fp4-gemm` | Native Blackwell NVFP4 A4W4 GEMM with BF16 output. | You already have packed FP4 activations and weights plus SFA/SFB buffers and want to keep a continuous low-bit island. |
+| `flashrt/weight-only-ffn` | Native Blackwell W4A16/W8A16 linear and complete FFN regions. | Decode uses BF16 activations at `M=1..4` and static weight-only quantization avoids activation-quantization overhead. |
 | `flashrt/fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache. | You already write transformer K/V cache in FP8 and need direct decode/verify attention without re-quantizing BF16 K/V. |
 | `flashrt/sageattention2-blackwell` | SageAttention2-style Blackwell prefill attention over int8-Q/K and FP16/FP8 V. | You need long-context prefill self-attention for Wan/video non-causal blocks or Qwen causal GQA blocks. |
 
@@ -303,7 +304,7 @@ ops = get_kernel("flashrt/flashrt-nvfp4", version=1, trust_remote_code=True)
 swizzled = ops.nvfp4_sf_linear_to_swizzled(linear_scale_bytes)
 ```
 
-### FP4 Producer And W4A16 GEMM
+### FP4 Producer And A4W4 GEMM
 
 ```python
 from kernels import get_kernel
@@ -317,7 +318,7 @@ w = torch.randn((512, 256), device="cuda", dtype=torch.float16)
 
 a_packed, sfa = gemm.quantize_fp4_sfa_fp16(x, is_sfb=False)
 b_packed, sfb = gemm.quantize_fp4_sfa_fp16(w, is_sfb=True)
-y = gemm.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb)
+y = gemm.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb)
 
 merged = torch.randn((32, 512), device="cuda", dtype=torch.float16)
 act_packed, act_sfa = producer.silu_mul_fp4_sfa_v2_fp16(merged)
@@ -326,6 +327,25 @@ act_packed, act_sfa = producer.silu_mul_fp4_sfa_v2_fp16(merged)
 The producer package is meant to keep adjacent model islands in packed
 FP4/SFA form. The dequantization helpers are for validation and debugging, not
 for the hot path.
+
+### BF16-Activation Weight-Only FFN
+
+```python
+from kernels import get_kernel
+import torch
+
+ops = get_kernel("flashrt/weight-only-ffn", version=1, trust_remote_code=True)
+x = torch.randn((1, 4096), device="cuda", dtype=torch.bfloat16)
+gate_up = torch.randn((22016, 4096), device="cuda", dtype=torch.bfloat16)
+down = torch.randn((4096, 11008), device="cuda", dtype=torch.bfloat16)
+
+gate_up_w, gate_up_s = ops.quantize_w8_weight_bf16(gate_up)
+down_w, down_s = ops.quantize_w8_weight_bf16(down)
+y = ops.w8a16_swiglu_ffn_bf16(x, gate_up_w, gate_up_s, down_w, down_s)
+```
+
+Prepare static weights once during model loading. The default dispatch accepts
+only measured fast `M=1..4` geometries and raises on known weak shapes.
 
 ### FP8 KV XQA Attention
 

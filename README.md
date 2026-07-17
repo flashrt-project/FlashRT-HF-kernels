@@ -148,8 +148,10 @@ demos:
   rows for low-latency `Linear` replacements.
 - `fp4-fused-ops/benchmarks`: native Blackwell FP16-to-NVFP4 producer and
   FP4-to-FP4 combiner rows for keeping low-bit runtime islands continuous.
-- `fp4-gemm/benchmarks`: native Blackwell NVFP4 W4A16 GEMM rows with BF16
+- `fp4-gemm/benchmarks`: native Blackwell NVFP4 A4W4 GEMM rows with BF16
   output and schedule-specific validation.
+- `weight-only-ffn/benchmarks`: true BF16-activation W4A16/W8A16 linear,
+  SwiGLU, GeGLU, and GELU FFN regions for qualified `M=1..4` decode shapes.
 - `fp8-kv-attention/benchmarks`: native Blackwell XQA attention over FP8 E4M3
   paged K/V cache for Qwen3.6-style BF16-query decode/verify shapes.
 - `sageattention2-blackwell/benchmarks`: SageAttention2-style Blackwell
@@ -379,7 +381,8 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `turboquant-kv` | Transformers package | KV unpack/combine helpers for TurboQuant-style serving and cache-compression demos. |
 | `world-model-conv` | Diffusers package | Blackwell FP8 3D causal conv primitive for video/world-model/VAE-style blocks. |
 | `fp4-fused-ops` | Native FP4 package | FP16-to-NVFP4 producer and FP4-to-FP4 combiner kernels for continuous low-bit transformer/diffuser paths. |
-| `fp4-gemm` | Native FP4 package | NVFP4 W4A16 GEMM with BF16 output for Blackwell low-bit linear layers. |
+| `fp4-gemm` | Native FP4 package | NVFP4 A4W4 GEMM with BF16 output for continuous low-bit Blackwell islands. |
+| `weight-only-ffn` | Native weight-only package | BF16-activation W4A16/W8A16 linear and complete small-M FFN regions with performance-qualified auto dispatch. |
 | `sageattention2-blackwell` | Attention package | SageAttention2-style prefill attention for Wan non-causal and Qwen causal GQA shapes on Blackwell. |
 | `speculative-draft-primitives` | Transformers package | BF16 logits argmax and accepted-prefix kernels for drafter/verify speculative decoding loops. |
 | `int8-transformer-primitives` | Transformers package | INT8 rowwise quantization, RMSNorm-to-INT8 producers, rowwise INT8 linear, and SiLU-gated INT8 epilogue primitives. |

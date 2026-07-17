@@ -1,6 +1,6 @@
 # fp4-gemm
 
-FlashRT native Blackwell NVFP4 W4A16 GEMM kernels.
+FlashRT native Blackwell NVFP4 A4W4 GEMM kernels.
 
 This package consumes packed FP4 E2M1 tensors plus CUTLASS Sm1xx SFA/SFB scale
 buffers and produces BF16 output. It is designed to pair with
@@ -12,7 +12,8 @@ paths.
 - `sfa_size_bytes(rows, dim)`
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
-- `fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=0)`
+- `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=0)`
+- `fp4_w4a16_linear_bf16(...)` is retained as a compatibility alias
 
 ## Tensor Contract
 
@@ -44,7 +45,7 @@ w = torch.randn((512, 256), device="cuda", dtype=torch.float16)
 a_packed, sfa = ops.quantize_fp4_sfa_fp16(x, is_sfb=False)
 b_packed, sfb = ops.quantize_fp4_sfa_fp16(w, is_sfb=True)
 
-y = ops.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0)
+y = ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0)
 ```
 
 The quantize/dequantize helpers are included for examples and validation. A
@@ -55,7 +56,10 @@ the hot path unless that producer kernel is part of the intended low-bit block.
 
 ```bash
 python fp4-gemm/tests/test_fp4_gemm.py --backend source --mode full
-python fp4-gemm/benchmarks/benchmark.py --mode headline
+python fp4-gemm/tests/test_fp4_gemm.py --backend installed --mode full \
+  --artifact fp4-gemm/build/torch211-cxx11-cu128-x86_64-linux
+python fp4-gemm/benchmarks/benchmark.py --backend installed --mode headline \
+  --artifact fp4-gemm/build/torch211-cxx11-cu128-x86_64-linux
 ```
 
 The correctness reference dequantizes the same FP4/SFA and FP4/SFB inputs used

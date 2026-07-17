@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// CUTLASS NVFP4 W4A16 block-scaled GEMM, SM120a, BF16 output.
+// CUTLASS NVFP4 A4W4 block-scaled GEMM, SM120a, BF16 output.
 // Header: cutlass_nvfp4_w4a16_gemm_sm120.cuh
 //
 // Template is a direct port of NVIDIA's verified unit test at

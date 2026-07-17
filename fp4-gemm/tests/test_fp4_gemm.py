@@ -83,8 +83,49 @@ class SourceOps:
     def dequantize_fp4_sfa_fp16(self, packed, sfa, out, is_sfb=False):
         self._ops.dequantize_fp4_sfa_fp16(packed, sfa, out, bool(is_sfb))
 
-    def fp4_w4a16_linear_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=0):
-        self._ops.fp4_w4a16_linear_bf16(a, b, sfa, sfb, out, float(alpha), int(variant))
+    def nvfp4_gemm_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=0):
+        self._ops.nvfp4_gemm_bf16(a, b, sfa, sfb, out, float(alpha), int(variant))
+
+
+class InstalledOps:
+    """Adapt the public return-value API to the in-place test interface."""
+
+    def __init__(self, module) -> None:
+        self._module = module
+
+    def sfa_size_bytes(self, rows: int, dim: int) -> int:
+        return int(self._module.sfa_size_bytes(rows, dim))
+
+    def alloc_fp4(self, rows: int, dim: int):
+        return (
+            torch.empty((rows, dim // 2), device="cuda", dtype=torch.uint8),
+            torch.empty(
+                (self._module.sfa_size_bytes(rows, dim),),
+                device="cuda",
+                dtype=torch.uint8,
+            ),
+        )
+
+    def quantize_fp4_sfa_fp16(self, x, packed, sfa, is_sfb=False):
+        self._module.quantize_fp4_sfa_fp16(
+            x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
+        )
+
+    def dequantize_fp4_sfa_fp16(self, packed, sfa, out, is_sfb=False):
+        self._module.dequantize_fp4_sfa_fp16(
+            packed, sfa, out=out, is_sfb=bool(is_sfb)
+        )
+
+    def nvfp4_gemm_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=0):
+        self._module.nvfp4_gemm_bf16(
+            a,
+            b,
+            sfa,
+            sfb,
+            alpha=float(alpha),
+            out=out,
+            variant=int(variant),
+        )
 
 
 def _current_arch_list() -> str:
@@ -133,7 +174,7 @@ def load_installed_ops(artifact: str | None):
     if artifact:
         sys.path.insert(0, artifact)
     try:
-        return importlib.import_module("fp4_gemm")
+        return InstalledOps(importlib.import_module("fp4_gemm"))
     finally:
         if artifact:
             sys.path.remove(artifact)
@@ -182,7 +223,7 @@ def run_case(ops: SourceOps, name: str, shape: tuple[int, int, int]) -> list[Met
     results: list[Metrics] = []
     for variant in (0, 1, 2):
         out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
-        ops.fp4_w4a16_linear_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant)
+        ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant)
         torch.cuda.synchronize()
         max_abs, mean_abs, p99_abs, cosine = metrics(out, expected)
         results.append(
@@ -191,7 +232,7 @@ def run_case(ops: SourceOps, name: str, shape: tuple[int, int, int]) -> list[Met
                 M=m,
                 N=n,
                 K=k,
-                workload="fp4_w4a16_linear_bf16",
+                workload="nvfp4_gemm_bf16",
                 variant=variant,
                 max_abs=max_abs,
                 mean_abs=mean_abs,
@@ -202,6 +243,32 @@ def run_case(ops: SourceOps, name: str, shape: tuple[int, int, int]) -> list[Met
         )
 
     return results
+
+
+def check_installed_compile(ops: InstalledOps) -> dict[str, object]:
+    a_packed, b_packed, sfa, sfb, _ = prepare_quantized(ops, 128, 128, 128)
+
+    def call(a, b, scale_a, scale_b):
+        return ops._module.nvfp4_gemm_bf16(a, b, scale_a, scale_b)
+
+    eager = call(a_packed, b_packed, sfa, sfb)
+    compiled = torch.compile(call, fullgraph=True)
+    got = compiled(a_packed, b_packed, sfa, sfb)
+    torch.cuda.synchronize()
+    max_abs = float((got.float() - eager.float()).abs().max().item())
+    passed = bool(
+        got.dtype == torch.bfloat16
+        and got.shape == eager.shape
+        and torch.equal(got, eager)
+    )
+    return {
+        "fullgraph": True,
+        "dtype": str(got.dtype),
+        "shape": list(got.shape),
+        "max_abs": max_abs,
+        "exact": bool(torch.equal(got, eager)),
+        "passed": passed,
+    }
 
 
 def main() -> int:
@@ -219,22 +286,30 @@ def main() -> int:
     results: list[Metrics] = []
     for name in MODES[args.mode]:
         results.extend(run_case(ops, name, SHAPES[name]))
+    compile_check = None
+    if args.backend == "installed" and args.mode == "full":
+        compile_check = check_installed_compile(ops)
     passed = sum(1 for item in results if item.passed)
+    total = len(results)
+    if compile_check is not None:
+        total += 1
+        passed += int(bool(compile_check["passed"]))
     payload = {
         "backend": args.backend,
         "mode": args.mode,
         "device": torch.cuda.get_device_name(),
         "torch": torch.__version__,
         "passed": passed,
-        "total": len(results),
+        "total": total,
         "results": [asdict(item) for item in results],
+        "compile_check": compile_check,
     }
     print(json.dumps(payload, indent=2))
     if args.json_out:
         out = Path(args.json_out)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(payload, indent=2) + "\n")
-    return 0 if passed == len(results) else 1
+    return 0 if passed == total else 1
 
 
 if __name__ == "__main__":

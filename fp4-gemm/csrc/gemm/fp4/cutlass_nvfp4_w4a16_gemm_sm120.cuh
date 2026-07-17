@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// CUTLASS-based NVFP4 W4A16 GEMM for SM120a (RTX 5090 / Blackwell
+// CUTLASS-based NVFP4 A4W4 GEMM for SM120a (RTX 5090 / Blackwell
 // consumer GeForce). Native block-scaled FP4 GEMM matching the Qwen3.6
 // NVFP4 ckpt schema (compressed-tensors `nvfp4-pack-quantized` format).
 //
@@ -44,7 +44,7 @@
 namespace flash_rt {
 namespace gemm {
 
-// NVFP4 W4A16 GEMM, BF16 output, SM120a (RTX 5090).
+// NVFP4 A4W4 GEMM, BF16 output, SM120a (RTX 5090).
 //
 //   A_packed  : (M, K/2)        u8  row-major   (FP4 e2m1, 2 per byte)
 //   B_packed  : (N, K/2)        u8  row-major   (FP4 e2m1, 2 per byte)

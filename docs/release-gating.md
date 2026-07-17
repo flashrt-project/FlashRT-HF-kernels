@@ -28,7 +28,8 @@ builds.
 | `flashrt-smallm-gemm` | G5 RC | SM120 NVFP4 W4A4 decode matvec correctness, package tests, examples, verified public benchmark rows, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, fair cuBLASLt/CUTLASS baseline, warpsplit/tiny FP8 slices |
 | `flashrt-fused-quant` | G5 RC | Split and merged SiLU+NVFP4 quantization correctness, package tests, examples, benchmark latency grid, and local full-matrix ABI/load checks pass on RTX 5090 | Multi-hardware validation, clean upstream-builder rebuild, memory-bandwidth benchmark, residual/RMSNorm slices |
 | `fp4-fused-ops` | G4 source RC | FP16-to-NVFP4 producer and FP4-to-FP4 combiner package passes 26/26 strict source checks on RTX 5090; benchmark rows document producer/combiner latency and v2-vs-v1 comparisons | HF Jobs artifact build/upload, installed-artifact validation, multi-hardware validation |
-| `fp4-gemm` | G4 source RC | Native Blackwell NVFP4 W4A16 GEMM package passes 9/9 strict source checks on RTX 5090 across variants 0/1/2; benchmark rows report schedule-specific latency | HF Jobs artifact build/upload, installed-artifact validation, stronger library/internal low-bit comparison for headline claims |
+| `fp4-gemm` | G4 RC | Native Blackwell NVFP4 A4W4 GEMM passes 10/10 installed-artifact gates, including exact fullgraph compile parity; installed benchmarks cover every schedule | HF Jobs current-matrix rebuild/upload, Hub cold-load validation, legacy `v1` mirror, stronger library/internal low-bit comparison |
+| `weight-only-ffn` | G4 RC | True BF16-activation W4A16/W8A16 linear and FFN regions pass 26/26 installed-artifact checks; a 60-row RTX 5090 sweep qualifies 39 production rows and explicitly rejects 21 weak rows | HF Jobs current-matrix build/upload, Hub cold-load validation, legacy `v1` mirror, additional Blackwell hardware validation |
 | `adaptive-layernorm-producers` | G4 source RC | AdaLayerNorm/no-affine LayerNorm producer fusion to FP8 or NVFP4 passes full source correctness on RTX 5090; representative Wan/DiT/VLA shapes show 12-25x vs eager producer chains | HF Jobs artifact build/upload, installed-artifact validation, legacy `v1` mirror, multi-hardware validation |
 | `sageattention2-blackwell` | G4 source RC | SageAttention2-style Blackwell prefill attention passes source correctness for Wan non-causal and Qwen causal GQA shapes; benchmark grid reports both already-quantized core and BF16 wrapper speedups vs SDPA | HF Jobs artifact build/upload, installed-artifact validation, legacy `v1` mirror, multi-hardware validation |
 
@@ -42,7 +43,8 @@ The first public version has four equal blocks:
 | VLA/video post-processing | `flashrt-vla-video` | Q/K RMSNorm+RoPE/cache and packed-QKV split+norm+RoPE |
 | Blackwell NVFP4/FP4 low-bit | `flashrt-nvfp4`, `flashrt-smallm-gemm` | NVFP4 scale layout helper plus at least one validated small-M/decode W4A4 path |
 | Fused quantization | `flashrt-fused-quant` | SiLU/gate or norm/residual low-bit quantization with reference tests and bandwidth benchmark |
-| Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP4/SFA producers, FP4-to-FP4 combiners, and W4A16 BF16-output GEMM for continuous low-bit model islands |
+| Native FP4 runtime path | `fp4-fused-ops`, `fp4-gemm` | FP4/SFA producers, FP4-to-FP4 combiners, and A4W4 BF16-output GEMM for continuous low-bit model islands |
+| Small-M weight-only path | `weight-only-ffn` | BF16-activation W4A16/W8A16 linear and complete FFN regions with strict production shape gates |
 
 ## V1 Batch Release Criteria
 
