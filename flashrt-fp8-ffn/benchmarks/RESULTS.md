@@ -35,11 +35,12 @@ from a cold download before its numbers replace the built-artifact section.
 
 ## BF16 Region Entry: RTX 5090 Hub Artifact (2026-07-17)
 
-- Source commit: `f1d4adb328bbdcfd61e385d1c82348a225c3cae4`.
-- Kernel Hub `v1` snapshot: `4c58ce8b74fa26cd7a3d734621afc7988c35f9be`.
+- Implementation commit: `f1d4adb328bbdcfd61e385d1c82348a225c3cae4`.
+- Packaging commit: `1b7b2db5258d08f3013ea837dfd5b33e1536a7cb`.
+- Kernel Hub `v1` snapshot: `b3874bef0bd5ca7b0c36902789442a0bb9276dd2`.
 - Variant: `torch211-cxx11-cu130-x86_64-linux`.
 - Torch/CUDA: `2.11.0+cu130` / CUDA 13.0.
-- Binary: `_flashrt_fp8_ffn_cuda_f1d4adb.abi3.so`.
+- Binary: `_flashrt_fp8_ffn_cuda_1b7b2db.abi3.so`.
 - Protocol: cold Hub download, `20/100/5` warmup/iterations/rounds, A-B-B-A
   median timing, preallocated scratch, verified BF16 compile baseline.
 - Correctness: full installed matrix passed; input quantization and complete
