@@ -55,6 +55,50 @@ def _fp8_gemm_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("fp8_linear_bias_bf16"))
+def _fp8_linear_bias_bf16_fake(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if input.dim() != 2 or weight.dim() != 2:
+        raise RuntimeError("input and weight must be rank-2 tensors")
+    if bias.shape != (weight.shape[0],):
+        raise RuntimeError("bias shape must be (weight.shape[0],)")
+    if out.shape != (input.shape[0], weight.shape[0]):
+        raise RuntimeError("out shape must be (input.shape[0], weight.shape[0])")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("bf16_fp8_linear_bias_bf16"))
+def _bf16_fp8_linear_bias_bf16_fake(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    input_fp8: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if input.dim() != 2 or weight.dim() != 2:
+        raise RuntimeError("input and weight must be rank-2 tensors")
+    if input.shape[1] != weight.shape[1]:
+        raise RuntimeError("input.shape[1] must match weight.shape[1]")
+    padded_m = input_fp8.shape[0]
+    if padded_m < input.shape[0]:
+        raise RuntimeError("input_fp8 padded rows must cover input rows")
+    if input_fp8.shape != (padded_m, input.shape[1]):
+        raise RuntimeError("input_fp8 must have shape (padded_m, input.shape[1])")
+    if bias.shape != (weight.shape[0],):
+        raise RuntimeError("bias shape must be (weight.shape[0],)")
+    if out.shape != (padded_m, weight.shape[0]):
+        raise RuntimeError("out must have shape (padded_m, weight.shape[0])")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp8_linear_bias_gelu_quant_bf16"))
 def _fp8_linear_bias_gelu_quant_bf16_fake(
     input: torch.Tensor,
@@ -154,6 +198,33 @@ def fp8_gemm_bf16(
             dtype=torch.bfloat16,
         )
     ops.fp8_gemm_bf16(input, weight, input_scale, weight_scale, out)
+    return out
+
+
+def fp8_linear_bias_bf16(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Run an FP8-weight linear projection with BF16 bias and output.
+
+    ``input`` and ``weight`` use FP8 E4M3 with shapes ``(M, K)`` and
+    ``(N, K)``. Scales are device float32 scalar tensors. Pass ``out`` to keep
+    the call allocation-free for CUDA Graph capture.
+    """
+
+    if out is None:
+        out = torch.empty(
+            (input.shape[0], weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    ops.fp8_linear_bias_bf16(
+        input, weight, bias, input_scale, weight_scale, out
+    )
     return out
 
 
@@ -260,6 +331,45 @@ def _midm_padded_rows(input: torch.Tensor) -> int:
     return rows
 
 
+def bf16_fp8_linear_bias_bf16(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    input_fp8: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
+    *,
+    pad_to: int | None = None,
+) -> torch.Tensor:
+    """Run a static-scale FP8 linear projection from a BF16 boundary.
+
+    This traceable region entry quantizes ``input`` and computes the FP8
+    projection with BF16 bias/output. Thor SM110 pads M=9..128 to a multiple of
+    64 by default. Preallocate ``input_fp8`` and ``out`` for allocation-free
+    CUDA Graph replay.
+    """
+
+    logical_m = input.shape[0]
+    padded_m = _midm_padded_rows(input) if pad_to is None else pad_to
+    if padded_m < logical_m:
+        raise ValueError("pad_to must be >= input.shape[0]")
+    if input_fp8 is None:
+        input_fp8 = torch.empty(
+            (padded_m, input.shape[1]), device=input.device, dtype=_fp8_dtype()
+        )
+    if out is None:
+        out = torch.empty(
+            (padded_m, weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    ops.bf16_fp8_linear_bias_bf16(
+        input, weight, bias, input_scale, weight_scale, input_fp8, out
+    )
+    return out[:logical_m]
+
+
 def bf16_fp8_gelu_mlp_bf16(
     input: torch.Tensor,
     up_weight: torch.Tensor,
@@ -324,8 +434,10 @@ def bf16_fp8_gelu_mlp_bf16(
 
 
 __all__ = [
+    "bf16_fp8_linear_bias_bf16",
     "bf16_fp8_gelu_mlp_bf16",
     "fp8_gemm_bf16",
     "fp8_gelu_mlp_bf16",
+    "fp8_linear_bias_bf16",
     "fp8_linear_bias_gelu_quant_bf16",
 ]

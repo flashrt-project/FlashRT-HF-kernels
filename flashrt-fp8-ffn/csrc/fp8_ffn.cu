@@ -60,6 +60,13 @@ struct CachedLtGemm {
 
 std::unordered_map<LtGemmKey, CachedLtGemm, LtGemmKeyHash> g_lt_cache;
 
+struct CachedLtBiasGemm : CachedLtGemm {
+  bool supported = false;
+};
+
+std::unordered_map<LtGemmKey, CachedLtBiasGemm, LtGemmKeyHash>
+    g_lt_bias_cache;
+
 std::string shape_string(const char* name, int M, int N, int K) {
   return std::string(name) + " [" + std::to_string(M) + "," +
          std::to_string(N) + "," + std::to_string(K) + "]";
@@ -404,6 +411,135 @@ void fp8_gemm_descale_bf16out(
           &beta, out_bf16, cg.Ddesc, out_bf16, cg.Ddesc, &cg.algo, g_fp8_ws,
           g_fp8_ws_sz, stream),
       name, M, N, K, "cublasLtMatmul");
+}
+
+bool fp8_gemm_bias_descale_bf16out(
+    const void* input_fp8,
+    const void* weight_fp8,
+    const void* bias_bf16,
+    void* out_bf16,
+    int M,
+    int N,
+    int K,
+    const float* input_scale,
+    const float* weight_scale,
+    cudaStream_t stream) {
+  const char* name = "fp8_gemm_bias_descale_bf16out";
+  ensure_fp8_lt(name, M, N, K);
+
+  LtGemmKey key{M, N, K};
+  auto it = g_lt_bias_cache.find(key);
+  if (it == g_lt_bias_cache.end()) {
+    CachedLtBiasGemm cg{};
+    cublasStatus_t status = cublasLtMatmulDescCreate(
+        &cg.desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+    if (status == CUBLAS_STATUS_SUCCESS) {
+      cublasLtOrder_t row_order = CUBLASLT_ORDER_ROW;
+      cublasOperation_t opN = CUBLAS_OP_N;
+      cublasOperation_t opT = CUBLAS_OP_T;
+      cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_BIAS;
+      cudaDataType_t bias_type = CUDA_R_16BF;
+      status = cublasLtMatmulDescSetAttribute(
+          cg.desc, CUBLASLT_MATMUL_DESC_TRANSA, &opN, sizeof(opN));
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatmulDescSetAttribute(
+            cg.desc, CUBLASLT_MATMUL_DESC_TRANSB, &opT, sizeof(opT));
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatmulDescSetAttribute(
+            cg.desc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue,
+            sizeof(epilogue));
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatmulDescSetAttribute(
+            cg.desc, CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, &bias_type,
+            sizeof(bias_type));
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatrixLayoutCreate(
+            &cg.Adesc, CUDA_R_8F_E4M3, M, K, K);
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatrixLayoutSetAttribute(
+            cg.Adesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_order,
+            sizeof(row_order));
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatrixLayoutCreate(
+            &cg.Bdesc, CUDA_R_8F_E4M3, N, K, K);
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatrixLayoutSetAttribute(
+            cg.Bdesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_order,
+            sizeof(row_order));
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatrixLayoutCreate(
+            &cg.Ddesc, CUDA_R_16BF, M, N, N);
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatrixLayoutSetAttribute(
+            cg.Ddesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &row_order,
+            sizeof(row_order));
+      }
+
+      cublasLtMatmulPreference_t pref = nullptr;
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatmulPreferenceCreate(&pref);
+      }
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatmulPreferenceSetAttribute(
+            pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &g_fp8_ws_sz,
+            sizeof(g_fp8_ws_sz));
+      }
+      cublasLtMatmulHeuristicResult_t result{};
+      int returned = 0;
+      if (status == CUBLAS_STATUS_SUCCESS) {
+        status = cublasLtMatmulAlgoGetHeuristic(
+            g_fp8_lt, cg.desc, cg.Adesc, cg.Bdesc, cg.Ddesc, cg.Ddesc,
+            pref, 1, &result, &returned);
+      }
+      if (pref != nullptr) {
+        cublasLtMatmulPreferenceDestroy(pref);
+      }
+      if (status == CUBLAS_STATUS_SUCCESS && returned > 0) {
+        cg.algo = result.algo;
+        cg.supported = true;
+      }
+    }
+    if (!cg.supported) {
+      if (cg.desc != nullptr) cublasLtMatmulDescDestroy(cg.desc);
+      if (cg.Adesc != nullptr) cublasLtMatrixLayoutDestroy(cg.Adesc);
+      if (cg.Bdesc != nullptr) cublasLtMatrixLayoutDestroy(cg.Bdesc);
+      if (cg.Ddesc != nullptr) cublasLtMatrixLayoutDestroy(cg.Ddesc);
+      cg.desc = nullptr;
+      cg.Adesc = nullptr;
+      cg.Bdesc = nullptr;
+      cg.Ddesc = nullptr;
+    }
+    g_lt_bias_cache[key] = cg;
+    it = g_lt_bias_cache.find(key);
+  }
+
+  auto& cg = it->second;
+  if (!cg.supported) return false;
+  if (cublasLtMatmulDescSetAttribute(
+          cg.desc, CUBLASLT_MATMUL_DESC_A_SCALE_POINTER, &input_scale,
+          sizeof(input_scale)) != CUBLAS_STATUS_SUCCESS ||
+      cublasLtMatmulDescSetAttribute(
+          cg.desc, CUBLASLT_MATMUL_DESC_B_SCALE_POINTER, &weight_scale,
+          sizeof(weight_scale)) != CUBLAS_STATUS_SUCCESS ||
+      cublasLtMatmulDescSetAttribute(
+          cg.desc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias_bf16,
+          sizeof(bias_bf16)) != CUBLAS_STATUS_SUCCESS) {
+    return false;
+  }
+  float alpha = 1.0f;
+  float beta = 0.0f;
+  return cublasLtMatmul(
+             g_fp8_lt, cg.desc, &alpha, input_fp8, cg.Adesc, weight_fp8,
+             cg.Bdesc, &beta, out_bf16, cg.Ddesc, out_bf16, cg.Ddesc,
+             &cg.algo, g_fp8_ws, g_fp8_ws_sz, stream) == CUBLAS_STATUS_SUCCESS;
 }
 
 void quantize_fp8_static_bf16_mpad(

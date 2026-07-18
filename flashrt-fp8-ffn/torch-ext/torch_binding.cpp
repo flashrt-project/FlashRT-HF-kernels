@@ -164,6 +164,28 @@ void launch_add_bias_bf16(torch::Tensor& out, torch::Tensor const& bias) {
 #endif
 }
 
+void launch_fp8_linear_bias_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& weight_scale,
+    torch::Tensor& out) {
+#if defined(CUDA_KERNEL)
+  FLASHRT_DEVICE_GUARD(input);
+  auto stream = FLASHRT_CURRENT_STREAM(input);
+  const bool fused = flash_rt::fp8_ffn::fp8_gemm_bias_descale_bf16out(
+      input.data_ptr(), weight.data_ptr(), bias.data_ptr(), out.data_ptr(),
+      static_cast<int>(input.size(0)), static_cast<int>(weight.size(0)),
+      static_cast<int>(input.size(1)),
+      reinterpret_cast<const float*>(input_scale.data_ptr()),
+      reinterpret_cast<const float*>(weight_scale.data_ptr()), stream);
+  if (fused) return;
+#endif
+  launch_fp8_gemm_bf16(input, weight, input_scale, weight_scale, out);
+  launch_add_bias_bf16(out, bias);
+}
+
 void launch_quantize_mpad(
     torch::Tensor const& input,
     torch::Tensor const& input_scale,
@@ -194,6 +216,55 @@ void fp8_gemm_bf16(
     torch::Tensor& out) {
   check_fp8_gemm_args(input, weight, input_scale, weight_scale, out);
   launch_fp8_gemm_bf16(input, weight, input_scale, weight_scale, out);
+}
+
+void fp8_linear_bias_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& weight_scale,
+    torch::Tensor& out) {
+  check_fp8_gemm_args(input, weight, input_scale, weight_scale, out);
+  check_bf16_vector(bias, "bias");
+  TORCH_CHECK(bias.size(0) == weight.size(0),
+              "bias length must match weight.shape[0]");
+  TORCH_CHECK(bias.get_device() == input.get_device(),
+              "bias must be on the same CUDA device as input");
+  launch_fp8_linear_bias_bf16(
+      input, weight, bias, input_scale, weight_scale, out);
+}
+
+void bf16_fp8_linear_bias_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& weight_scale,
+    torch::Tensor& input_fp8,
+    torch::Tensor& out) {
+  check_bf16_matrix(input, "input");
+  check_fp8_matrix(input_fp8, "input_fp8");
+  TORCH_CHECK(input.get_device() == input_fp8.get_device(),
+              "input and input_fp8 must be on the same CUDA device");
+  check_scale(input_scale, "input_scale", input.get_device());
+  TORCH_CHECK(input_fp8.size(0) >= input.size(0) &&
+                  input_fp8.size(1) == input.size(1),
+              "input_fp8 must have shape (padded_m, input.shape[1]) with "
+              "padded_m >= input.shape[0]");
+  TORCH_CHECK(out.size(0) == input_fp8.size(0),
+              "out must use input_fp8.shape[0] padded rows");
+  check_fp8_gemm_args(
+      input_fp8, weight, input_scale, weight_scale, out);
+  check_bf16_vector(bias, "bias");
+  TORCH_CHECK(bias.size(0) == weight.size(0),
+              "bias length must match weight.shape[0]");
+  TORCH_CHECK(bias.get_device() == input.get_device(),
+              "bias must be on the same CUDA device as input");
+
+  launch_quantize_mpad(input, input_scale, input_fp8);
+  launch_fp8_linear_bias_bf16(
+      input_fp8, weight, bias, input_scale, weight_scale, out);
 }
 
 void fp8_linear_bias_gelu_quant_bf16(
@@ -324,6 +395,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("fp8_gemm_bf16("
           "Tensor input, Tensor weight, Tensor input_scale, "
           "Tensor weight_scale, Tensor! out) -> ()");
+  ops.def("fp8_linear_bias_bf16("
+          "Tensor input, Tensor weight, Tensor bias, Tensor input_scale, "
+          "Tensor weight_scale, Tensor! out) -> ()");
+  ops.def("bf16_fp8_linear_bias_bf16("
+          "Tensor input, Tensor weight, Tensor bias, Tensor input_scale, "
+          "Tensor weight_scale, Tensor! input_fp8, Tensor! out) -> ()");
   ops.def("fp8_linear_bias_gelu_quant_bf16("
           "Tensor input, Tensor weight, Tensor bias, Tensor input_scale, "
           "Tensor weight_scale, Tensor output_scale, Tensor! hidden_bf16, "
@@ -342,6 +419,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor! hidden_bf16, Tensor! hidden_fp8, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL) || defined(ROCM_KERNEL)
   ops.impl("fp8_gemm_bf16", torch::kCUDA, &fp8_gemm_bf16);
+  ops.impl("fp8_linear_bias_bf16",
+           torch::kCUDA,
+           &fp8_linear_bias_bf16);
+  ops.impl("bf16_fp8_linear_bias_bf16",
+           torch::kCUDA,
+           &bf16_fp8_linear_bias_bf16);
   ops.impl("fp8_linear_bias_gelu_quant_bf16",
            torch::kCUDA,
            &fp8_linear_bias_gelu_quant_bf16);

@@ -1,5 +1,34 @@
 # Benchmark Results: flashrt-fp8-ffn
 
+## FP8 Linear + Bias: RTX 5090 Source RC (2026-07-18)
+
+- Torch: `2.9.0a0+145a3a7bda.nv25.10`; CUDA 13 container.
+- Protocol: `20/100/5` warmup/iterations/rounds, median CUDA-event timing,
+  preallocated outputs and scratch.
+- Correctness over the full M `1..512` matrix: max absolute error
+  `<=0.0078125`, p99 absolute error `<=0.00390625`, cosine
+  `>=0.9999954`; BF16-region staging, compile, and graph parity passed.
+- FlashRT reference is the production-equivalent
+  `fp8_descale_fp16 + add_bias_fp16` path. The fused FVK cuBLASLt bias
+  epilogues returned `CUBLAS_STATUS_NOT_SUPPORTED` on this stack; the package
+  automatically retains the decomposed, contract-equivalent fallback.
+
+| Shape | Package FP8 us | BF16 region us | Graph us | FlashRT ref us | vs FlashRT | BF16 eager us | vs eager |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| M51, 1536 -> 4608 | 8.250 | 10.295 | 9.196 | 10.336 | 1.25x | 32.819 | 3.98x |
+| M51, 1536 -> 1536 | 8.253 | 10.290 | 8.204 | 8.287 | 1.00x | 16.447 | 1.99x |
+| M105, 2048 -> 4096 | 12.332 | 14.373 | 12.301 | 12.422 | 1.01x | 26.696 | 2.16x |
+| M105, 2048 -> 2048 | 10.278 | 10.297 | 10.247 | 12.366 | 1.20x | 18.865 | 1.84x |
+| M128, 1152 -> 3456 | 8.250 | 10.294 | 10.245 | 10.304 | 1.25x | 37.178 | 4.51x |
+| M256, 1536 -> 1536 | 10.448 | 12.342 | 10.255 | 10.335 | 0.99x | 20.532 | 1.97x |
+
+M=51 and M=105 satisfy both gates: no regression against the original
+FlashRT FP8+bias path and at least `1.3x` over BF16 eager. M=1 is slower than
+BF16 eager and M=8 is only a marginal direct-FP8 win while its BF16 region is
+slower. They remain correctness-covered APIs but are explicitly excluded from
+performance promotion; a runtime must dispatch those rows to its measured
+BF16/decode path.
+
 ## BF16 Region Entry: RTX 5090 Source RC (2026-07-17)
 
 - Torch: `2.9.0a0+145a3a7bda.nv25.10`

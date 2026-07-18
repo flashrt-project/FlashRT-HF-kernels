@@ -58,6 +58,36 @@ class SourceOps:
         self._ops.fp8_gemm_bf16(x, w, x_scale, w_scale, out)
         return out
 
+    def fp8_linear_bias_bf16(
+        self, x, w, bias, x_scale, w_scale, out=None
+    ):
+        if out is None:
+            out = torch.empty(
+                (x.shape[0], w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        self._ops.fp8_linear_bias_bf16(
+            x, w, bias, x_scale, w_scale, out
+        )
+        return out
+
+    def bf16_fp8_linear_bias_bf16(
+        self, x, w, bias, x_scale, w_scale, input_fp8=None, out=None,
+        *, pad_to=None
+    ):
+        padded_m = x.shape[0] if pad_to is None else pad_to
+        if input_fp8 is None:
+            input_fp8 = torch.empty(
+                (padded_m, x.shape[1]), device=x.device, dtype=fp8_dtype()
+            )
+        if out is None:
+            out = torch.empty(
+                (padded_m, w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        self._ops.bf16_fp8_linear_bias_bf16(
+            x, w, bias, x_scale, w_scale, input_fp8, out
+        )
+        return out[: x.shape[0]]
+
     def fp8_linear_bias_gelu_quant_bf16(
         self, x, w, bias, x_scale, w_scale, y_scale, hidden=None, out=None
     ):
@@ -198,6 +228,12 @@ def dequant_fp8(x: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
 
 def ref_gemm(x, w, x_scale, w_scale) -> torch.Tensor:
     return (dequant_fp8(x, x_scale) @ dequant_fp8(w, w_scale).T).to(torch.bfloat16)
+
+
+def ref_linear_bias(x, w, bias, x_scale, w_scale) -> torch.Tensor:
+    return (
+        dequant_fp8(x, x_scale) @ dequant_fp8(w, w_scale).T + bias.float()
+    ).to(torch.bfloat16)
 
 
 def ref_linear_bias_gelu_quant(x, w, bias, x_scale, w_scale, y_scale):
@@ -370,6 +406,80 @@ def run(args) -> None:
             ref_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s),
         )
 
+    projection_shapes = {
+        "decode_m1_d2048_o": (1, 2048, 2048),
+        "small_m8_d1536_o": (8, 1536, 1536),
+        "groot_dit_m51_qkv": (51, 1536, 4608),
+        "groot_dit_m51_o": (51, 1536, 1536),
+        "mid_m64_d2048_o": (64, 2048, 2048),
+        "groot_backbone_m105_qkv": (105, 2048, 4096),
+        "groot_backbone_m105_o": (105, 2048, 2048),
+        "mid_m128_siglip_qkv": (128, 1152, 3456),
+        "prefill_m256_d1536_o": (256, 1536, 1536),
+        "prefill_m512_d2048_o": (512, 2048, 2048),
+    }
+    for label, (M, K, N) in projection_shapes.items():
+        x_bf16 = torch.randn((M, K), device="cuda", dtype=torch.bfloat16) * 0.25
+        x_scale = (
+            x_bf16.float().abs().max() / (0.9 * fp8_max())
+        ).clamp_min(1e-6).reshape(1)
+        x_fp8 = quantize_fp8_reciprocal(x_bf16, x_scale)
+        w_bf16 = torch.randn((N, K), device="cuda", dtype=torch.bfloat16) * (K**-0.5)
+        w_scale = (
+            w_bf16.float().abs().max() / (0.9 * fp8_max())
+        ).clamp_min(1e-6).reshape(1)
+        w_fp8 = quantize_fp8(w_bf16, w_scale)
+        bias = torch.randn((N,), device="cuda", dtype=torch.bfloat16) * 0.01
+
+        got = ops.fp8_linear_bias_bf16(
+            x_fp8, w_fp8, bias, x_scale, w_scale
+        )
+        expected = ref_linear_bias(
+            x_fp8, w_fp8, bias, x_scale, w_scale
+        )
+        assert_distribution_close(
+            f"{label}/fp8_linear_bias_bf16",
+            got,
+            expected,
+            p99_abs_limit=0.015625,
+            p99_rel_floor1_limit=0.005,
+            cosine_min=0.9999,
+        )
+
+        padded_m = midm_padded_rows(M)
+        input_fp8 = torch.empty(
+            (padded_m, K), device="cuda", dtype=fp8_dtype()
+        )
+        out = torch.empty(
+            (padded_m, N), device="cuda", dtype=torch.bfloat16
+        )
+        got_region = ops.bf16_fp8_linear_bias_bf16(
+            x_bf16, w_fp8, bias, x_scale, w_scale,
+            input_fp8=input_fp8, out=out, pad_to=padded_m,
+        )
+        assert_close(
+            f"{label}/bf16_input_quant",
+            input_fp8[:M],
+            x_fp8,
+            atol=0.0,
+            rtol=0.0,
+        )
+        assert_close(
+            f"{label}/bf16_region_vs_fp8_entry",
+            got_region,
+            got,
+            atol=0.0,
+            rtol=0.0,
+        )
+        if padded_m > M:
+            assert_close(
+                f"{label}/bf16_input_padding",
+                input_fp8[M:],
+                torch.zeros_like(input_fp8[M:]),
+                atol=0.0,
+                rtol=0.0,
+            )
+
     for label, shape in {
         "midm_siglip_m8": (8, 1152, 4304, 1152),
         "midm_siglip_m51": (51, 1152, 4304, 1152),
@@ -479,6 +589,53 @@ def run(args) -> None:
         raise AssertionError(f"output dtype must be bfloat16, got {out.dtype}")
     print("PASS bf16_region/output_dtype: torch.bfloat16")
 
+    linear_weight = quantize_fp8(
+        torch.randn((N, K), device="cuda", dtype=torch.bfloat16) * 0.02,
+        down_scale,
+    )
+    linear_bias = torch.randn((N,), device="cuda", dtype=torch.bfloat16) * 0.01
+    linear_input_fp8 = torch.empty(
+        (padded_m, K), device="cuda", dtype=fp8_dtype()
+    )
+    linear_out = torch.empty(
+        (padded_m, N), device="cuda", dtype=torch.bfloat16
+    )
+
+    def linear_region(value):
+        return ops.bf16_fp8_linear_bias_bf16(
+            value, linear_weight, linear_bias, x_scale, down_scale,
+            input_fp8=linear_input_fp8, out=linear_out, pad_to=padded_m,
+        )
+
+    linear_expected = linear_region(x_bf16).clone()
+    linear_compiled = torch.compile(linear_region, fullgraph=True)
+    assert_close(
+        "bf16_linear_region/torch_compile_fullgraph",
+        linear_compiled(x_bf16),
+        linear_expected,
+        atol=0.0,
+        rtol=0.0,
+    )
+    linear_graph = torch.cuda.CUDAGraph()
+    linear_region(x_bf16)
+    torch.cuda.synchronize()
+    with torch.cuda.graph(linear_graph):
+        linear_region(x_bf16)
+    linear_graph.replay()
+    torch.cuda.synchronize()
+    assert_close(
+        "bf16_linear_region/cuda_graph_replay",
+        linear_out[:M],
+        linear_expected,
+        atol=0.0,
+        rtol=0.0,
+    )
+    if linear_out.dtype != torch.bfloat16:
+        raise AssertionError(
+            f"linear output dtype must be bfloat16, got {linear_out.dtype}"
+        )
+    print("PASS bf16_linear_region/output_dtype: torch.bfloat16")
+
     try:
         ops.bf16_fp8_gelu_mlp_bf16(
             x_bf16, up_weight, up_bias, down_weight, down_bias, x_scale,
@@ -490,6 +647,19 @@ def run(args) -> None:
         print("PASS bf16_region/reject_short_padding")
     else:
         raise AssertionError("short padded scratch must be rejected")
+
+    try:
+        ops.fp8_linear_bias_bf16(
+            input_fp8,
+            linear_weight,
+            torch.empty((N + 1,), device="cuda", dtype=torch.bfloat16),
+            x_scale,
+            down_scale,
+        )
+    except RuntimeError:
+        print("PASS fp8_linear_bias/reject_wrong_bias_shape")
+    else:
+        raise AssertionError("wrong bias shape must be rejected")
 
 
 def main() -> None:

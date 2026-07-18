@@ -14,6 +14,8 @@ Required before publishing:
    python flashrt-fp8-ffn/benchmarks/benchmark.py --compile-baseline
    python flashrt-fp8-ffn/benchmarks/benchmark_bf16_entry.py \
      --backend source --shapes all --compile-baseline
+   python flashrt-fp8-ffn/benchmarks/benchmark_linear_bias.py \
+     --backend source --shapes all --compile-baseline --compare-fvk
    ```
 
    The BF16-entry matrix covers M `8, 51, 64, 105, 128` for both
@@ -34,11 +36,22 @@ Required before publishing:
    `GELU -> FP8 requant` and final BF16 bias/cast boundaries, while keeping the
    FP8 dequant GEMM regions compiled.
 
+   The linear+bias matrix covers M `1, 8, 51, 64, 105, 128, 256, 512`, QKV
+   expansion and output projections. Every row must pass max/mean/p99 absolute
+   error, cosine, dtype, invalid-input, `torch.compile(fullgraph=True)`, and
+   CUDA Graph replay gates. Performance promotion is separate from functional
+   support: M=51 and M=105 must be no slower than the matching production
+   FlashRT FP8+bias path and at least `1.3x` faster than BF16 eager. M=1 and M=8
+   are diagnostic dispatch rows and must not be advertised as universal wins.
+
 3. Built-artifact validation after the full kernel-builder pass:
 
    ```bash
    PYTHONPATH=<artifact-path> python flashrt-fp8-ffn/tests/test_fp8_ffn.py --backend installed
    python flashrt-fp8-ffn/benchmarks/benchmark_bf16_entry.py \
+     --backend installed --artifact <artifact-path> --shapes all \
+     --compile-baseline
+   python flashrt-fp8-ffn/benchmarks/benchmark_linear_bias.py \
      --backend installed --artifact <artifact-path> --shapes all \
      --compile-baseline
    ```

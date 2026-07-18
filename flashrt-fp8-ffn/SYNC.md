@@ -9,6 +9,7 @@ Synced from `official/FlashRT`:
 
 - `csrc/kernels/decoder_fused.cu`: FP8 cuBLASLt descale GEMM convention and
   descriptor cache.
+- `csrc/gemm/gemm_runner.cu`: FP8 linear+bias cuBLASLt epilogue contract.
 - `csrc/quantize/bias_gelu_quantize_fp8.*`: bias/GELU/static FP8 quant math.
 
 Local adaptation:
@@ -16,6 +17,10 @@ Local adaptation:
 - Raw pointer APIs were converted to Tensor-based `torch.ops` bindings.
 - The MLP block composes existing production primitives into a Hub-loadable
   FFN surface.
+- The generic linear+bias surface first requests the production fused
+  cuBLASLt bias epilogue. When a CUDA/cuBLASLt tuple reports that epilogue as
+  unsupported, it falls back to the established FP8 GEMM plus vectorized BF16
+  bias producer without changing the public contract.
 - The BF16 region entry adds package-local static input quantization with the
   production reciprocal-multiply arithmetic order and optional zero-row
   padding. It preserves the established FP8 GEMM/epilogue implementation.

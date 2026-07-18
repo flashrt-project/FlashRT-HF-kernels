@@ -12,6 +12,9 @@ should call the same Tensor APIs rather than model-specific entry points.
 
 - `fp8_gemm_bf16`: FP8 E4M3 GEMM with scalar input/weight scales and BF16
   output.
+- `fp8_linear_bias_bf16`: FP8 E4M3 linear projection with BF16 bias/output.
+- `bf16_fp8_linear_bias_bf16`: BF16 region entry with static activation
+  quantization and FP8 linear+bias projection.
 - `fp8_linear_bias_gelu_quant_bf16`: FP8 linear, BF16 bias, GELU(tanh), and
   FP8 requantization.
 - `fp8_gelu_mlp_bf16`: full FP8 GELU MLP block:
@@ -25,6 +28,11 @@ Use this package for model FFN islands where weights are already quantized and
 activation/hidden scales are static for the benchmark or deployment slice.
 Use the BF16 entry when the surrounding Transformers/Diffusers block naturally
 produces BF16 and the old Python-side quantization call is an integration seam.
+
+The linear+bias APIs cover generic Q/K/V/O, action, and backbone projections.
+The promoted performance band starts at the measured mid-M region (M=51 and
+M=105 in the release gate). M=1 and M=8 remain valid APIs but require host-side
+dispatch against the retained BF16 implementation.
 
 Do not use it as a one-off Python call between many unfused BF16 operations if
 the goal is end-to-end speed. For best results, keep FP8 tensors flowing across

@@ -6,6 +6,9 @@ This package exports reusable FP8 FFN surfaces from the FlashRT serving stack
 without exposing raw pointer APIs:
 
 - `fp8_gemm_bf16`: per-tensor FP8 E4M3 GEMM with BF16 output.
+- `fp8_linear_bias_bf16`: FP8 linear projection with BF16 bias and output.
+- `bf16_fp8_linear_bias_bf16`: BF16 region entry that performs static input
+  quantization followed by the FP8 linear+bias projection.
 - `fp8_linear_bias_gelu_quant_bf16`: FP8 GEMM, BF16 bias/GELU, and FP8 output
   quantization.
 - `fp8_gelu_mlp_bf16`: complete GELU MLP block:
@@ -72,6 +75,30 @@ y = ops.bf16_fp8_gelu_mlp_bf16(
 )
 ```
 
+For attention and output projections with bias:
+
+```python
+weight = torch.randn((3072, 1024), device="cuda", dtype=torch.bfloat16)
+weight_scale = weight.abs().amax().float().reshape(1) / 448.0
+weight_fp8 = torch.clamp(
+    weight.float() / weight_scale, -448, 448
+).to(torch.float8_e4m3fn)
+bias = torch.zeros((3072,), device="cuda", dtype=torch.bfloat16)
+input_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+out = torch.empty((x.shape[0], 3072), device="cuda", dtype=torch.bfloat16)
+
+y = ops.bf16_fp8_linear_bias_bf16(
+    x, weight_fp8, bias, x_scale, weight_scale,
+    input_fp8=input_fp8, out=out,
+)
+```
+
+The projection API is performance-qualified for static mid-M and prefill
+regions, including M=51 and M=105. M=1 is functionally supported but is not a
+performance-promoted path; runtimes should retain their BF16 decode projection
+when dispatch measurements do not show a win. M=8 is similarly treated as a
+dispatch boundary rather than a blanket FP8 recommendation.
+
 The BF16 entry accepts optional `input_fp8`, `hidden_bf16`, `hidden_fp8`, and
 `out` buffers. Preallocate them for allocation-free CUDA Graph replay. Use a
 static `pad_to` when a deployment intentionally pads M; the returned tensor is
@@ -99,6 +126,8 @@ python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes headlin
 python flashrt-fp8-ffn/benchmarks/benchmark.py --backend source --shapes all
 python flashrt-fp8-ffn/benchmarks/benchmark_bf16_entry.py \
   --backend source --shapes all --compile-baseline
+python flashrt-fp8-ffn/benchmarks/benchmark_linear_bias.py \
+  --backend source --shapes all --compile-baseline --compare-fvk
 ```
 
 The package benchmark is reported against the PyTorch eager FP8 reference and a

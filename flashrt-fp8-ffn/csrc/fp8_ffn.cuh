@@ -17,6 +17,18 @@ void fp8_gemm_descale_bf16out(
     const float* weight_scale,
     cudaStream_t stream);
 
+bool fp8_gemm_bias_descale_bf16out(
+    const void* input_fp8,
+    const void* weight_fp8,
+    const void* bias_bf16,
+    void* out_bf16,
+    int M,
+    int N,
+    int K,
+    const float* input_scale,
+    const float* weight_scale,
+    cudaStream_t stream);
+
 void quantize_fp8_static_bf16_mpad(
     const void* input_bf16,
     void* out_fp8,
