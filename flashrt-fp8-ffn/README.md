@@ -48,7 +48,9 @@ packages once their Tensor API and hardware scope are finalized.
 from kernels import get_kernel
 import torch
 
-ops = get_kernel("flashrt/flashrt-fp8-ffn", version=1)
+ops = get_kernel(
+    "flashrt/flashrt-fp8-ffn", version=1, trust_remote_code=True
+)
 
 x = torch.randn((512, 1024), device="cuda", dtype=torch.bfloat16)
 w_up = torch.randn((4096, 1024), device="cuda", dtype=torch.bfloat16)

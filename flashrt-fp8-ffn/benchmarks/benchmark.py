@@ -254,7 +254,10 @@ def load_installed_ops(artifact: str | None):
 def load_hub_ops(repo_id: str, version: int):
     from kernels import get_kernel
 
-    return get_kernel(repo_id, version=version)
+    try:
+        return get_kernel(repo_id, version=version, trust_remote_code=True)
+    except TypeError:
+        return get_kernel(repo_id, version=version)
 
 
 def fp8_dtype() -> torch.dtype:

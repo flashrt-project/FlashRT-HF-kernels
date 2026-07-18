@@ -14,7 +14,9 @@ def main() -> None:
     parser.add_argument("--compile", action="store_true")
     args = parser.parse_args()
 
-    ops = get_kernel("flashrt/flashrt-fp8-ffn", version=1)
+    ops = get_kernel(
+        "flashrt/flashrt-fp8-ffn", version=1, trust_remote_code=True
+    )
     device = torch.device("cuda")
     fp8_dtype = torch.float8_e4m3fn
     m, k, n = 51, 1536, 4608

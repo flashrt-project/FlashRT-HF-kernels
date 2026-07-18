@@ -29,6 +29,30 @@ slower. They remain correctness-covered APIs but are explicitly excluded from
 performance promotion; a runtime must dispatch those rows to its measured
 BF16/decode path.
 
+## FP8 Linear + Bias: RTX 5090 Hub Artifact (2026-07-18)
+
+- Source/binary commit: `255584fe2551148a9127a0b8762ec94c7fe0cc75`.
+- Kernel Hub `v1` snapshot: `af4f1aae5ef8793e0456ecf7664b0d3468f4d3db`.
+- Legacy model `v1` snapshot: `390a5a23be189f55696aab2665e7e784a488dbd0`.
+- Variant: `torch211-cxx11-cu130-x86_64-linux`;
+  `_flashrt_fp8_ffn_cuda_255584f.abi3.so`.
+- Torch/CUDA: `2.11.0+cu130` / CUDA 13.0.
+- Cold-load validation: full installed suite passed with current
+  `kernels==0.16.0`; the mirrored `torch211-cu128` artifact passed the same
+  suite with legacy `kernels==0.12.3`.
+
+| Shape | Package FP8 us | BF16 region us | Graph us | BF16 eager us | FP8 vs eager | Region vs eager |
+|---|---:|---:|---:|---:|---:|---:|
+| M51, 1536 -> 4608 | 10.309 | 12.348 | 12.287 | 32.819 | 3.18x | 2.66x |
+| M51, 1536 -> 1536 | 8.248 | 9.344 | 8.209 | 16.446 | 1.99x | 1.76x |
+| M105, 2048 -> 4096 | 12.355 | 14.393 | 14.080 | 26.677 | 2.16x | 1.85x |
+| M105, 2048 -> 2048 | 10.303 | 12.337 | 12.047 | 19.258 | 1.87x | 1.56x |
+
+Artifact and source timings use different Torch builds, so they are not
+presented as a direct binary-to-source ratio. Both independently clear the
+same GROOT M=51/M=105 release gates. M=1 and M=8 retain the same non-promoted
+dispatch status in the artifact sweep.
+
 ## BF16 Region Entry: RTX 5090 Source RC (2026-07-17)
 
 - Torch: `2.9.0a0+145a3a7bda.nv25.10`

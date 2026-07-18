@@ -56,9 +56,11 @@ Required before publishing:
      --compile-baseline
    ```
 
-   Re-run the full correctness matrix from a cold `get_kernel(..., version=1)`
-   download. Verify that the loaded shared-object suffix matches the release
-   source commit and test with both the current `kernels` release and the
+   Re-run the full correctness matrix from a cold
+   `get_kernel(..., version=1, trust_remote_code=True)` download. Legacy
+   `kernels<0.13` clients do not accept the `trust_remote_code` argument. Verify
+   that the loaded shared-object suffix matches the release source commit and
+   test with both the current `kernels` release and the
    Transformers/Diffusers-compatible `kernels==0.12.3` client.
 
 4. Model-block demo:
