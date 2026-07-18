@@ -34,6 +34,36 @@ The promoted performance band starts at the measured mid-M region (M=51 and
 M=105 in the release gate). M=1 and M=8 remain valid APIs but require host-side
 dispatch against the retained BF16 implementation.
 
+## Minimal Projection Example
+
+```python
+import torch
+from kernels import get_kernel
+
+ops = get_kernel(
+    "flashrt/flashrt-fp8-ffn", version=1, trust_remote_code=True
+)
+
+# x: (M, K) BF16; weight_fp8: (N, K) float8_e4m3fn
+input_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+out = torch.empty(
+    (x.shape[0], weight_fp8.shape[0]), device=x.device, dtype=torch.bfloat16
+)
+y = ops.bf16_fp8_linear_bias_bf16(
+    x,
+    weight_fp8,
+    bias_bf16,
+    input_scale_f32,
+    weight_scale_f32,
+    input_fp8=input_fp8,
+    out=out,
+)
+```
+
+Preallocate both scratch tensors once per static shape before CUDA Graph
+capture. Use `fp8_linear_bias_bf16` directly when the preceding producer
+already returns FP8.
+
 Do not use it as a one-off Python call between many unfused BF16 operations if
 the goal is end-to-end speed. For best results, keep FP8 tensors flowing across
 adjacent FlashRT blocks and preallocate scratch buffers.
