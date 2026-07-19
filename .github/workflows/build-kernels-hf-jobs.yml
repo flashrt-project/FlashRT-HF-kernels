@@ -205,7 +205,9 @@ jobs:
           # HF Jobs billing/credits are attached to the runner namespace.
           # Artifacts are still uploaded to flashrt/<package> via --repo-id below.
           namespace: liangsu9988
-          flavor: cpu-xl
+          # FA2 instantiates a large multi-architecture template matrix. Give
+          # its four parallel derivations the 32 vCPUs requested below.
+          flavor: ${{ matrix.package == 'fa2-seqused-runtime' && 'cpu-performance' || 'cpu-xl' }}
           timeout: "21600"
           script: |
             # The HF Jobs container is started with `set -x`, which would echo
