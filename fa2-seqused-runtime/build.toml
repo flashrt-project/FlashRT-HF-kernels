@@ -22,7 +22,10 @@ backend = "cuda"
 depends = ["torch", "cutlass_3_6"]
 include = ["csrc", "csrc/flash_attn"]
 cuda-minver = "12.8"
-cuda-capabilities = ["8.0", "8.6", "8.9", "9.0", "10.0", "12.0", "12.1"]
+# Build the lowest cubin target in each supported major family. CUDA cubins
+# are forward compatible within a major family, so sm80 covers 8.x and sm120
+# covers 12.x without recompiling every minor target into the fat binary.
+cuda-capabilities = ["8.0", "9.0", "10.0", "12.0"]
 src = [
   "csrc/fa2_wrapper.cu",
   "csrc/fa2_wrapper.h",

@@ -28,8 +28,9 @@
 ## Build assumptions
 
 - CUDA 12.8 or newer.
-- SM80-family FA2 forward kernels; package variants target supported SM80+
-  architectures enumerated in `build.toml`.
+- SM80-family FA2 forward kernels; package fat binaries target the lowest
+  capability in each supported major family (`sm80`, `sm90`, `sm100`, and
+  `sm120`) and rely on CUDA cubin compatibility within that major family.
 - CUTLASS is supplied by `kernel-builder` through `cutlass_3_6`.
 - SM110/Thor is not part of this package's claimed support matrix because the
   upstream FlashRT FA2 runtime currently excludes that target.

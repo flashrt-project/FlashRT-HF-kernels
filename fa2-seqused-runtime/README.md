@@ -59,6 +59,10 @@ setup helpers and must stay outside the captured hot path.
   in `[1, max_seqlen_k]`.
 - SM80 or newer, except SM110/Thor is not claimed by the upstream FlashRT FA2
   runtime at this time.
+- Published fat binaries use the lowest target in each supported major family:
+  `sm80`, `sm90`, `sm100`, and `sm120`. CUDA cubin compatibility makes `sm80`
+  cover the 8.x family (including 8.6 and 8.9) and `sm120` cover the 12.x
+  family (including 12.1).
 
 Full FlashRT model runtimes and serving pipelines are maintained at
 [LiangSu8899/FlashRT](https://github.com/LiangSu8899/FlashRT).
