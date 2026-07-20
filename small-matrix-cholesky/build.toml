@@ -1,0 +1,32 @@
+[general]
+name = "small-matrix-cholesky"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/small-matrix-cholesky"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.small_matrix_cholesky]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+# The implementation uses baseline FP32 CUDA instructions. The lowest cubin
+# target in each supported major family covers later minor capabilities in the
+# same family without inflating every artifact with redundant device images.
+cuda-capabilities = ["8.0", "9.0", "10.0", "12.0"]
+src = [
+  "csrc/cholesky_small_fp32.cu",
+  "csrc/cholesky_small_fp32.cuh",
+]

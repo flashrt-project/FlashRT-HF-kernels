@@ -369,6 +369,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `flashrt-vla-video` | V1 block | VLA, vision, video, and diffusion attention postprocess kernels that are reusable outside the FlashRT serving engine. |
 | `flashrt-nvfp4` | V1 block | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
 | `flashrt-smallm-gemm` | V1 block | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |
+| `small-matrix-cholesky` | Draft linear-algebra package | Batched FP32 Cholesky for contiguous SPD matrices with order 32, 64, or 128. |
 | `flashrt-fused-quant` | V1 block | Memory-bound fusion kernels: norm, residual, activation, and quantization. |
 | `MiniMaxAI-msa-blackwell` | Partner extension | MiniMax MSA sparse attention extension for Blackwell hardware. |
 | `vl-transformer-primitives` | Transformers/diffusers package | VLM Q/K norm + RoPE + KV-write staging and vision token pooling primitives. |
