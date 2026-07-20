@@ -41,6 +41,12 @@ constexpr int kNBlk    = kKTile / 8;
 constexpr int kDBlk    = kHeadDim / 8;
 constexpr int kVtPad   = 136;      // padded Vt row stride (bank-conflict fix)
 constexpr float kPScale = 64.f;    // P e4m3 requantisation scale
+constexpr int kQBytes = kQTile * kHeadDim;
+constexpr int kKBytes = kKTile * kHeadDim;
+constexpr int kVtBytes = kHeadDim * kVtPad;
+constexpr int kPBytes = kQTile * kKTile;
+constexpr int kSmemBytes = kQBytes + kKBytes + kVtBytes + kPBytes
+    + kKBytes + kKBytes;
 
 __device__ __forceinline__ void mma_fp8_k32(
     float c[4], uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
@@ -115,9 +121,16 @@ fmha_fp8_kernel(const __nv_fp8_e4m3* __restrict__ Q,
                 __nv_bfloat16* __restrict__ O,
                 uint8_t* __restrict__ o_fp4,
                 uint8_t* __restrict__ o_sf, float scale) {
-  __shared__ __align__(16) uint8_t Qs[kQTile * kHeadDim], Ks[kKTile * kHeadDim],
-      Vt[kHeadDim * kVtPad], Ps[kQTile * kKTile], Kraw[kKTile * kHeadDim],
-      Vraw[kKTile * kHeadDim];
+  // CUDA 12.8 caps statically allocated shared memory at 48 KiB even on
+  // Blackwell. Use the hardware opt-in dynamic allocation for this 97 KiB
+  // staging layout; every subregion remains 16-byte aligned.
+  extern __shared__ __align__(16) uint8_t smem[];
+  uint8_t* Qs = smem;
+  uint8_t* Ks = Qs + kQBytes;
+  uint8_t* Vt = Ks + kKBytes;
+  uint8_t* Ps = Vt + kVtBytes;
+  uint8_t* Kraw = Ps + kPBytes;
+  uint8_t* Vraw = Kraw + kKBytes;
   const int qt = blockIdx.x, head = blockIdx.y, kvh = head / (kQHeads / kKVHeads);
   const int t = threadIdx.x, warp = t >> 5, lane = t & 31, g = lane >> 2, tt = lane & 3;
   const int q_base = qt * kQTile;
@@ -324,8 +337,12 @@ int fmha_fp8_causal_gqa_nhd_d128(
     float softmax_scale, cudaStream_t stream) {
   if (Lq != Lk || Lq <= 0 || (Lq % kQTile) != 0) return 1;
   if (num_q_heads != kQHeads || num_kv_heads != kKVHeads) return 1;
+  static const cudaError_t attr_status = cudaFuncSetAttribute(
+      fmha_fp8_kernel<false>, cudaFuncAttributeMaxDynamicSharedMemorySize,
+      kSmemBytes);
+  if (attr_status != cudaSuccess) return 2;
   dim3 grid(Lq / kQTile, kQHeads);
-  fmha_fp8_kernel<false><<<grid, kThreads, 0, stream>>>(
+  fmha_fp8_kernel<false><<<grid, kThreads, kSmemBytes, stream>>>(
       (const __nv_fp8_e4m3*)q_fp8, (const __nv_fp8_e4m3*)k_fp8,
       (const __nv_fp8_e4m3*)v_fp8, (__nv_bfloat16*)out_bf16,
       nullptr, nullptr, softmax_scale);
@@ -339,8 +356,12 @@ int fmha_fp8_causal_gqa_nhd_d128_fp4out(
     float softmax_scale, cudaStream_t stream) {
   if (Lq != Lk || Lq <= 0 || (Lq % kQTile) != 0) return 1;
   if (num_q_heads != kQHeads || num_kv_heads != kKVHeads) return 1;
+  static const cudaError_t attr_status = cudaFuncSetAttribute(
+      fmha_fp8_kernel<true>, cudaFuncAttributeMaxDynamicSharedMemorySize,
+      kSmemBytes);
+  if (attr_status != cudaSuccess) return 2;
   dim3 grid(Lq / kQTile, kQHeads);
-  fmha_fp8_kernel<true><<<grid, kThreads, 0, stream>>>(
+  fmha_fp8_kernel<true><<<grid, kThreads, kSmemBytes, stream>>>(
       (const __nv_fp8_e4m3*)q_fp8, (const __nv_fp8_e4m3*)k_fp8,
       (const __nv_fp8_e4m3*)v_fp8, nullptr,
       (uint8_t*)out_fp4, (uint8_t*)out_sf, softmax_scale);
