@@ -54,11 +54,7 @@ def _fake(
     weight_stride,
     weight_scale_stride,
 ):
-    if (
-        input.ndim != 2
-        or weight.ndim != 3
-        or output.shape != (input.shape[0], weight.shape[1])
-    ):
+    if input.ndim != 2 or weight.ndim != 3:
         raise RuntimeError("invalid grouped GEMM tensor shapes")
     return torch.empty(
         (input.shape[0], weight.shape[1]), device=input.device, dtype=torch.bfloat16

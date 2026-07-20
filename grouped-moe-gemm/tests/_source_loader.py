@@ -1,62 +1,12 @@
 from __future__ import annotations
+import importlib.util
 import os
 from pathlib import Path
+import sys
 import torch
+import types
 
 PACKAGE = Path(__file__).resolve().parents[1]
-
-
-class SourceOps:
-    def __init__(self, ns, functional):
-        self.ops = getattr(torch.ops, ns)
-        self.functional = functional
-
-    def grouped_nvfp4_gemm_bf16(
-        self,
-        a,
-        w,
-        sa,
-        sw,
-        alpha,
-        experts,
-        *,
-        tile_rows,
-        input_scale_stride=0,
-        weight_stride=None,
-        weight_scale_stride=None,
-        out=None,
-    ):
-        weight_stride = w[0].numel() if weight_stride is None else weight_stride
-        weight_scale_stride = (
-            sw[0].numel() if weight_scale_stride is None else weight_scale_stride
-        )
-        if out is None:
-            return self.functional(
-                a,
-                w,
-                sa,
-                sw,
-                alpha,
-                experts,
-                int(tile_rows),
-                int(input_scale_stride),
-                int(weight_stride),
-                int(weight_scale_stride),
-            )
-        self.ops.grouped_nvfp4_gemm_bf16_out(
-            a,
-            w,
-            sa,
-            sw,
-            alpha,
-            experts,
-            tile_rows,
-            input_scale_stride,
-            weight_stride,
-            weight_scale_stride,
-            out,
-        )
-        return out
 
 
 def load_source_ops(registration_include=None):
@@ -88,55 +38,27 @@ def load_source_ops(registration_include=None):
         is_python_module=False,
         verbose=False,
     )
-    raw = getattr(torch.ops, ns).grouped_nvfp4_gemm_bf16_out
-    wns = "grouped_moe_gemm_source_wrapper"
+    # Exercise the shipped Python wrapper, including its custom-op fake
+    # registration, against the source-built low-level namespace. This keeps
+    # source tests from silently validating a test-only wrapper that differs
+    # from the Hub artifact.
+    package_name = "grouped_moe_gemm_source_public"
+    ops_module = types.ModuleType(f"{package_name}._ops")
+    ops_module.ops = getattr(torch.ops, ns)
+    ops_module.add_op_namespace_prefix = (
+        lambda name: f"{package_name}::{name}"
+    )
+    sys.modules[ops_module.__name__] = ops_module
 
-    @torch.library.custom_op(f"{wns}::run", mutates_args=(), device_types="cuda")
-    def functional(
-        a: torch.Tensor,
-        w: torch.Tensor,
-        sa: torch.Tensor,
-        sw: torch.Tensor,
-        alpha: torch.Tensor,
-        experts: torch.Tensor,
-        tile_rows: int,
-        input_scale_stride: int,
-        weight_stride: int,
-        weight_scale_stride: int,
-    ) -> torch.Tensor:
-        out = torch.empty(
-            (a.shape[0], w.shape[1]), device=a.device, dtype=torch.bfloat16
-        )
-        raw(
-            a,
-            w,
-            sa,
-            sw,
-            alpha,
-            experts,
-            tile_rows,
-            input_scale_stride,
-            weight_stride,
-            weight_scale_stride,
-            out,
-        )
-        return out
-
-    @torch.library.register_fake(f"{wns}::run")
-    def fake(
-        a,
-        w,
-        sa,
-        sw,
-        alpha,
-        experts,
-        tile_rows,
-        input_scale_stride,
-        weight_stride,
-        weight_scale_stride,
-    ):
-        return torch.empty(
-            (a.shape[0], w.shape[1]), device=a.device, dtype=torch.bfloat16
-        )
-
-    return SourceOps(ns, functional)
+    package_dir = PACKAGE / "torch-ext/grouped_moe_gemm"
+    spec = importlib.util.spec_from_file_location(
+        package_name,
+        package_dir / "__init__.py",
+        submodule_search_locations=[str(package_dir)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("failed to load packaged grouped MoE wrapper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[package_name] = module
+    spec.loader.exec_module(module)
+    return module
