@@ -1,0 +1,84 @@
+[general]
+name = "fa2-seqused-runtime"
+license = "BSD-3-Clause"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/fa2-seqused-runtime"
+
+[torch]
+include = ["csrc"]
+src = [
+  "torch-ext/torch_binding.cpp",
+  "torch-ext/torch_binding.h",
+]
+
+[kernel.fa2_seqused_runtime]
+backend = "cuda"
+depends = ["torch", "cutlass_3_6"]
+include = ["csrc", "csrc/flash_attn"]
+cuda-minver = "12.8"
+# Build the lowest cubin target in each supported major family. CUDA cubins
+# are forward compatible within a major family, so sm80 covers 8.x and sm120
+# covers 12.x without recompiling every minor target into the fat binary.
+cuda-capabilities = ["8.0", "9.0", "10.0", "12.0"]
+src = [
+  "csrc/fa2_wrapper.cu",
+  "csrc/fa2_wrapper.h",
+  "csrc/fa2_wrapper_causal.cu",
+  "csrc/flash_attn/alibi.h",
+  "csrc/flash_attn/block_info.h",
+  "csrc/flash_attn/dropout.h",
+  "csrc/flash_attn/flash.h",
+  "csrc/flash_attn/flash_fwd_kernel.h",
+  "csrc/flash_attn/flash_fwd_launch_template.h",
+  "csrc/flash_attn/hardware_info.h",
+  "csrc/flash_attn/kernel_traits.h",
+  "csrc/flash_attn/mask.h",
+  "csrc/flash_attn/namespace_config.h",
+  "csrc/flash_attn/philox.cuh",
+  "csrc/flash_attn/philox_unpack.cuh",
+  "csrc/flash_attn/rotary.h",
+  "csrc/flash_attn/softmax.h",
+  "csrc/flash_attn/static_switch.h",
+  "csrc/flash_attn/utils.h",
+  "csrc/flash_attn/flash_fwd_hdim64_fp16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim64_bf16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim96_fp16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim96_bf16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim128_fp16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim128_bf16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim256_fp16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim256_bf16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim96_fp16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim96_bf16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim128_fp16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim128_bf16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim256_fp16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim256_bf16_sm80.cu",
+  "csrc/flash_attn/flash_fwd_hdim128_bf16_sm80_causal.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim128_bf16_sm80_causal.cu",
+  "csrc/flash_attn/flash_fwd_hdim256_bf16_sm80_causal.cu",
+  "csrc/flash_attn/flash_fwd_split_hdim256_bf16_sm80_causal.cu",
+]
+cuda-flags = [
+  "-O3",
+  "--use_fast_math",
+  "--expt-relaxed-constexpr",
+  "--expt-extended-lambda",
+  "-U__CUDA_NO_HALF_OPERATORS__",
+  "-U__CUDA_NO_HALF_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT16_OPERATORS__",
+  "-U__CUDA_NO_BFLOAT162_OPERATORS__",
+  "-DFA2_HAS_HDIM_64=1",
+  "-DFA2_HAS_HDIM_96=1",
+  "-DFA2_HAS_HDIM_128=1",
+  "-DFA2_HAS_HDIM_256=1",
+  "-DFA2_HAS_FP16=1",
+  "-DFA2_HAS_BF16=1",
+]

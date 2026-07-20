@@ -51,6 +51,7 @@ on:
           - flashrt-flex-attention-train
           - int4-blackwell
           - weight-only-ffn
+          - fa2-seqused-runtime
 
 permissions:
   contents: read
@@ -111,6 +112,7 @@ jobs:
           - flashrt-flex-attention-train
           - int4-blackwell
           - weight-only-ffn
+          - fa2-seqused-runtime
 
     steps:
       - uses: actions/checkout@v4
