@@ -13,6 +13,8 @@
 
 - [x] Source-extension smoke correctness on A800: 11/11
 - [x] Source-extension full correctness on A800: 14/14
+- [x] Maintainer source correctness on RTX 5090 after promotion: 26/26
+- [x] CUDA Graph replay and `torch.compile(fullgraph=True)` source gates
 - [x] Rejected dtype, shape, stride, alias, and device cases
 - [x] Non-default CUDA device test on the second A800
 - [x] Package-specific A800 benchmark: 1.521x geometric-mean speedup
@@ -21,7 +23,7 @@
 - [ ] `kernel-builder build small-matrix-cholesky`
 - [ ] `kernel-builder check-abi small-matrix-cholesky`
 - [ ] Installed-artifact correctness
-- [ ] Maintainer decision on a FlashRT-real benchmark family
+- [x] Generic and workload-real GPU MODE shape families are documented
 
-The package uses `build.toml.draft` until the remaining promotion gates are
-resolved.
+The package is promoted to `build.toml`; artifact build, ABI, installed tests,
+and cold Hub loading remain release-time gates.

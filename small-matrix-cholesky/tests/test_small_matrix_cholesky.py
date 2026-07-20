@@ -120,7 +120,18 @@ def run_validation_cases(ops, device: torch.device) -> int:
 
 def run(ops, mode: str) -> int:
     device = torch.device("cuda", 0)
-    shapes = [(7, 32, 32), (5, 64, 64), (3, 128, 128)]
+    shapes = [
+        (1, 32, 32),
+        (2, 32, 32),
+        (3, 32, 32),
+        (4, 32, 32),
+        (5, 32, 32),
+        (1, 64, 64),
+        (2, 64, 64),
+        (3, 64, 64),
+        (1, 128, 128),
+        (3, 128, 128),
+    ]
     if mode == "full":
         shapes += [
             (2, 3, 32, 32),
@@ -141,6 +152,28 @@ def run(ops, mode: str) -> int:
             check_factor(f"shape={shape}", input, output)
             count += 1
         count += run_validation_cases(ops, device)
+
+        graph_input = make_spd((7, 64, 64), device)
+        graph_output = torch.empty_like(graph_input)
+        graph = torch.cuda.CUDAGraph()
+        ops.cholesky_small_fp32(graph_input, out=graph_output)
+        torch.cuda.synchronize(device)
+        with torch.cuda.graph(graph):
+            ops.cholesky_small_fp32(graph_input, out=graph_output)
+        graph.replay()
+        torch.cuda.synchronize(device)
+        check_factor("cuda-graph", graph_input, graph_output)
+        count += 1
+
+        compiled = torch.compile(
+            lambda value: ops.cholesky_small_fp32(value),
+            fullgraph=True,
+        )
+        compile_input = make_spd((7, 64, 64), device)
+        compile_output = compiled(compile_input)
+        torch.cuda.synchronize(device)
+        check_factor("torch-compile-fullgraph", compile_input, compile_output)
+        count += 1
 
     if torch.cuda.device_count() > 1:
         second = torch.device("cuda", 1)

@@ -30,7 +30,7 @@ as `L @ L.T` within FP32 rounding error.
 
 The implementation uses standard CUDA FP32 instructions. The `n=128` path
 requires at least 66,048 bytes of opt-in dynamic shared memory per block. The
-draft build matrix targets CUDA compute capabilities 8.0 and newer.
+build matrix targets CUDA major families 8, 9, 10, and 12.
 
 ## Limitations
 
@@ -39,8 +39,8 @@ draft build matrix targets CUDA compute capabilities 8.0 and newer.
   precondition.
 - The package does not cache inputs or outputs and does not use reduced-
   precision Tensor Core updates.
-- Package promotion remains pending a Kernel Hub builder build/ABI check and a
-  maintainer decision on the absence of a current FlashRT model call site.
+- This focused package is a generic batched linear-algebra primitive; it does
+  not require a model-specific FlashRT call site.
 
 ## License
 

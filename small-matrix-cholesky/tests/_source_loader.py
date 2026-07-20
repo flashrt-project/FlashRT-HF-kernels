@@ -69,4 +69,7 @@ def load_source_ops(registration_include: str | None) -> SourceOps:
         is_python_module=False,
         verbose=False,
     )
+    torch.library.register_fake(
+        f"{namespace}::cholesky_small_fp32_out"
+    )(lambda input, output: None)
     return SourceOps(namespace)

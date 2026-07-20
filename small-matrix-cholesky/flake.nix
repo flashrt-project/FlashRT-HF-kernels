@@ -2,7 +2,7 @@
   description = "Flake for FlashRT small-matrix Cholesky kernels";
 
   inputs = {
-    kernel-builder.url = "github:huggingface/kernels/432702bfbfbb17d3a1bd2c2743d004e21e769ab7";
+    kernel-builder.url = "github:huggingface/kernels";
   };
 
   outputs =
