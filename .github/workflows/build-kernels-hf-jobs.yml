@@ -47,6 +47,7 @@ on:
       - "int4-blackwell/**"
       - "weight-only-ffn/**"
       - "fa2-seqused-runtime/**"
+      - "small-matrix-cholesky/**"
   workflow_dispatch:
     inputs:
       package:
@@ -98,6 +99,7 @@ on:
           - int4-blackwell
           - weight-only-ffn
           - fa2-seqused-runtime
+          - small-matrix-cholesky
 
 permissions:
   contents: read
@@ -156,6 +158,7 @@ jobs:
           - int4-blackwell
           - weight-only-ffn
           - fa2-seqused-runtime
+          - small-matrix-cholesky
 
     steps:
       - uses: actions/checkout@v4

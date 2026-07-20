@@ -13,13 +13,13 @@
 
 - [x] Source-extension smoke correctness on A800: 11/11
 - [x] Source-extension full correctness on A800: 14/14
-- [x] Maintainer source correctness on RTX 5090 after promotion: 26/26
+- [x] Maintainer source correctness on RTX 5090 after promotion: 23/23
 - [x] CUDA Graph replay and `torch.compile(fullgraph=True)` source gates
 - [x] Rejected dtype, shape, stride, alias, and device cases
 - [x] Non-default CUDA device test on the second A800
 - [x] Package-specific A800 benchmark: 1.521x geometric-mean speedup
 - [x] Repository `prebuild_check.py` layout check
-- [ ] `kernel-builder-docker check-config .`
+- [x] Current upstream `kernel-builder check-config .`
 - [ ] `kernel-builder build small-matrix-cholesky`
 - [ ] `kernel-builder check-abi small-matrix-cholesky`
 - [ ] Installed-artifact correctness

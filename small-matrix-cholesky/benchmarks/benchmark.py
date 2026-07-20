@@ -81,7 +81,25 @@ def main() -> int:
     shapes = [(4096, 32), (1024, 64), (256, 128)]
     candidate_times: list[float] = []
     baseline_times: list[float] = []
-    print("batch,n,candidate_ms,pytorch_ms,speedup,candidate_tflops,io_gbps")
+    compiled_times: list[float] = []
+
+    def pytorch_reference(
+        input: torch.Tensor,
+        output: torch.Tensor,
+        info: torch.Tensor,
+    ) -> torch.Tensor:
+        torch.linalg.cholesky_ex(
+            input,
+            check_errors=False,
+            out=(output, info),
+        )
+        return output
+
+    compiled_reference = torch.compile(pytorch_reference, fullgraph=True)
+    print(
+        "batch,n,candidate_ms,pytorch_eager_ms,pytorch_compile_ms,"
+        "speedup_eager,speedup_compile,candidate_tflops,io_gbps"
+    )
     for batch, n in shapes:
         input = make_spd(batch, n)
         candidate_output = torch.empty_like(input)
@@ -92,14 +110,14 @@ def main() -> int:
             ops.cholesky_small_fp32(input, out=candidate_output)
 
         def baseline() -> None:
-            torch.linalg.cholesky_ex(
-                input,
-                check_errors=False,
-                out=(baseline_output, info),
-            )
+            pytorch_reference(input, baseline_output, info)
+
+        def baseline_compiled() -> None:
+            compiled_reference(input, baseline_output, info)
 
         candidate()
         baseline()
+        baseline_compiled()
         torch.cuda.synchronize()
         torch.testing.assert_close(
             candidate_output,
@@ -110,15 +128,20 @@ def main() -> int:
 
         candidate_ms = median_ms(candidate, args.warmup, args.iterations)
         baseline_ms = median_ms(baseline, args.warmup, args.iterations)
+        compiled_ms = median_ms(
+            baseline_compiled, args.warmup, args.iterations
+        )
         flops = batch * n**3 / 3.0
         tflops = flops / (candidate_ms * 1e-3) / 1e12
         io_bytes = 2 * batch * n * n * 4
         io_gbps = io_bytes / (candidate_ms * 1e-3) / 1e9
         candidate_times.append(candidate_ms)
         baseline_times.append(baseline_ms)
+        compiled_times.append(compiled_ms)
         print(
             f"{batch},{n},{candidate_ms:.6f},{baseline_ms:.6f},"
-            f"{baseline_ms / candidate_ms:.3f},{tflops:.3f},{io_gbps:.3f}"
+            f"{compiled_ms:.6f},{baseline_ms / candidate_ms:.3f},"
+            f"{compiled_ms / candidate_ms:.3f},{tflops:.3f},{io_gbps:.3f}"
         )
 
     candidate_geomean = math.exp(
@@ -129,9 +152,19 @@ def main() -> int:
         sum(math.log(value) for value in baseline_times)
         / len(baseline_times)
     )
+    compiled_geomean = math.exp(
+        sum(math.log(value) for value in compiled_times)
+        / len(compiled_times)
+    )
     print(f"candidate_geomean_ms={candidate_geomean:.6f}")
     print(f"pytorch_geomean_ms={baseline_geomean:.6f}")
-    print(f"geomean_speedup={baseline_geomean / candidate_geomean:.3f}")
+    print(f"pytorch_compile_geomean_ms={compiled_geomean:.6f}")
+    print(
+        f"geomean_speedup_eager={baseline_geomean / candidate_geomean:.3f}"
+    )
+    print(
+        f"geomean_speedup_compile={compiled_geomean / candidate_geomean:.3f}"
+    )
     return 0
 
 
