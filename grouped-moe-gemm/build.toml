@@ -1,0 +1,23 @@
+[general]
+name = "grouped-moe-gemm"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+[general.cuda]
+minver = "12.8"
+[general.hub]
+repo-id = "flashrt/grouped-moe-gemm"
+[torch]
+include = ["csrc"]
+src = ["torch-ext/torch_binding.cpp", "torch-ext/torch_binding.h"]
+[kernel.grouped_moe_gemm]
+backend = "cuda"
+depends = ["torch", "cutlass_4_0"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a"]
+src = [
+  "csrc/moe_m16_mma_sm120.cu", "csrc/moe_m16_mma_sm120.cuh",
+  "csrc/moe_m64_mma_sm120.cu", "csrc/moe_m64_mma_sm120.cuh",
+  "csrc/moe_blocktile_mma_sm120.cu", "csrc/moe_blocktile_mma_sm120.cuh",
+]

@@ -48,6 +48,9 @@ on:
       - "weight-only-ffn/**"
       - "fa2-seqused-runtime/**"
       - "small-matrix-cholesky/**"
+      - "fp8-prefill-attention-blackwell/**"
+      - "grouped-moe-gemm/**"
+      - "smallm-ffn-megakernels-blackwell/**"
   workflow_dispatch:
     inputs:
       package:
@@ -100,6 +103,9 @@ on:
           - weight-only-ffn
           - fa2-seqused-runtime
           - small-matrix-cholesky
+          - fp8-prefill-attention-blackwell
+          - grouped-moe-gemm
+          - smallm-ffn-megakernels-blackwell
 
 permissions:
   contents: read
@@ -159,6 +165,9 @@ jobs:
           - weight-only-ffn
           - fa2-seqused-runtime
           - small-matrix-cholesky
+          - fp8-prefill-attention-blackwell
+          - grouped-moe-gemm
+          - smallm-ffn-megakernels-blackwell
 
     steps:
       - uses: actions/checkout@v4

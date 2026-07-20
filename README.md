@@ -370,6 +370,9 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `flashrt-nvfp4` | V1 block | NVFP4/FP4 data movement, SFA/SFB layout, low-bit GEMM, and fused epilogues. |
 | `flashrt-smallm-gemm` | V1 block | Decode-oriented small-M GEMM/GEMV and split-K primitives with generic shape-specialized APIs. |
 | `small-matrix-cholesky` | Draft linear-algebra package | Batched FP32 Cholesky for contiguous SPD matrices with order 32, 64, or 128. |
+| `fp8-prefill-attention-blackwell` | Attention package | Native FP8 causal GQA prefill attention for Hq/Hkv=32/8, D=128 and tuned S>=256 Blackwell rows. |
+| `grouped-moe-gemm` | Transformers package | Grouped NVFP4 W4A4 prefill GEMM with M16, M64 and 64x64 block-tile dispatch. |
+| `smallm-ffn-megakernels-blackwell` | Region megakernel package | Complete small-M FP8 GELU FFN regions with fused quantization, bias, gate and residual epilogues. |
 | `flashrt-fused-quant` | V1 block | Memory-bound fusion kernels: norm, residual, activation, and quantization. |
 | `MiniMaxAI-msa-blackwell` | Partner extension | MiniMax MSA sparse attention extension for Blackwell hardware. |
 | `vl-transformer-primitives` | Transformers/diffusers package | VLM Q/K norm + RoPE + KV-write staging and vision token pooling primitives. |

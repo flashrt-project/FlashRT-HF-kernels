@@ -1,0 +1,23 @@
+[general]
+name = "smallm-ffn-megakernels-blackwell"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+[general.cuda]
+minver = "12.8"
+[general.hub]
+repo-id = "flashrt/smallm-ffn-megakernels-blackwell"
+[torch]
+include = ["csrc"]
+src = ["torch-ext/torch_binding.cpp", "torch-ext/torch_binding.h"]
+[kernel.smallm_ffn_megakernels_blackwell]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a"]
+src = [
+ "csrc/action_ffn_megakernel_v6t_sm120.cu", "csrc/action_ffn_megakernel_v6t_sm120.cuh",
+ "csrc/und_ffn_megakernel_v5t_sm120.cu", "csrc/und_ffn_megakernel_v5t_sm120.cuh",
+ "csrc/und_ffn_megakernel_v5split_stage3_sm120.cu", "csrc/und_ffn_megakernel_v5split_stage3_sm120.cuh",
+]
