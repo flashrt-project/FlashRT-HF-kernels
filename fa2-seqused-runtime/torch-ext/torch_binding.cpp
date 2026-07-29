@@ -33,7 +33,9 @@ int checked_int(int64_t value, const char* name) {
 }
 
 bool supported_head_dim(int64_t d) {
-  return d == 64 || d == 96 || d == 128 || d == 256;
+  // FA2 pads logical dimensions into the compiled 64/96/128/256 buckets.
+  // The vectorized Q/K/V loads require an eight-element boundary.
+  return d > 0 && d <= 256 && d % 8 == 0;
 }
 
 void check_cuda_tensor(const torch::Tensor& x, const char* name) {
@@ -47,7 +49,7 @@ void check_bshd(const torch::Tensor& x, const char* name) {
   TORCH_CHECK(x.size(0) > 0 && x.size(1) > 0 && x.size(2) > 0,
               name, " dimensions must be positive");
   TORCH_CHECK(supported_head_dim(x.size(3)), name,
-              " head_dim must be one of {64, 96, 128, 256}");
+              " head_dim must be a positive multiple of 8 at most 256");
   TORCH_CHECK(x.stride(3) == 1, name, " last dimension must be contiguous");
   TORCH_CHECK(reinterpret_cast<uintptr_t>(x.data_ptr()) % 16 == 0,
               name, " base pointer must be 16-byte aligned");
@@ -152,8 +154,6 @@ void check_workspace(const torch::Tensor& q, const Shape& shape,
                 "num_sms must be zero when split-KV workspace is absent");
     return;
   }
-  TORCH_CHECK(shape.head_dim != 64,
-              "split-KV is not built for head_dim=64");
   const auto& lse = *lse_accum;
   const auto& out = *out_accum;
   check_cuda_tensor(lse, "softmax_lse_accum");

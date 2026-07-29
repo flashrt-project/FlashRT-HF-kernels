@@ -19,6 +19,8 @@
 
 - Rewritten include paths to be package-local.
 - Replaced raw pointer/stream Python bindings with validated Tensor operators.
+- Restored the native logical-head-dimension dispatch contract: 8-aligned
+  dimensions through 256 map to compiled 64/96/128/256 buckets.
 - Added explicit unsupported-contract errors before native dispatch.
 - Added explicit vector-alignment checks for padded BSHD layouts.
 - Added setup helpers for exact split-KV workspace allocation.

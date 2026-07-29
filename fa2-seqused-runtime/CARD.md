@@ -47,6 +47,11 @@ fa2.forward_seqused_static(
 The split-KV LSE reset is issued on the current stream and is captured with the
 kernel. Updating `used` on device before replay changes the valid K/V length.
 
+Non-causal FP16/BF16 accepts logical head dimensions divisible by 8 through
+256. FlashRT maps them to compiled D=64/96/128/256 FA2 buckets internally. For
+example, GROOT DiT D=48 and SigLIP D=72 run directly without external tensor
+padding; the softmax scale continues to use the logical dimension.
+
 Causal calls use FlashAttention's bottom-right-aligned mask when query and KV
 lengths differ. This is the chunked-prefill/verify convention, not PyTorch
 SDPA's top-left `is_causal=True` convention for rectangular inputs.

@@ -47,11 +47,16 @@ setup helpers and must stay outside the captured hot path.
 ## Contract
 
 - CUDA inference forward only; no backward or dropout.
-- Non-causal: FP16/BF16, head dimension 64/96/128/256.
+- Non-causal: FP16/BF16, logical head dimension divisible by 8 and at most
+  256. The runtime dispatches into compiled 64/96/128/256 buckets while
+  preserving the logical dimension and its softmax scale. This includes
+  production D=48 DiT and D=72 SigLIP shapes without external padding.
 - Causal: BF16, head dimension 128/256.
 - For `Sq != Sk`, causal masking uses FlashAttention's bottom-right alignment:
   query row `i` may attend through KV column `i + Sk - Sq`.
-- Split-KV: head dimension 96/128/256.
+- Split-KV: all supported non-causal logical dimensions. Accumulator storage
+  is rounded to the next multiple of 32 as required by FA2. D<=64 has its own
+  split-KV specialization rather than being routed through the D=96 bucket.
 - Query heads must be divisible by KV heads.
 - Last dimension must be contiguous. Padded layouts are supported when batch,
   row, and head strides preserve the kernel's 16-byte vector alignment.

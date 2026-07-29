@@ -163,7 +163,6 @@ jobs:
           - flashrt-flex-attention-train
           - int4-blackwell
           - weight-only-ffn
-          - fa2-seqused-runtime
           - small-matrix-cholesky
           - fp8-prefill-attention-blackwell
           - grouped-moe-gemm
@@ -217,9 +216,7 @@ jobs:
           # HF Jobs billing/credits are attached to the runner namespace.
           # Artifacts are still uploaded to flashrt/<package> via --repo-id below.
           namespace: liangsu9988
-          # FA2 instantiates a large multi-architecture template matrix. Give
-          # its four parallel derivations the 32 vCPUs requested below.
-          flavor: ${{ matrix.package == 'fa2-seqused-runtime' && 'cpu-performance' || 'cpu-xl' }}
+          flavor: cpu-xl
           timeout: "21600"
           script: |
             # The HF Jobs container is started with `set -x`, which would echo
@@ -238,3 +235,85 @@ jobs:
               --max-jobs 4 \
               --cores 8 \
               --repo-id "flashrt/${{ matrix.package }}"
+
+  build-fa2:
+    name: Build fa2-seqused-runtime (${{ matrix.variant }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Each FA2 derivation instantiates the same large template set. Building
+      # all four inside one HF Job previously exhausted the remote job after
+      # roughly two hours. Serialize independently uploadable variants so a
+      # failed toolchain target can be retried without discarding the others.
+      max-parallel: 1
+      matrix:
+        variant:
+          - torch211-cxx11-cu128-x86_64-linux
+          - torch211-cxx11-cu130-x86_64-linux
+          - torch212-cxx11-cu130-x86_64-linux
+          - torch212-cxx11-cu132-x86_64-linux
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+        if: github.event_name == 'push' || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime'
+
+      - name: Detect FA2 changes
+        id: changes
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" > /tmp/changed-files.txt; then
+            git diff --name-only HEAD~1 HEAD > /tmp/changed-files.txt
+          fi
+          if grep -qE "^fa2-seqused-runtime/" /tmp/changed-files.txt; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ensure FA2 Kernel Hub repo exists
+        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime'
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade "huggingface_hub>=1.1.0"
+          python - <<'PY'
+          import os
+          from huggingface_hub import HfApi
+
+          HfApi(token=os.environ["HF_TOKEN"]).create_repo(
+              repo_id="flashrt/fa2-seqused-runtime",
+              repo_type="kernel",
+              exist_ok=True,
+          )
+          PY
+
+      - name: Build and upload FA2 variant via HF Jobs
+        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime'
+        uses: huggingface/kernel-builder-job@main
+        with:
+          token: ${{ secrets.HF_TOKEN }}
+          namespace: liangsu9988
+          flavor: cpu-performance
+          timeout: "10800"
+          script: |
+            set +x
+            export HF_TOKEN="${{ secrets.HF_TOKEN }}"
+            export GIT_LFS_SKIP_SMUDGE=1
+            export DEBUG=0
+
+            git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
+            cd FlashRT-HF-kernels
+            git checkout "${{ github.sha }}"
+            cd fa2-seqused-runtime
+
+            nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
+              --variant "${{ matrix.variant }}" \
+              --max-jobs 1 \
+              --cores 32 \
+              --repo-id "flashrt/fa2-seqused-runtime"

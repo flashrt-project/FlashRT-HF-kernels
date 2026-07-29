@@ -193,9 +193,7 @@ static void dispatch_hdim(int head_dim, int num_splits,
         }
     };
     (void)do_dispatch;  // silence unused warning when all hdims are gated out
-    if (head_dim > 0 && head_dim <= 64 && num_splits <= 1) {
-        // hd64 (Qwen3-VL 2B vision) builds only the no-split path; any
-        // split-KV request falls through to the hd96 bucket below.
+    if (head_dim > 0 && head_dim <= 64) {
 #ifdef FA2_HAS_HDIM_64
         do_dispatch(std::integral_constant<int, 64>{});
 #else

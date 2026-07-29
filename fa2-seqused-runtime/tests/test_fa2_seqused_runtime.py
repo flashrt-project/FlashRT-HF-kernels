@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from fa2_seqused_runtime import (
+    SUPPORTED_HEAD_DIMS,
     allocate_outputs,
     allocate_workspace,
     forward,
@@ -53,7 +54,7 @@ def _assert_close(actual: torch.Tensor, expected: torch.Tensor) -> None:
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("head_dim", [64, 96, 128, 256])
+@pytest.mark.parametrize("head_dim", [48, 64, 72, 80, 96, 128, 256])
 @pytest.mark.parametrize(
     "shape",
     [
@@ -71,6 +72,18 @@ def test_noncausal_full_matrix(dtype, head_dim, shape):
     actual = forward(q, k, v, use_split_kv=False)
     expected = _reference(q, k, v)
     _assert_close(actual, expected)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("head_dim", SUPPORTED_HEAD_DIMS)
+def test_all_aligned_logical_head_dims(dtype, head_dim):
+    q = torch.randn(1, 7, 4, head_dim, device="cuda", dtype=dtype) * 0.5
+    k = torch.randn(1, 13, 2, head_dim, device="cuda", dtype=dtype) * 0.5
+    v = torch.randn_like(k)
+    _assert_close(
+        forward(q, k, v, use_split_kv=False),
+        _reference(q, k, v),
+    )
 
 
 @pytest.mark.parametrize("head_dim", [128, 256])
@@ -111,13 +124,14 @@ def test_device_seqused_per_batch():
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("head_dim", [96, 128, 256])
+@pytest.mark.parametrize("head_dim", [48, 64, 72, 96, 128, 256])
 def test_split_kv_noncausal(dtype, head_dim):
     q = torch.randn(1, 1, 8, head_dim, device="cuda", dtype=dtype) * 0.5
     k = torch.randn(1, 4096, 2, head_dim, device="cuda", dtype=dtype) * 0.5
     v = torch.randn_like(k)
     workspace = allocate_workspace(q, k)
     assert workspace is not None and workspace.num_splits > 1
+    assert workspace.out_accum.shape[-1] == (head_dim + 31) & ~31
     out, lse = allocate_outputs(q)
     forward_static(q, k, v, out=out, softmax_lse=lse, workspace=workspace)
     _assert_close(out, _reference(q, k, v))
@@ -182,7 +196,7 @@ def test_torch_compile_trace():
     _assert_close(actual, _reference(q, k, v))
 
 
-@pytest.mark.parametrize("bad_dim", [32, 80, 192])
+@pytest.mark.parametrize("bad_dim", [7, 44, 260])
 def test_rejects_unbuilt_head_dim(bad_dim):
     q = torch.randn(1, 4, 4, bad_dim, device="cuda", dtype=torch.bfloat16)
     k = torch.randn(1, 4, 4, bad_dim, device="cuda", dtype=torch.bfloat16)
@@ -193,18 +207,13 @@ def test_rejects_unbuilt_head_dim(bad_dim):
         forward_static(q, k, v, out=out, softmax_lse=lse)
 
 
-def test_rejects_fp16_causal_and_split_hdim64():
+def test_rejects_fp16_causal():
     q = torch.randn(1, 4, 4, 128, device="cuda", dtype=torch.float16)
     k = torch.randn(1, 4, 4, 128, device="cuda", dtype=torch.float16)
     v = torch.randn_like(k)
     out, lse = allocate_outputs(q)
     with pytest.raises(RuntimeError, match="causal v1 supports bf16"):
         forward_static(q, k, v, out=out, softmax_lse=lse, causal=True)
-
-    q64 = torch.randn(1, 1, 4, 64, device="cuda", dtype=torch.bfloat16)
-    k64 = torch.randn(1, 4096, 4, 64, device="cuda", dtype=torch.bfloat16)
-    assert allocate_workspace(q64, k64) is None
-
 
 def test_rejects_misaligned_head_stride():
     storage = torch.randn(1, 8, 4, 129, device="cuda", dtype=torch.bfloat16)

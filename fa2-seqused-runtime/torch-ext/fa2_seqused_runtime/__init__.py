@@ -11,8 +11,9 @@ import torch
 from ._ops import add_op_namespace_prefix, ops
 
 
-SUPPORTED_HEAD_DIMS = (64, 96, 128, 256)
-SPLIT_HEAD_DIMS = (96, 128, 256)
+SUPPORTED_HEAD_DIMS = tuple(range(8, 257, 8))
+COMPILED_HEAD_DIM_BUCKETS = (64, 96, 128, 256)
+SPLIT_HEAD_DIMS = SUPPORTED_HEAD_DIMS
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ def recommended_num_splits(
     if any(int(v) <= 0 for v in values):
         raise ValueError("all shape values and num_sms must be positive")
     if int(head_dim) not in SUPPORTED_HEAD_DIMS:
-        raise ValueError(f"head_dim must be one of {SUPPORTED_HEAD_DIMS}")
+        raise ValueError("head_dim must be a positive multiple of 8 at most 256")
     block_n = 256 if head_dim <= 64 else (128 if head_dim <= 128 else 64)
     n_blocks = _ceildiv(seqlen_k, block_n)
     m_blocks = _ceildiv(seqlen_q, 64)
@@ -82,8 +83,8 @@ def allocate_workspace(
 
     if q.ndim != 4 or k.ndim != 4:
         raise ValueError("q and k must have shape (B, S, H, D)")
-    if q.shape[-1] not in SPLIT_HEAD_DIMS:
-        return None
+    if q.shape[-1] not in SUPPORTED_HEAD_DIMS:
+        raise ValueError("head_dim must be a positive multiple of 8 at most 256")
     if num_sms is None:
         num_sms = torch.cuda.get_device_properties(q.device).multi_processor_count
     splits = recommended_num_splits(
@@ -96,8 +97,9 @@ def allocate_workspace(
         device=q.device,
         dtype=torch.float32,
     )
+    d_rounded = (q.shape[3] + 31) & ~31
     out = torch.empty(
-        (splits, q.shape[0], q.shape[2], q.shape[1], q.shape[3]),
+        (splits, q.shape[0], q.shape[2], q.shape[1], d_rounded),
         device=q.device,
         dtype=torch.float32,
     )
@@ -273,6 +275,7 @@ def forward(
 
 __all__ = [
     "FA2Workspace",
+    "COMPILED_HEAD_DIM_BUCKETS",
     "SPLIT_HEAD_DIMS",
     "SUPPORTED_HEAD_DIMS",
     "allocate_outputs",
