@@ -55,7 +55,7 @@ def _qk_rmsnorm_rope_bf16_fake(
     weight: torch.Tensor,
     cos: torch.Tensor,
     sin: torch.Tensor,
-    eps: float,
+    eps: float = 1e-6,
 ) -> None:
     if qk.dim() != 3 or weight.shape != (qk.shape[2],) or cos.shape != (qk.shape[0], qk.shape[2]) or sin.shape != cos.shape:
         raise RuntimeError("qk_rmsnorm_rope_bf16_ expects qk (rows, heads, dim), weight (dim,), cos/sin (rows, dim)")

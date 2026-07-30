@@ -208,6 +208,24 @@ def run(ops, mode: str) -> int:
     return count
 
 
+def run_compile_default_eps(ops) -> int:
+    seq, heads, dim = 17, 4, 64
+    x = torch.randn((seq, heads, dim), device="cuda", dtype=torch.bfloat16)
+    weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+    cos = torch.randn((seq, dim), device="cuda", dtype=torch.bfloat16)
+    sin = torch.randn((seq, dim), device="cuda", dtype=torch.bfloat16)
+    ref = qk_rmsnorm_rope_ref(x, weight, cos, sin)
+
+    def invoke(qk, rms_weight, rope_cos, rope_sin):
+        return ops.qk_rmsnorm_rope_bf16_(qk, rms_weight, rope_cos, rope_sin)
+
+    compiled = torch.compile(invoke, fullgraph=True)
+    got = x.clone()
+    compiled(got, weight, cos, sin)
+    assert_close("qk_rmsnorm_rope compile default eps", got, ref, atol=0.015625, cos_min=0.999999)
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -216,6 +234,8 @@ def main() -> int:
     args = parser.parse_args()
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     count = run(ops, args.mode)
+    if args.backend == "installed":
+        count += run_compile_default_eps(ops)
     print(f"transformer-layout-primitives {args.backend} {args.mode}: passed {count}/{count}")
     return 0
 
