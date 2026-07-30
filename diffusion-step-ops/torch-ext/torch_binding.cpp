@@ -3,6 +3,8 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <array>
+
 #if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -208,6 +210,184 @@ void cast_bf16_to_fp32(torch::Tensor const& src, torch::Tensor& dst) {
 #endif
 }
 
+void pack_tail_bf16(
+    torch::Tensor const& tail,
+    int64_t flat_dim,
+    torch::Tensor& out) {
+  check_bf16(tail, "tail");
+  check_bf16(out, "out");
+  TORCH_CHECK(tail.dim() == 1, "tail must be one-dimensional");
+  TORCH_CHECK(out.dim() == 1 && out.numel() == flat_dim,
+              "out must be one-dimensional with flat_dim elements");
+  TORCH_CHECK(flat_dim >= tail.numel() && tail.numel() > 0,
+              "flat_dim must be at least tail.numel(), and tail must be non-empty");
+  check_same_device(tail, out, "tail", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(tail.device());
+  auto stream = at::cuda::getCurrentCUDAStream(tail.get_device()).stream();
+  flash_rt::diffusion_step_ops::pack_tail_bf16(
+      tail.data_ptr(), out.data_ptr(), flat_dim, tail.numel(), stream);
+#else
+  TORCH_CHECK(false, "diffusion-step-ops was not built with CUDA support");
+#endif
+}
+
+void add_bias_zero_tail_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& bias,
+    int64_t valid_cols,
+    torch::Tensor& out) {
+  check_bf16(input, "input");
+  check_bf16(bias, "bias");
+  check_bf16(out, "out");
+  TORCH_CHECK(input.dim() == 2, "input must have shape (rows, cols)");
+  TORCH_CHECK(bias.sizes() == torch::IntArrayRef({input.size(1)}),
+              "bias must have shape (cols,)");
+  TORCH_CHECK(out.sizes() == input.sizes(), "out must match input shape");
+  TORCH_CHECK(valid_cols >= 0 && valid_cols <= input.size(1),
+              "valid_cols must be in [0, cols]");
+  check_same_device(input, bias, "input", "bias");
+  check_same_device(input, out, "input", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(input.device());
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  flash_rt::diffusion_step_ops::add_bias_zero_tail_bf16(
+      input.data_ptr(), bias.data_ptr(), out.data_ptr(),
+      input.size(0), input.size(1), valid_cols, stream);
+#else
+  TORCH_CHECK(false, "diffusion-step-ops was not built with CUDA support");
+#endif
+}
+
+void extract_tail_f32_to_bf16(
+    torch::Tensor const& flat,
+    int64_t tail_numel,
+    torch::Tensor& out) {
+  check_fp32(flat, "flat");
+  check_bf16(out, "out");
+  TORCH_CHECK(flat.dim() == 1, "flat must be one-dimensional");
+  TORCH_CHECK(tail_numel > 0 && tail_numel <= flat.numel(),
+              "tail_numel must be in [1, flat.numel()]");
+  TORCH_CHECK(out.dim() == 1 && out.numel() == tail_numel,
+              "out must be one-dimensional with tail_numel elements");
+  check_same_device(flat, out, "flat", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(flat.device());
+  auto stream = at::cuda::getCurrentCUDAStream(flat.get_device()).stream();
+  flash_rt::diffusion_step_ops::extract_tail_f32_to_bf16(
+      flat.data_ptr(), out.data_ptr(), flat.numel(), tail_numel, stream);
+#else
+  TORCH_CHECK(false, "diffusion-step-ops was not built with CUDA support");
+#endif
+}
+
+void add_bias_pair_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& bias_a,
+    torch::Tensor const& bias_b,
+    torch::Tensor& out) {
+  check_bf16(input, "input");
+  check_bf16(bias_a, "bias_a");
+  check_bf16(bias_b, "bias_b");
+  check_bf16(out, "out");
+  TORCH_CHECK(input.dim() == 2, "input must have shape (rows, hidden)");
+  const auto hidden = input.size(1);
+  TORCH_CHECK(bias_a.sizes() == torch::IntArrayRef({hidden}),
+              "bias_a must have shape (hidden,)");
+  TORCH_CHECK(bias_b.sizes() == torch::IntArrayRef({hidden}),
+              "bias_b must have shape (hidden,)");
+  TORCH_CHECK(out.sizes() == input.sizes(), "out must match input shape");
+  check_same_device(input, bias_a, "input", "bias_a");
+  check_same_device(input, bias_b, "input", "bias_b");
+  check_same_device(input, out, "input", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(input.device());
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  flash_rt::diffusion_step_ops::add_bias_pair_bf16(
+      input.data_ptr(), bias_a.data_ptr(), bias_b.data_ptr(), out.data_ptr(),
+      input.size(0), hidden, stream);
+#else
+  TORCH_CHECK(false, "diffusion-step-ops was not built with CUDA support");
+#endif
+}
+
+void unipc_step_f32_bf16(
+    torch::Tensor const& sample,
+    torch::Tensor const& velocity,
+    torch::Tensor const& prev_m1,
+    torch::Tensor const& prev_m2,
+    torch::Tensor const& prev_last_sample,
+    double sigma,
+    int64_t corrector_order,
+    int64_t predictor_order,
+    double c_sample,
+    double c_last,
+    double c_prev_m1,
+    double c_prev_m2,
+    double c_curr_m,
+    double p_sample,
+    double p_curr_m,
+    double p_prev_m1,
+    torch::Tensor& next_sample,
+    torch::Tensor& current_m,
+    torch::Tensor& current_last_sample) {
+  check_fp32(sample, "sample");
+  check_bf16(velocity, "velocity");
+  check_fp32(prev_m1, "prev_m1");
+  check_fp32(prev_m2, "prev_m2");
+  check_fp32(prev_last_sample, "prev_last_sample");
+  check_fp32(next_sample, "next_sample");
+  check_fp32(current_m, "current_m");
+  check_fp32(current_last_sample, "current_last_sample");
+  const std::array<torch::Tensor const*, 7> tensors = {
+      &velocity,
+      &prev_m1,
+      &prev_m2,
+      &prev_last_sample,
+      &next_sample,
+      &current_m,
+      &current_last_sample,
+  };
+  for (auto const* tensor : tensors) {
+    TORCH_CHECK(tensor->sizes() == sample.sizes(),
+                "all UniPC tensors must have the same shape");
+    TORCH_CHECK(tensor->get_device() == sample.get_device(),
+                "all UniPC tensors must be on the same CUDA device");
+  }
+  TORCH_CHECK(corrector_order >= 0 && corrector_order <= 2,
+              "corrector_order must be 0, 1, or 2");
+  TORCH_CHECK(predictor_order >= 1 && predictor_order <= 2,
+              "predictor_order must be 1 or 2");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(sample.device());
+  auto stream = at::cuda::getCurrentCUDAStream(sample.get_device()).stream();
+  flash_rt::diffusion_step_ops::unipc_step_f32_bf16(
+      sample.data_ptr(),
+      velocity.data_ptr(),
+      prev_m1.data_ptr(),
+      prev_m2.data_ptr(),
+      prev_last_sample.data_ptr(),
+      next_sample.data_ptr(),
+      current_m.data_ptr(),
+      current_last_sample.data_ptr(),
+      sample.numel(),
+      static_cast<float>(sigma),
+      static_cast<int>(corrector_order),
+      static_cast<int>(predictor_order),
+      static_cast<float>(c_sample),
+      static_cast<float>(c_last),
+      static_cast<float>(c_prev_m1),
+      static_cast<float>(c_prev_m2),
+      static_cast<float>(c_curr_m),
+      static_cast<float>(p_sample),
+      static_cast<float>(p_curr_m),
+      static_cast<float>(p_prev_m1),
+      stream);
+#else
+  TORCH_CHECK(false, "diffusion-step-ops was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("add_bf16_out(Tensor a, Tensor b, Tensor! out) -> ()");
   ops.def("euler_step_bf16_out(Tensor latent, Tensor velocity, float dt, Tensor! out) -> ()");
@@ -216,6 +396,11 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("teacher_force_first_frame_bf16(Tensor! video_latent, Tensor cond_latent) -> ()");
   ops.def("motus_decode_postprocess_bf16_to_fp32(Tensor decoded, Tensor! out) -> ()");
   ops.def("cast_bf16_to_fp32(Tensor src, Tensor! dst) -> ()");
+  ops.def("pack_tail_bf16(Tensor tail, int flat_dim, Tensor! out) -> ()");
+  ops.def("add_bias_zero_tail_bf16(Tensor input, Tensor bias, int valid_cols, Tensor! out) -> ()");
+  ops.def("extract_tail_f32_to_bf16(Tensor flat, int tail_numel, Tensor! out) -> ()");
+  ops.def("add_bias_pair_bf16(Tensor input, Tensor bias_a, Tensor bias_b, Tensor! out) -> ()");
+  ops.def("unipc_step_f32_bf16(Tensor sample, Tensor velocity, Tensor prev_m1, Tensor prev_m2, Tensor prev_last_sample, float sigma, int corrector_order, int predictor_order, float c_sample, float c_last, float c_prev_m1, float c_prev_m2, float c_curr_m, float p_sample, float p_curr_m, float p_prev_m1, Tensor! next_sample, Tensor! current_m, Tensor! current_last_sample) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("add_bf16_out", torch::kCUDA, &add_bf16_out);
   ops.impl("euler_step_bf16_out", torch::kCUDA, &euler_step_bf16_out);
@@ -224,6 +409,11 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("teacher_force_first_frame_bf16", torch::kCUDA, &teacher_force_first_frame_bf16);
   ops.impl("motus_decode_postprocess_bf16_to_fp32", torch::kCUDA, &motus_decode_postprocess_bf16_to_fp32);
   ops.impl("cast_bf16_to_fp32", torch::kCUDA, &cast_bf16_to_fp32);
+  ops.impl("pack_tail_bf16", torch::kCUDA, &pack_tail_bf16);
+  ops.impl("add_bias_zero_tail_bf16", torch::kCUDA, &add_bias_zero_tail_bf16);
+  ops.impl("extract_tail_f32_to_bf16", torch::kCUDA, &extract_tail_f32_to_bf16);
+  ops.impl("add_bias_pair_bf16", torch::kCUDA, &add_bias_pair_bf16);
+  ops.impl("unipc_step_f32_bf16", torch::kCUDA, &unipc_step_f32_bf16);
 #endif
 }
 

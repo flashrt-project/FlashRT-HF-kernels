@@ -9,6 +9,11 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 - `quantize_fp4_sfa_fp16`
 - `dequantize_fp4_sfa_fp16`
 - `nvfp4_gemm_bf16`
+- `nvfp4_gemm_residual_bf16`
+- `nvfp4_gemm_bias_gelu_bf16`
+- `nvfp4_gemm_bias_gelu_nvfp4`
+- `nvfp4_gemm_streamk_bf16`
+- `nvfp4_gemm_streamk_bias_bf16`
 - `fp4_w4a16_linear_bf16` (compatibility alias)
 
 ## Example

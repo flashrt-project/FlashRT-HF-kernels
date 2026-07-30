@@ -10,17 +10,21 @@ chain is still expensive in PyTorch:
 ```text
 packed QKV -> split Q/K -> RMSNorm Q/K -> RoPE Q/K -> attention-ready Q/K
 GQA packed QKV -> per-head RMSNorm Q/K -> rotate-half RoPE -> Q/K/V workspaces
+packed QKV + bias -> split Q/K/V -> rotate-half RoPE Q/K
 decode Q/K/V -> RMSNorm Q/K -> rotate-half RoPE Q/K -> Q stage / KV cache write
 GQA packed QKV -> split Q/K/V -> interleaved RoPE Q/K -> KV cache write
 ```
 
 ## Exported APIs
 
+- `qkv_split_bf16(packed_qkv, heads, head_dim, q_out=None, k_out=None, v_out=None)`
 - `qkv_split_norm_rope_bf16(packed_qkv, norm_q_weight, norm_k_weight, freqs_re, freqs_im, heads, head_dim, rope_seq_len=None, eps=1e-6, q_out=None, k_out=None)`
 - `qkv_split_bias_norm_rope_v_bf16(packed_qkv, qkv_bias, norm_q_weight, norm_k_weight, freqs_re, freqs_im, heads, head_dim, rope_seq_len=None, eps=1e-6, q_out=None, k_out=None, v_out=None)`
 - `qkv_split_bias_norm_rope_v_cat_bf16(packed_qkv, qkv_bias, norm_q_weight, norm_k_weight, freqs_re, freqs_im, heads, head_dim, video_offset, q_cat_out, k_cat_out, v_cat_out, rope_seq_len=None, eps=1e-6)`
 - `qkv_split_joint3_cat_bf16(packed_v, qkv_v_bias, norm_v_q_weight, norm_v_k_weight, freqs_re, freqs_im, packed_a, norm_a_q_weight, norm_a_k_weight, packed_u, norm_u_q_weight, norm_u_k_weight, heads, head_dim, q_cat_out, k_cat_out, v_cat_out, rope_seq_len=None, eps_v=1e-6, eps_a=1e-6, eps_u=1e-6)`
 - `qkv_split_per_head_norm_rope_bf16(packed_qkv, q_norm_weight, k_norm_weight, cos, sin, q_heads, kv_heads, eps=1e-6, q_out=None, k_out=None, v_out=None)`
+- `qkv_split_bias_rope_bf16(packed_qkv, qkv_bias, cos, sin, q_heads, kv_heads, head_dim, q_out=None, k_out=None, v_out=None)`
+- `qkv_split_bias_rope_fp16(packed_qkv, qkv_bias, cos, sin, q_heads, kv_heads, head_dim, q_out=None, k_out=None, v_out=None)`
 - `qkv_split_rope_kvcache_bf16(packed_qkv, rope, q_heads, kv_heads, head_dim, cache_offset, q_out=None, k_cache=None, v_cache=None, max_seq_len=None)`
 - `decode_q_norm_rope_stage_bf16(q_pre, q_norm_weight, cos, sin, eps=1e-6, q_out=None)`
 - `decode_k_norm_rope_kvwrite_bf16(k_pre, v_pre, k_norm_weight, cos, sin, eps=1e-6, k_cache_dst=None, v_cache_dst=None)`
@@ -41,6 +45,12 @@ Tensor conventions:
   using the full rotate-half table contract
 - per-head GQA outputs: BF16 Q shaped `(batch, seq_len, q_heads, 128)`
   and K/V shaped `(batch, seq_len, kv_heads, 128)`
+- bias+RoPE `cos`/`sin`: FP32, shape
+  `(batch, seq_len, head_dim / 2)` or `(batch, seq_len, head_dim)`
+- bias+RoPE supports even `head_dim` values in `[8, 256]` and unequal Q/KV
+  head counts
+- the FP16-output bias+RoPE variant keeps BF16 projected QKV and bias inputs,
+  but writes FP16 Q/K/V directly for an FP16 attention island
 - GQA `rope`: BF16, shape `(>= seq_len, head_dim)`, interleaved
   `[cos0, sin0, cos1, sin1, ...]` per row
 - GQA cache `q_out`: BF16, shape `(batch, seq_len, q_heads, head_dim)`
@@ -73,6 +83,10 @@ The per-head GQA API covers sequence attention blocks that normalize every
 Q/KV head counts and writes contiguous Q/K/V workspaces, so callers can feed
 the result directly to an attention core without materializing separate split,
 normalization, and RoPE intermediates.
+
+The bias+RoPE API is the generic vision/text projection epilogue. It consumes
+one packed GQA or equal-head QKV GEMM output, adds the broadcast bias, applies
+split-half RoPE to Q/K, and writes attention-ready Q/K/V in one launch.
 
 ## Minimal Usage
 

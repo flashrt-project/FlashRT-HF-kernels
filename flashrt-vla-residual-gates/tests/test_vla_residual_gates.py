@@ -120,6 +120,58 @@ class SourceOps:
         )
         return v_out, a_out, u_out
 
+    def joint3_bias_fp8_gate_residual_bf16(
+        self,
+        v_residual,
+        v_x,
+        v_bias,
+        v_gate_fp8,
+        v_gate_scale,
+        a_residual,
+        a_x,
+        a_bias,
+        a_gate,
+        u_residual,
+        u_x,
+        v_out=None,
+        a_out=None,
+        u_out=None,
+    ):
+        v_out = torch.empty_like(v_residual) if v_out is None else v_out
+        a_out = torch.empty_like(a_residual) if a_out is None else a_out
+        u_out = torch.empty_like(u_residual) if u_out is None else u_out
+        self._ops.joint3_bias_fp8_gate_residual_bf16(
+            v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+            a_residual, a_x, a_bias, a_gate, a_out,
+            u_residual, u_x, u_out,
+        )
+        return v_out, a_out, u_out
+
+    def joint3_bias_fp8_gate_residual_action_nobias_bf16(
+        self,
+        v_residual,
+        v_x,
+        v_bias,
+        v_gate_fp8,
+        v_gate_scale,
+        a_residual,
+        a_x,
+        a_gate,
+        u_residual,
+        u_x,
+        v_out=None,
+        a_out=None,
+        u_out=None,
+    ):
+        v_out = torch.empty_like(v_residual) if v_out is None else v_out
+        a_out = torch.empty_like(a_residual) if a_out is None else a_out
+        u_out = torch.empty_like(u_residual) if u_out is None else u_out
+        self._ops.joint3_bias_fp8_gate_residual_action_nobias_bf16(
+            v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+            a_residual, a_x, a_gate, a_out, u_residual, u_x, u_out,
+        )
+        return v_out, a_out, u_out
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -286,6 +338,72 @@ def run_case(ops, label: str, rows: tuple[int, int, int], dim: int) -> None:
     assert_close_distribution(f"{label}/nobias_u", u2_out, ref_add(u2_residual, u2_x))
 
 
+def run_fp8_gate_case(
+    ops, label: str, rows: tuple[int, int, int], dim: int
+) -> None:
+    v = make_segment(rows[0], dim)
+    a = make_segment(rows[1], dim)
+    u_residual = torch.randn(
+        (rows[2], dim), device="cuda", dtype=torch.bfloat16
+    )
+    u_x = torch.randn_like(u_residual)
+    gate_scale = torch.tensor([0.01], device="cuda", dtype=torch.float32)
+    gate_fp8 = torch.clamp(
+        v[3].float() / gate_scale, -448.0, 448.0
+    ).to(torch.float8_e4m3fn)
+    dequant_gate = gate_fp8.float() * gate_scale
+
+    got = ops.joint3_bias_fp8_gate_residual_bf16(
+        v[0], v[1], v[2], gate_fp8, gate_scale,
+        a[0], a[1], a[2], a[3], u_residual, u_x,
+    )
+    refs = (
+        (
+            v[0].float()
+            + (v[1].float() + v[2].float().view(1, -1)) * dequant_gate
+        ).to(torch.bfloat16),
+        ref_bias_gate(a[0], a[1], a[2], a[3]),
+        ref_add(u_residual, u_x),
+    )
+    for segment, output, expected in zip(
+        ("video", "action", "uncond"), got, refs, strict=True
+    ):
+        assert_close_distribution(
+            f"{label}/fp8_gate_full_{segment}", output, expected
+        )
+
+    got_nobias = ops.joint3_bias_fp8_gate_residual_action_nobias_bf16(
+        v[0], v[1], v[2], gate_fp8, gate_scale,
+        a[0], a[1], a[3], u_residual, u_x,
+    )
+    refs_nobias = (refs[0], ref_gate(a[0], a[1], a[3]), refs[2])
+    for segment, output, expected in zip(
+        ("video", "action", "uncond"), got_nobias, refs_nobias, strict=True
+    ):
+        assert_close_distribution(
+            f"{label}/fp8_gate_nobias_{segment}", output, expected
+        )
+
+    compiled = torch.compile(
+        lambda vr, vx, vb, vg, vs, ar, ax, ab, ag, ur, ux: (
+            ops.joint3_bias_fp8_gate_residual_bf16(
+                vr, vx, vb, vg, vs, ar, ax, ab, ag, ur, ux
+            )
+        ),
+        fullgraph=True,
+    )
+    compiled_out = compiled(
+        v[0], v[1], v[2], gate_fp8, gate_scale,
+        a[0], a[1], a[2], a[3], u_residual, u_x,
+    )
+    for segment, output, expected in zip(
+        ("video", "action", "uncond"), compiled_out, got, strict=True
+    ):
+        assert_close_distribution(
+            f"{label}/fp8_gate_compile_{segment}", output, expected
+        )
+
+
 def run(args) -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
@@ -305,6 +423,7 @@ def run(args) -> None:
     }
     for label, (rows, dim) in shapes.items():
         run_case(ops, label, rows, dim)
+        run_fp8_gate_case(ops, label, rows, dim)
     for label, (rows, dim) in gate_shapes.items():
         run_gate_residual_case(ops, label, rows, dim)
         run_bias_residual_case(ops, label, rows, dim)

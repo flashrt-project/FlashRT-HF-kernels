@@ -12,7 +12,12 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "transformer-layout-primitives" / "tests"))
-from test_transformer_layout_primitives import load_source_ops, qk_rmsnorm_rope_ref, rotate_half_ref  # noqa: E402
+from test_transformer_layout_primitives import (  # noqa: E402
+    load_source_ops,
+    qk_pair_rmsnorm_rope_ref,
+    qk_rmsnorm_rope_ref,
+    rotate_half_ref,
+)
 
 
 def load_ops(backend: str, artifact: str | None):
@@ -101,6 +106,44 @@ def main() -> int:
         fu = time_us(flash_rope, args.warmup, args.iters)
         eu = time_us(eager_rope, max(5, args.warmup // 2), max(20, args.iters // 2))
         print(f"{name},{seq}x{heads}x{dim},rope_rotate_half_bf16_,{fu:.3f},{eu:.3f},{eu/fu:.2f}x")
+
+    pair_shapes = [
+        ("groot_n17_llm", 277, 16, 8, 128),
+        ("qwen3vl_vision", 1024, 16, 16, 72),
+        ("lingbot_vision", 1024, 16, 16, 80),
+        ("video_transformer", 2520, 24, 24, 128),
+    ]
+    if args.mode == "full":
+        pair_shapes += [
+            ("action_boundary", 51, 16, 16, 64),
+            ("wan_partial_tile", 5070, 24, 24, 128),
+        ]
+    for name, rows, q_heads, k_heads, dim in pair_shapes:
+        q = torch.randn((rows, q_heads, dim), device="cuda", dtype=torch.bfloat16)
+        k = torch.randn((rows, k_heads, dim), device="cuda", dtype=torch.bfloat16)
+        q_weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+        k_weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+        cos = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+        sin = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+        q_out = torch.empty_like(q)
+        k_out = torch.empty_like(k)
+
+        def flash_pair():
+            ops.qk_pair_rmsnorm_rope_bf16(
+                q, k, q_weight, k_weight, cos, sin, q_out=q_out, k_out=k_out
+            )
+
+        def eager_pair():
+            qk_pair_rmsnorm_rope_ref(
+                q, k, q_weight, k_weight, cos, sin
+            )
+
+        fu = time_us(flash_pair, args.warmup, args.iters)
+        eu = time_us(eager_pair, max(5, args.warmup // 2), max(20, args.iters // 2))
+        print(
+            f"{name},{rows}x{q_heads}+{k_heads}x{dim},"
+            f"qk_pair_rmsnorm_rope_bf16,{fu:.3f},{eu:.3f},{eu/fu:.2f}x"
+        )
 
     batch, seq, dim = 8, 2048, 2048
     x = torch.randn((batch * seq, dim), device="cuda", dtype=torch.bfloat16)

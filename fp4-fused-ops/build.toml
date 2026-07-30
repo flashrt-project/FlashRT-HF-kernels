@@ -34,6 +34,11 @@ src = [
   "csrc/fused_fp4/silu_mul_mul_fp4_sfa_v2.cu",
   "csrc/fused_fp4/silu_mul_two_fp4_to_fp4.cu",
   "csrc/fused_fp4/silu_mul_two_fp4_to_fp4.cuh",
+  "csrc/fused_fp4/rms_silu_nvfp4_ndhwc_bf16.cu",
+  "csrc/quantize/quantize_bf16_to_nvfp4_linear.cu",
+  "csrc/quantize/quantize_bf16_to_nvfp4_linear.cuh",
+  "csrc/quantize/bf16_rms_silu_ncdhw.cu",
+  "csrc/quantize/bf16_rms_silu_ncdhw.cuh",
   "csrc/quantize/reshape_scales_sfa.cu",
   "csrc/quantize/reshape_scales_sfa.cuh",
 ]

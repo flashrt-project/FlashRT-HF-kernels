@@ -10,9 +10,7 @@ from ._ops import add_op_namespace_prefix, ops
 
 
 PAGE_SIZE = 128
-NUM_Q_HEADS = 24
-NUM_KV_HEADS = 4
-HEAD_DIM = 256
+SUPPORTED_CONFIGS = ((24, 4, 256), (32, 8, 128), (16, 8, 128))
 
 
 @torch.library.register_fake(add_op_namespace_prefix("xqa_bf16_fp8kv"))
@@ -37,18 +35,23 @@ def _xqa_bf16_fp8kv_fake(
 ) -> None:
     if q.dim() == 3:
         q_seq = q.shape[0]
-        ok = q.shape[1:] == (NUM_Q_HEADS, HEAD_DIM)
+        q_heads, head_dim = q.shape[1:]
     elif q.dim() == 5:
         q_seq = q.shape[2]
-        ok = q.shape[:2] == (1, 1) and q.shape[3:] == (NUM_Q_HEADS, HEAD_DIM)
+        if q.shape[:2] != (1, 1):
+            raise RuntimeError("rank-5 q must begin with (1,1)")
+        q_heads, head_dim = q.shape[3:]
     else:
         raise RuntimeError("q must have rank 3 or 5")
-    if not ok or out.shape != q.shape:
-        raise RuntimeError("q/out shape mismatch for v1 XQA contract")
-    if k_cache.dim() != 4 or k_cache.shape[1:] != (PAGE_SIZE, NUM_KV_HEADS, HEAD_DIM):
-        raise RuntimeError("k_cache must have shape (pages,128,4,256)")
+    if out.shape != q.shape:
+        raise RuntimeError("q/out shape mismatch")
+    if k_cache.dim() != 4 or k_cache.shape[1] != PAGE_SIZE or k_cache.shape[3] != head_dim:
+        raise RuntimeError("k_cache shape does not match q")
     if v_cache.shape != k_cache.shape:
         raise RuntimeError("v_cache shape mismatch")
+    config = (q_heads, k_cache.shape[2], head_dim)
+    if config not in SUPPORTED_CONFIGS:
+        raise RuntimeError(f"unsupported XQA configuration: {config}")
     if mask.numel() < q_seq * ((q_seq + 31) // 32):
         raise RuntimeError("mask is too small")
     return None
@@ -72,7 +75,7 @@ def causal_spec_mask(q_seq: int, *, device: torch.device | str = "cuda", dtype: 
 
 
 def default_page_table(num_pages: int, *, device: torch.device | str = "cuda") -> torch.Tensor:
-    """Contiguous one-batch page table for `(pages,128,4,256)` K/V caches."""
+    """Return a contiguous one-batch page table."""
 
     return torch.arange(int(num_pages), device=device, dtype=torch.int32).view(1, int(num_pages))
 
@@ -80,12 +83,18 @@ def default_page_table(num_pages: int, *, device: torch.device | str = "cuda") -
 def allocate_workspace(
     *,
     q_seq: int,
+    num_q_heads: int = 24,
+    num_kv_heads: int = 4,
     device: torch.device | str = "cuda",
     scratch_mb: int = 256,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Allocate semaphores and scratch tensors for static-buffer runtimes."""
 
-    sem_count = NUM_KV_HEADS * (((int(q_seq) * (NUM_Q_HEADS // NUM_KV_HEADS)) + 31) // 32)
+    if num_q_heads % num_kv_heads:
+        raise ValueError("num_q_heads must be divisible by num_kv_heads")
+    sem_count = num_kv_heads * (
+        ((int(q_seq) * (num_q_heads // num_kv_heads)) + 31) // 32
+    )
     semaphores = torch.zeros(max(256, sem_count), device=device, dtype=torch.int32)
     scratch = torch.empty(max(1, int(scratch_mb)) << 20, device=device, dtype=torch.uint8)
     return semaphores, scratch
@@ -111,12 +120,7 @@ def xqa_bf16_fp8kv(
     k_stride_token: int = 0,
     k_stride_head: int = 0,
 ) -> torch.Tensor:
-    """Run BF16-query / FP8-KV XQA attention for the v1 fixed public shape.
-
-    v1 shape contract:
-    `q`: `(q_seq, 24, 256)` or `(1, 1, q_seq, 24, 256)` BF16.
-    `k_cache`, `v_cache`: `(pages, 128, 4, 256)` FP8 E4M3.
-    """
+    """Run a validated BF16-query / FP8-KV paged XQA configuration."""
 
     if out is None:
         out = torch.empty_like(q)
@@ -129,7 +133,13 @@ def xqa_bf16_fp8kv(
         mask = causal_spec_mask(int(q_seq), device=q.device, dtype=torch.int32)
     if semaphores is None or scratch is None:
         q_seq = q.shape[0] if q.dim() == 3 else q.shape[2]
-        semaphores_new, scratch_new = allocate_workspace(q_seq=int(q_seq), device=q.device)
+        q_heads = q.shape[1] if q.dim() == 3 else q.shape[3]
+        semaphores_new, scratch_new = allocate_workspace(
+            q_seq=int(q_seq),
+            num_q_heads=int(q_heads),
+            num_kv_heads=int(k_cache.shape[2]),
+            device=q.device,
+        )
         if semaphores is None:
             semaphores = semaphores_new
         if scratch is None:
@@ -157,10 +167,8 @@ def xqa_bf16_fp8kv(
 
 
 __all__ = [
-    "HEAD_DIM",
-    "NUM_KV_HEADS",
-    "NUM_Q_HEADS",
     "PAGE_SIZE",
+    "SUPPORTED_CONFIGS",
     "allocate_workspace",
     "causal_spec_mask",
     "default_page_table",

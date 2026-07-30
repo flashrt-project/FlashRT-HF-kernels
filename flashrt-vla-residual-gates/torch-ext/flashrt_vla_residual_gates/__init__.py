@@ -227,9 +227,160 @@ def joint3_bias_gate_residual_action_nobias_bf16(
     return v_out, a_out, u_out
 
 
+def _check_joint3_fp8_gate(
+    v_residual: torch.Tensor,
+    v_x: torch.Tensor,
+    v_bias: torch.Tensor,
+    v_gate_fp8: torch.Tensor,
+    v_gate_scale: torch.Tensor,
+    v_out: torch.Tensor,
+    a_residual: torch.Tensor,
+    a_x: torch.Tensor,
+    a_gate: torch.Tensor,
+    a_out: torch.Tensor,
+    u_residual: torch.Tensor,
+    u_x: torch.Tensor,
+    u_out: torch.Tensor,
+    a_bias: torch.Tensor | None,
+) -> None:
+    _check_matrix(v_residual, "v_residual")
+    for tensor, name in (
+        (v_x, "v_x"),
+        (v_gate_fp8, "v_gate_fp8"),
+        (v_out, "v_out"),
+    ):
+        _check_like(tensor, v_residual, name, "v_residual")
+    _check_bias(v_bias, v_residual.shape[1], "v_bias")
+    if v_gate_scale.numel() != 1:
+        raise RuntimeError("v_gate_scale must be a scalar tensor")
+    _check_matrix(a_residual, "a_residual")
+    for tensor, name in (
+        (a_x, "a_x"),
+        (a_gate, "a_gate"),
+        (a_out, "a_out"),
+    ):
+        _check_like(tensor, a_residual, name, "a_residual")
+    if a_bias is not None:
+        _check_bias(a_bias, a_residual.shape[1], "a_bias")
+    _check_matrix(u_residual, "u_residual")
+    _check_like(u_x, u_residual, "u_x", "u_residual")
+    _check_like(u_out, u_residual, "u_out", "u_residual")
+
+
+@torch.library.register_fake(
+    add_op_namespace_prefix("joint3_bias_fp8_gate_residual_bf16")
+)
+def _joint3_bias_fp8_gate_residual_bf16_fake(
+    v_residual: torch.Tensor,
+    v_x: torch.Tensor,
+    v_bias: torch.Tensor,
+    v_gate_fp8: torch.Tensor,
+    v_gate_scale: torch.Tensor,
+    v_out: torch.Tensor,
+    a_residual: torch.Tensor,
+    a_x: torch.Tensor,
+    a_bias: torch.Tensor,
+    a_gate: torch.Tensor,
+    a_out: torch.Tensor,
+    u_residual: torch.Tensor,
+    u_x: torch.Tensor,
+    u_out: torch.Tensor,
+) -> None:
+    _check_joint3_fp8_gate(
+        v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+        a_residual, a_x, a_gate, a_out, u_residual, u_x, u_out, a_bias
+    )
+    return None
+
+
+@torch.library.register_fake(
+    add_op_namespace_prefix(
+        "joint3_bias_fp8_gate_residual_action_nobias_bf16"
+    )
+)
+def _joint3_bias_fp8_gate_residual_action_nobias_bf16_fake(
+    v_residual: torch.Tensor,
+    v_x: torch.Tensor,
+    v_bias: torch.Tensor,
+    v_gate_fp8: torch.Tensor,
+    v_gate_scale: torch.Tensor,
+    v_out: torch.Tensor,
+    a_residual: torch.Tensor,
+    a_x: torch.Tensor,
+    a_gate: torch.Tensor,
+    a_out: torch.Tensor,
+    u_residual: torch.Tensor,
+    u_x: torch.Tensor,
+    u_out: torch.Tensor,
+) -> None:
+    _check_joint3_fp8_gate(
+        v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+        a_residual, a_x, a_gate, a_out, u_residual, u_x, u_out, None
+    )
+    return None
+
+
+def joint3_bias_fp8_gate_residual_bf16(
+    v_residual: torch.Tensor,
+    v_x: torch.Tensor,
+    v_bias: torch.Tensor,
+    v_gate_fp8: torch.Tensor,
+    v_gate_scale: torch.Tensor,
+    a_residual: torch.Tensor,
+    a_x: torch.Tensor,
+    a_bias: torch.Tensor,
+    a_gate: torch.Tensor,
+    u_residual: torch.Tensor,
+    u_x: torch.Tensor,
+    v_out: torch.Tensor | None = None,
+    a_out: torch.Tensor | None = None,
+    u_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Joint V/A/U residual update with a statically scaled FP8 video gate."""
+
+    v_out = torch.empty_like(v_residual) if v_out is None else v_out
+    a_out = torch.empty_like(a_residual) if a_out is None else a_out
+    u_out = torch.empty_like(u_residual) if u_out is None else u_out
+    ops.joint3_bias_fp8_gate_residual_bf16(
+        v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+        a_residual, a_x, a_bias, a_gate, a_out,
+        u_residual, u_x, u_out,
+    )
+    return v_out, a_out, u_out
+
+
+def joint3_bias_fp8_gate_residual_action_nobias_bf16(
+    v_residual: torch.Tensor,
+    v_x: torch.Tensor,
+    v_bias: torch.Tensor,
+    v_gate_fp8: torch.Tensor,
+    v_gate_scale: torch.Tensor,
+    a_residual: torch.Tensor,
+    a_x: torch.Tensor,
+    a_gate: torch.Tensor,
+    u_residual: torch.Tensor,
+    u_x: torch.Tensor,
+    v_out: torch.Tensor | None = None,
+    a_out: torch.Tensor | None = None,
+    u_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Joint residual update with FP8 video gate and no action bias."""
+
+    v_out = torch.empty_like(v_residual) if v_out is None else v_out
+    a_out = torch.empty_like(a_residual) if a_out is None else a_out
+    u_out = torch.empty_like(u_residual) if u_out is None else u_out
+    ops.joint3_bias_fp8_gate_residual_action_nobias_bf16(
+        v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+        a_residual, a_x, a_gate, a_out, u_residual, u_x, u_out,
+    )
+    return v_out, a_out, u_out
+
+
 __all__ = [
     "bias_residual_bf16",
     "gate_residual_bf16",
     "joint3_bias_gate_residual_bf16",
     "joint3_bias_gate_residual_action_nobias_bf16",
+    "joint3_bias_fp8_gate_residual_bf16",
+    "joint3_bias_fp8_gate_residual_action_nobias_bf16",
 ]

@@ -27,6 +27,12 @@ void check_bf16(torch::Tensor const& tensor, const char* name) {
               name, " must have dtype torch.bfloat16");
 }
 
+void check_fp16(torch::Tensor const& tensor, const char* name) {
+  check_cuda_contiguous(tensor, name);
+  TORCH_CHECK(tensor.scalar_type() == torch::kFloat16,
+              name, " must have dtype torch.float16");
+}
+
 void check_fp32(torch::Tensor const& tensor, const char* name) {
   check_cuda_contiguous(tensor, name);
   TORCH_CHECK(tensor.scalar_type() == torch::kFloat32,
@@ -352,6 +358,161 @@ void qkv_split_per_head_norm_rope_bf16(
       kv_heads,
       static_cast<float>(eps),
       stream);
+#else
+  TORCH_CHECK(false, "flashrt-qkv-cache-rope was not built with CUDA support");
+#endif
+}
+
+void qkv_split_bias_rope_bf16(
+    torch::Tensor const& packed_qkv,
+    torch::Tensor const& qkv_bias,
+    torch::Tensor const& cos,
+    torch::Tensor const& sin,
+    int64_t q_heads64,
+    int64_t kv_heads64,
+    int64_t head_dim64,
+    torch::Tensor& q_out,
+    torch::Tensor& k_out,
+    torch::Tensor& v_out) {
+  check_bf16(packed_qkv, "packed_qkv");
+  check_bf16(qkv_bias, "qkv_bias");
+  check_fp32(cos, "cos");
+  check_fp32(sin, "sin");
+  check_bf16(q_out, "q_out");
+  check_bf16(k_out, "k_out");
+  check_bf16(v_out, "v_out");
+  TORCH_CHECK(packed_qkv.dim() == 3,
+              "packed_qkv must have shape "
+              "(batch, seq_len, (q_heads + 2 * kv_heads) * head_dim)");
+  const int64_t batch = packed_qkv.size(0);
+  const int64_t seq_len = packed_qkv.size(1);
+  const int64_t q_dim = q_heads64 * head_dim64;
+  const int64_t kv_dim = kv_heads64 * head_dim64;
+  const int64_t packed_dim = q_dim + 2 * kv_dim;
+  TORCH_CHECK(batch > 0 && seq_len > 0,
+              "batch and seq_len must be positive");
+  TORCH_CHECK(q_heads64 > 0 && kv_heads64 > 0,
+              "q_heads and kv_heads must be positive");
+  TORCH_CHECK(head_dim64 >= 8 && head_dim64 <= 256 &&
+                  head_dim64 % 2 == 0,
+              "head_dim must be even and in [8, 256]");
+  TORCH_CHECK(packed_qkv.size(2) == packed_dim,
+              "packed_qkv has an invalid QKV width");
+  TORCH_CHECK(qkv_bias.sizes() == torch::IntArrayRef({packed_dim}),
+              "qkv_bias must have shape "
+              "((q_heads + 2 * kv_heads) * head_dim,)");
+  TORCH_CHECK(cos.dim() == 3 &&
+                  cos.size(0) == batch && cos.size(1) == seq_len &&
+                  (cos.size(2) == head_dim64 / 2 ||
+                   cos.size(2) == head_dim64),
+              "cos must have shape (batch, seq_len, head_dim / 2) "
+              "or (batch, seq_len, head_dim)");
+  TORCH_CHECK(sin.sizes() == cos.sizes(),
+              "sin must have the same shape as cos");
+  TORCH_CHECK(q_out.sizes() == torch::IntArrayRef(
+                  {batch, seq_len, q_heads64, head_dim64}),
+              "q_out has an invalid shape");
+  TORCH_CHECK(k_out.sizes() == torch::IntArrayRef(
+                  {batch, seq_len, kv_heads64, head_dim64}) &&
+                  v_out.sizes() == k_out.sizes(),
+              "k_out and v_out have an invalid shape");
+  check_same_device(packed_qkv, qkv_bias, "packed_qkv", "qkv_bias");
+  check_same_device(packed_qkv, cos, "packed_qkv", "cos");
+  check_same_device(packed_qkv, sin, "packed_qkv", "sin");
+  check_same_device(packed_qkv, q_out, "packed_qkv", "q_out");
+  check_same_device(packed_qkv, k_out, "packed_qkv", "k_out");
+  check_same_device(packed_qkv, v_out, "packed_qkv", "v_out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(packed_qkv.device());
+  auto stream = at::cuda::getCurrentCUDAStream(
+      packed_qkv.get_device()).stream();
+  flash_rt::qkv_cache_rope::qkv_split_bias_rope_bf16(
+      packed_qkv.data_ptr(),
+      qkv_bias.data_ptr(),
+      cos.data_ptr<float>(),
+      sin.data_ptr<float>(),
+      q_out.data_ptr(),
+      k_out.data_ptr(),
+      v_out.data_ptr(),
+      checked_int(batch * seq_len, "rows"),
+      checked_int(q_heads64, "q_heads"),
+      checked_int(kv_heads64, "kv_heads"),
+      checked_int(head_dim64, "head_dim"),
+      checked_int(cos.size(2), "rope_stride"),
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-qkv-cache-rope was not built with CUDA support");
+#endif
+}
+
+void qkv_split_bias_rope_fp16(
+    torch::Tensor const& packed_qkv,
+    torch::Tensor const& qkv_bias,
+    torch::Tensor const& cos,
+    torch::Tensor const& sin,
+    int64_t q_heads64,
+    int64_t kv_heads64,
+    int64_t head_dim64,
+    torch::Tensor& q_out,
+    torch::Tensor& k_out,
+    torch::Tensor& v_out) {
+  check_bf16(packed_qkv, "packed_qkv");
+  check_bf16(qkv_bias, "qkv_bias");
+  check_fp32(cos, "cos");
+  check_fp32(sin, "sin");
+  check_fp16(q_out, "q_out");
+  check_fp16(k_out, "k_out");
+  check_fp16(v_out, "v_out");
+  TORCH_CHECK(packed_qkv.dim() == 3,
+              "packed_qkv must have shape "
+              "(batch, seq_len, (q_heads + 2 * kv_heads) * head_dim)");
+  const int64_t batch = packed_qkv.size(0);
+  const int64_t seq_len = packed_qkv.size(1);
+  const int64_t q_dim = q_heads64 * head_dim64;
+  const int64_t kv_dim = kv_heads64 * head_dim64;
+  const int64_t packed_dim = q_dim + 2 * kv_dim;
+  TORCH_CHECK(batch > 0 && seq_len > 0,
+              "batch and seq_len must be positive");
+  TORCH_CHECK(q_heads64 > 0 && kv_heads64 > 0,
+              "q_heads and kv_heads must be positive");
+  TORCH_CHECK(head_dim64 >= 8 && head_dim64 <= 256 &&
+                  head_dim64 % 2 == 0,
+              "head_dim must be even and in [8, 256]");
+  TORCH_CHECK(packed_qkv.size(2) == packed_dim,
+              "packed_qkv has an invalid QKV width");
+  TORCH_CHECK(qkv_bias.sizes() == torch::IntArrayRef({packed_dim}),
+              "qkv_bias has an invalid shape");
+  TORCH_CHECK(cos.dim() == 3 && cos.size(0) == batch &&
+                  cos.size(1) == seq_len &&
+                  (cos.size(2) == head_dim64 / 2 ||
+                   cos.size(2) == head_dim64),
+              "cos has an invalid shape");
+  TORCH_CHECK(sin.sizes() == cos.sizes(),
+              "sin must have the same shape as cos");
+  TORCH_CHECK(q_out.sizes() == torch::IntArrayRef(
+                  {batch, seq_len, q_heads64, head_dim64}),
+              "q_out has an invalid shape");
+  TORCH_CHECK(k_out.sizes() == torch::IntArrayRef(
+                  {batch, seq_len, kv_heads64, head_dim64}) &&
+                  v_out.sizes() == k_out.sizes(),
+              "k_out and v_out have an invalid shape");
+  check_same_device(packed_qkv, qkv_bias, "packed_qkv", "qkv_bias");
+  check_same_device(packed_qkv, cos, "packed_qkv", "cos");
+  check_same_device(packed_qkv, sin, "packed_qkv", "sin");
+  check_same_device(packed_qkv, q_out, "packed_qkv", "q_out");
+  check_same_device(packed_qkv, k_out, "packed_qkv", "k_out");
+  check_same_device(packed_qkv, v_out, "packed_qkv", "v_out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(packed_qkv.device());
+  auto stream = at::cuda::getCurrentCUDAStream(
+      packed_qkv.get_device()).stream();
+  flash_rt::qkv_cache_rope::qkv_split_bias_rope_fp16(
+      packed_qkv.data_ptr(), qkv_bias.data_ptr(), cos.data_ptr<float>(),
+      sin.data_ptr<float>(), q_out.data_ptr(), k_out.data_ptr(),
+      v_out.data_ptr(), checked_int(batch * seq_len, "rows"),
+      checked_int(q_heads64, "q_heads"), checked_int(kv_heads64, "kv_heads"),
+      checked_int(head_dim64, "head_dim"),
+      checked_int(cos.size(2), "rope_stride"), stream);
 #else
   TORCH_CHECK(false, "flashrt-qkv-cache-rope was not built with CUDA support");
 #endif
@@ -813,6 +974,14 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor packed_qkv, Tensor q_norm_weight, Tensor k_norm_weight, "
           "Tensor cos, Tensor sin, int q_heads, int kv_heads, float eps, "
           "Tensor! q_out, Tensor! k_out, Tensor! v_out) -> ()");
+  ops.def("qkv_split_bias_rope_bf16("
+          "Tensor packed_qkv, Tensor qkv_bias, Tensor cos, Tensor sin, "
+          "int q_heads, int kv_heads, int head_dim, "
+          "Tensor! q_out, Tensor! k_out, Tensor! v_out) -> ()");
+  ops.def("qkv_split_bias_rope_fp16("
+          "Tensor packed_qkv, Tensor qkv_bias, Tensor cos, Tensor sin, "
+          "int q_heads, int kv_heads, int head_dim, "
+          "Tensor! q_out, Tensor! k_out, Tensor! v_out) -> ()");
   ops.def("qkv_split_rope_kvcache_bf16("
           "Tensor packed_qkv, Tensor rope, int q_heads, int kv_heads, int head_dim, "
           "int cache_offset, Tensor! q_out, Tensor! k_cache, Tensor! v_cache) -> ()");
@@ -850,6 +1019,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("qkv_split_per_head_norm_rope_bf16",
            torch::kCUDA,
            &qkv_split_per_head_norm_rope_bf16);
+  ops.impl("qkv_split_bias_rope_bf16",
+           torch::kCUDA,
+           &qkv_split_bias_rope_bf16);
+  ops.impl("qkv_split_bias_rope_fp16",
+           torch::kCUDA,
+           &qkv_split_bias_rope_fp16);
   ops.impl("qkv_split_rope_kvcache_bf16",
            torch::kCUDA,
            &qkv_split_rope_kvcache_bf16);

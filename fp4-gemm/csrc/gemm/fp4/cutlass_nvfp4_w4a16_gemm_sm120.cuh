@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// CUTLASS-based NVFP4 A4W4 GEMM for SM120a (RTX 5090 / Blackwell
+// CUTLASS-based NVFP4 W4A16 GEMM for SM120a (RTX 5090 / Blackwell
 // consumer GeForce). Native block-scaled FP4 GEMM matching the Qwen3.6
 // NVFP4 ckpt schema (compressed-tensors `nvfp4-pack-quantized` format).
 //
@@ -44,7 +44,7 @@
 namespace flash_rt {
 namespace gemm {
 
-// NVFP4 A4W4 GEMM, BF16 output, SM120a (RTX 5090).
+// NVFP4 W4A16 GEMM, BF16 output, SM120a (RTX 5090).
 //
 //   A_packed  : (M, K/2)        u8  row-major   (FP4 e2m1, 2 per byte)
 //   B_packed  : (N, K/2)        u8  row-major   (FP4 e2m1, 2 per byte)
@@ -64,6 +64,20 @@ void fp4_w4a16_gemm_sm120_bf16out(
     const void*  SFA,         // (M, K/16)       e4m3 (Sm1xx blockscaled layout)
     const void*  SFB,         // (N, K/16)       e4m3 (Sm1xx blockscaled layout)
     float        alpha,       // = sf_global_a * sf_global_b
+    cudaStream_t stream);
+
+// Residual variant: D = alpha*(A*B) + C, C a per-element bf16 (M,N) addend.
+// Folds the post-GEMM residual add (o_proj/down) into the epilogue so the
+// following rms_norm reads one tensor (D) not two. Default tile (same as above).
+void fp4_w4a16_gemm_residual_sm120_bf16out(
+    const void*  A_packed,
+    const void*  B_packed,
+    const void*  C_residual,  // (M, N) bf16 row-major
+    void*        D_bf16,
+    int M, int N, int K,
+    const void*  SFA,
+    const void*  SFB,
+    float        alpha,
     cudaStream_t stream);
 
 // Wide-N variant: TileShape <128, 256, 128>. For shapes with very

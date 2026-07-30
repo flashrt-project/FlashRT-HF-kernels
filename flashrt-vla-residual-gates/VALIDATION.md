@@ -46,3 +46,7 @@ Required before publishing this package:
 
    Add hardware claims only after the same correctness and benchmark commands
    pass on that machine.
+
+The full source matrix includes BF16 and FP8-video-gate variants, output
+aliasing checks, invalid dtype/shape rejection, fullgraph compile parity and
+raw-launcher direct/CUDA Graph comparison.

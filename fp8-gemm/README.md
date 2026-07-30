@@ -12,6 +12,7 @@ linear path.
 
 - `fp8_linear_bf16(input, weight, alpha=1.0, out=None, variant=0)`
 - `fp8_linear_residual_bf16(input, weight, residual, alpha=1.0, variant=0)`
+- `fp8_blockwise_linear_bf16(input, weight, input_scale, weight_scale, out=None)`
 - `select_fp8_linear_tile(m, n, k, variant=0)`
 
 Tensor contract:
@@ -27,6 +28,18 @@ Tensor contract:
   that are not valid for plain `sm_120` compilation.
 - `alpha` is a host float. For per-tensor FP8 quantization, pass
   `float(input_scale * weight_scale)` from your static calibration metadata.
+
+The blockwise API uses a separate contract:
+
+- `input`: FP8 E4M3 `(M, K)`.
+- `weight`: FP8 E4M3 `(N, K)`.
+- `input_scale`: FP32 `(M, K / 128)`.
+- `weight_scale`: FP32 `(N / 128, K / 128)`.
+- `N` and `K` must be divisible by 128; `M` is unrestricted.
+- Output is BF16 `(M, N)`.
+- The current blockwise implementation is the production FlashRT CUTLASS
+  SM120 kernel. Other architectures are rejected rather than silently using a
+  different numerical contract.
 
 ## Minimal Usage
 
@@ -52,6 +65,18 @@ residual = torch.zeros((1, 4096), device="cuda", dtype=torch.bfloat16)
 ops.fp8_linear_residual_bf16(x, w, residual, alpha=1.0)
 ```
 
+Block-128 scaling:
+
+```python
+m, k, n = 51, 1536, 1536
+x = torch.randn((m, k), device="cuda").to(torch.float8_e4m3fn)
+w = torch.randn((n, k), device="cuda").to(torch.float8_e4m3fn)
+x_scale = torch.ones((m, k // 128), device="cuda", dtype=torch.float32)
+w_scale = torch.ones((n // 128, k // 128), device="cuda", dtype=torch.float32)
+
+y = ops.fp8_blockwise_linear_bf16(x, w, x_scale, w_scale)
+```
+
 ## Validation
 
 ```bash
@@ -60,4 +85,5 @@ python fp8-gemm/benchmarks/benchmark.py --backend source --mode headline
 ```
 
 Public benchmark tables are only updated after source correctness, installed
-artifact correctness, and shape/tile sweeps pass.
+artifact correctness, shape/tile sweeps, `torch.compile(fullgraph=True)`, and
+parity against the original FlashRT native pointer entry pass.

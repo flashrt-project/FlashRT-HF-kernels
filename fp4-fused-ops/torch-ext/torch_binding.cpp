@@ -13,9 +13,18 @@
 #include "fused_fp4/norm_silu_fp4_sfa.cuh"
 #include "fused_fp4/dequantize_fp4_sfa.cuh"
 #include "fused_fp4/silu_mul_two_fp4_to_fp4.cuh"
+#include "quantize/quantize_bf16_to_nvfp4_linear.cuh"
+#include "quantize/bf16_rms_silu_ncdhw.cuh"
 #include "quantize/reshape_scales_sfa.cuh"
 #include "registration.h"
 #include "torch_binding.h"
+
+namespace flash_rt::quantize {
+extern "C" int motus_bf16_rms_silu_quant_nvfp4_to_ndhwc_v1(
+    const void* x_bf16, const void* gamma_bf16,
+    const void* awq_inv_scale_fp32, void* y_fp4, void* y_sf,
+    int B, int C, int T, int H, int W, float eps, cudaStream_t stream);
+}
 
 namespace {
 
@@ -414,6 +423,216 @@ void dequantize_fp4_sfa_fp16(
 #endif
 }
 
+void rms_silu_nvfp4_ndhwc_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& gamma,
+    c10::optional<torch::Tensor> const& awq_inv_scale,
+    double eps,
+    torch::Tensor& packed,
+    torch::Tensor& scale_factors) {
+  check_cuda_contiguous(x, "x");
+  check_cuda_contiguous(gamma, "gamma");
+  check_uint8(packed, "packed");
+  check_uint8(scale_factors, "scale_factors");
+  TORCH_CHECK(x.scalar_type() == torch::kBFloat16,
+              "x must have dtype torch.bfloat16");
+  TORCH_CHECK(gamma.scalar_type() == torch::kBFloat16,
+              "gamma must have dtype torch.bfloat16");
+  TORCH_CHECK(x.dim() == 5, "x must have shape (B,C,T,H,W)");
+  const auto b = x.size(0);
+  const auto c = x.size(1);
+  const auto t = x.size(2);
+  const auto h = x.size(3);
+  const auto w = x.size(4);
+  TORCH_CHECK(c % 128 == 0 && c <= 1024,
+              "C must be divisible by 128 and at most 1024");
+  TORCH_CHECK(gamma.sizes() == torch::IntArrayRef({c}),
+              "gamma must have shape (C,)");
+  TORCH_CHECK(
+      packed.sizes() == torch::IntArrayRef({b, t, h, w, c / 2}),
+      "packed must have shape (B,T,H,W,C/2)");
+  TORCH_CHECK(
+      scale_factors.sizes() == torch::IntArrayRef({b, t, h, w, c / 16}),
+      "scale_factors must have shape (B,T,H,W,C/16)");
+  check_same_device(x, gamma, "x", "gamma");
+  check_same_device(x, packed, "x", "packed");
+  check_same_device(x, scale_factors, "x", "scale_factors");
+  const void* awq_ptr = nullptr;
+  if (awq_inv_scale.has_value()) {
+    auto const& scale = awq_inv_scale.value();
+    check_cuda_contiguous(scale, "awq_inv_scale");
+    TORCH_CHECK(scale.scalar_type() == torch::kFloat32,
+                "awq_inv_scale must have dtype torch.float32");
+    TORCH_CHECK(scale.sizes() == torch::IntArrayRef({c}),
+                "awq_inv_scale must have shape (C,)");
+    check_same_device(x, scale, "x", "awq_inv_scale");
+    awq_ptr = scale.data_ptr();
+  }
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int status =
+      flash_rt::quantize::motus_bf16_rms_silu_quant_nvfp4_to_ndhwc_v1(
+          x.data_ptr(), gamma.data_ptr(), awq_ptr, packed.data_ptr(),
+          scale_factors.data_ptr(), checked_int(b, "B"),
+          checked_int(c, "C"), checked_int(t, "T"), checked_int(h, "H"),
+          checked_int(w, "W"), static_cast<float>(eps), stream);
+  TORCH_CHECK(status == 0,
+              "rms_silu_nvfp4_ndhwc_bf16 failed with status ", status);
+#endif
+}
+
+void quantize_bf16_to_nvfp4_linear(
+    torch::Tensor const& input,
+    torch::Tensor& packed,
+    torch::Tensor& scale_factors) {
+  check_cuda_contiguous(input, "input");
+  check_uint8(packed, "packed");
+  check_uint8(scale_factors, "scale_factors");
+  TORCH_CHECK(input.scalar_type() == torch::kBFloat16,
+              "input must have dtype torch.bfloat16");
+  TORCH_CHECK(input.dim() == 2, "input must have shape (rows, cols)");
+  const auto rows = input.size(0);
+  const auto cols = input.size(1);
+  TORCH_CHECK(rows > 0, "rows must be positive");
+  TORCH_CHECK(cols > 0 && cols % 16 == 0,
+              "cols must be positive and divisible by 16");
+  TORCH_CHECK(
+      packed.sizes() == torch::IntArrayRef({rows, cols / 2}),
+      "packed must have shape (rows, cols/2)");
+  TORCH_CHECK(
+      scale_factors.sizes() == torch::IntArrayRef({rows, cols / 16}),
+      "scale_factors must have shape (rows, cols/16)");
+  check_same_device(input, packed, "input", "packed");
+  check_same_device(input, scale_factors, "input", "scale_factors");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(input.device());
+  auto stream =
+      at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  flash_rt::quantize::quantize_bf16_to_nvfp4_linear(
+      reinterpret_cast<const __nv_bfloat16*>(input.data_ptr()),
+      reinterpret_cast<uint8_t*>(packed.data_ptr()),
+      reinterpret_cast<uint8_t*>(scale_factors.data_ptr()),
+      checked_int(rows, "rows"), checked_int(cols, "cols"), stream);
+#endif
+}
+
+void bf16_rms_silu_ncdhw(
+    torch::Tensor const& x,
+    torch::Tensor const& gamma,
+    c10::optional<torch::Tensor> const& prev_cache,
+    double eps,
+    torch::Tensor& out,
+    c10::optional<torch::Tensor> const& next_cache) {
+  check_cuda_contiguous(x, "x");
+  check_cuda_contiguous(gamma, "gamma");
+  check_cuda_contiguous(out, "out");
+  TORCH_CHECK(x.scalar_type() == torch::kBFloat16,
+              "x must have dtype torch.bfloat16");
+  TORCH_CHECK(gamma.scalar_type() == torch::kBFloat16,
+              "gamma must have dtype torch.bfloat16");
+  TORCH_CHECK(out.scalar_type() == torch::kBFloat16,
+              "out must have dtype torch.bfloat16");
+  TORCH_CHECK(x.dim() == 5, "x must have shape (B,C,T,H,W)");
+  const auto b = x.size(0);
+  const auto c = x.size(1);
+  const auto t = x.size(2);
+  const auto h = x.size(3);
+  const auto w = x.size(4);
+  TORCH_CHECK(c > 0 && (c % 2) == 0 && c <= 1024,
+              "C must be even and at most 1024");
+  TORCH_CHECK(gamma.sizes() == torch::IntArrayRef({c}),
+              "gamma must have shape (C,)");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must have the same shape as x");
+  check_same_device(x, gamma, "x", "gamma");
+  check_same_device(x, out, "x", "out");
+  const void* prev_ptr = nullptr;
+  void* next_ptr = nullptr;
+  if (prev_cache.has_value()) {
+    auto const& cache = prev_cache.value();
+    check_cuda_contiguous(cache, "prev_cache");
+    TORCH_CHECK(cache.scalar_type() == torch::kBFloat16,
+                "prev_cache must have dtype torch.bfloat16");
+    TORCH_CHECK(
+        cache.sizes() == torch::IntArrayRef({b, c, 2, h, w}),
+        "prev_cache must have shape (B,C,2,H,W)");
+    check_same_device(x, cache, "x", "prev_cache");
+    prev_ptr = cache.data_ptr();
+  }
+  if (next_cache.has_value()) {
+    auto const& cache = next_cache.value();
+    check_cuda_contiguous(cache, "next_cache");
+    TORCH_CHECK(cache.scalar_type() == torch::kBFloat16,
+                "next_cache must have dtype torch.bfloat16");
+    TORCH_CHECK(
+        cache.sizes() == torch::IntArrayRef({b, c, 2, h, w}),
+        "next_cache must have shape (B,C,2,H,W)");
+    check_same_device(x, cache, "x", "next_cache");
+    next_ptr = cache.data_ptr();
+  }
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int status = flash_rt::quantize::bf16_rms_silu_ncdhw(
+      x.data_ptr(), gamma.data_ptr(), out.data_ptr(), prev_ptr, next_ptr,
+      checked_int(b, "B"), checked_int(c, "C"), checked_int(t, "T"),
+      checked_int(h, "H"), checked_int(w, "W"), static_cast<float>(eps),
+      stream);
+  TORCH_CHECK(status == 0, "bf16_rms_silu_ncdhw failed with status ", status);
+#endif
+}
+
+void bf16_rms_norm_ncdhw(
+    torch::Tensor const& x,
+    torch::Tensor const& gamma,
+    c10::optional<torch::Tensor> const& bias,
+    double eps,
+    torch::Tensor& out) {
+  check_cuda_contiguous(x, "x");
+  check_cuda_contiguous(gamma, "gamma");
+  check_cuda_contiguous(out, "out");
+  TORCH_CHECK(x.scalar_type() == torch::kBFloat16,
+              "x must have dtype torch.bfloat16");
+  TORCH_CHECK(gamma.scalar_type() == torch::kBFloat16,
+              "gamma must have dtype torch.bfloat16");
+  TORCH_CHECK(out.scalar_type() == torch::kBFloat16,
+              "out must have dtype torch.bfloat16");
+  TORCH_CHECK(x.dim() == 5, "x must have shape (B,C,T,H,W)");
+  const auto b = x.size(0);
+  const auto c = x.size(1);
+  const auto t = x.size(2);
+  const auto h = x.size(3);
+  const auto w = x.size(4);
+  TORCH_CHECK(c > 0 && (c % 2) == 0 && c <= 1024,
+              "C must be even and at most 1024");
+  TORCH_CHECK(gamma.sizes() == torch::IntArrayRef({c}),
+              "gamma must have shape (C,)");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must have the same shape as x");
+  check_same_device(x, gamma, "x", "gamma");
+  check_same_device(x, out, "x", "out");
+  const void* bias_ptr = nullptr;
+  if (bias.has_value()) {
+    auto const& bias_tensor = bias.value();
+    check_cuda_contiguous(bias_tensor, "bias");
+    TORCH_CHECK(bias_tensor.scalar_type() == torch::kBFloat16,
+                "bias must have dtype torch.bfloat16");
+    TORCH_CHECK(bias_tensor.sizes() == torch::IntArrayRef({c}),
+                "bias must have shape (C,)");
+    check_same_device(x, bias_tensor, "x", "bias");
+    bias_ptr = bias_tensor.data_ptr();
+  }
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int status = flash_rt::quantize::bf16_rms_norm_ncdhw(
+      x.data_ptr(), gamma.data_ptr(), bias_ptr, out.data_ptr(),
+      checked_int(b, "B"), checked_int(c, "C"), checked_int(t, "T"),
+      checked_int(h, "H"), checked_int(w, "W"), static_cast<float>(eps),
+      stream);
+  TORCH_CHECK(status == 0, "bf16_rms_norm_ncdhw failed with status ", status);
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("sfa_size_bytes_for(Tensor anchor, int rows, int dim, bool is_sfb=False) -> int");
   ops.def("rms_norm_fp4_sfa_fp16(Tensor x, Tensor! packed, Tensor! sfa) -> ()");
@@ -426,6 +645,10 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("silu_mul_two_fp4_to_fp4(Tensor gate_packed, Tensor gate_sfa, Tensor up_packed, Tensor up_sfa, Tensor! out_packed, Tensor! out_sfa) -> ()");
   ops.def("silu_mul_two_mul_fp4_to_fp4(Tensor gate_packed, Tensor gate_sfa, Tensor up_packed, Tensor up_sfa, Tensor inv_s, Tensor! out_packed, Tensor! out_sfa) -> ()");
   ops.def("dequantize_fp4_sfa_fp16(Tensor packed, Tensor sfa, Tensor! out) -> ()");
+  ops.def("rms_silu_nvfp4_ndhwc_bf16(Tensor x, Tensor gamma, Tensor? awq_inv_scale, float eps, Tensor! packed, Tensor! scale_factors) -> ()");
+  ops.def("quantize_bf16_to_nvfp4_linear(Tensor input, Tensor! packed, Tensor! scale_factors) -> ()");
+  ops.def("bf16_rms_silu_ncdhw(Tensor x, Tensor gamma, Tensor? prev_cache, float eps, Tensor! out, Tensor? next_cache) -> ()");
+  ops.def("bf16_rms_norm_ncdhw(Tensor x, Tensor gamma, Tensor? bias, float eps, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("sfa_size_bytes_for", torch::kCUDA, &sfa_size_bytes_for);
   ops.impl("rms_norm_fp4_sfa_fp16", torch::kCUDA, &rms_norm_fp4_sfa_fp16);
@@ -438,6 +661,10 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("silu_mul_two_fp4_to_fp4", torch::kCUDA, &silu_mul_two_fp4_to_fp4);
   ops.impl("silu_mul_two_mul_fp4_to_fp4", torch::kCUDA, &silu_mul_two_mul_fp4_to_fp4);
   ops.impl("dequantize_fp4_sfa_fp16", torch::kCUDA, &dequantize_fp4_sfa_fp16);
+  ops.impl("rms_silu_nvfp4_ndhwc_bf16", torch::kCUDA, &rms_silu_nvfp4_ndhwc_bf16);
+  ops.impl("quantize_bf16_to_nvfp4_linear", torch::kCUDA, &quantize_bf16_to_nvfp4_linear);
+  ops.impl("bf16_rms_silu_ncdhw", torch::kCUDA, &bf16_rms_silu_ncdhw);
+  ops.impl("bf16_rms_norm_ncdhw", torch::kCUDA, &bf16_rms_norm_ncdhw);
 #endif
 }
 

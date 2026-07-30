@@ -11,11 +11,14 @@ python fp4-fused-ops/tests/test_fp4_fused_ops.py \
 
 Result:
 
-- `26/26` checks passed.
+- The current full source gate passed.
 - Unsupported dimensions are rejected explicitly.
 - Residual in-place updates are checked against the FP16 math contract.
 - FP4/SFA outputs are dequantized and checked against the documented NVFP4
   quantization envelope.
+- Linear NVFP4 pack/scale bytes use a bit-level reference.
+- NCDHW RMSNorm, RMSNorm-SiLU and causal-cache outputs are checked against
+  PyTorch and raw native launchers; fullgraph compile parity is covered.
 
 Representative correctness envelope from the full run:
 

@@ -143,7 +143,8 @@ void launchMHA(
     uint32_t* semaphores, void* scratch, bool enable_pdl, uint64_t kv_stride_page,
     uint64_t kv_stride_token, uint64_t kv_stride_head, cudaStream_t stream);
 
-void launchMHAFlashInfer(uint32_t multiProcessorCount, uint32_t nbKHeads, uint32_t slidingWinSize,
+void launchMHAFlashInfer(uint32_t multiProcessorCount, uint32_t nbKHeads,
+                         uint32_t runtimeHeadGrpSize, uint32_t slidingWinSize,
                          float qScale, float const* qScalePtr, OutputHead* output,
 #if LOW_PREC_OUTPUT
                          float rcpOutScale,

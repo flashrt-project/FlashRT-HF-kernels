@@ -71,6 +71,22 @@ class SourceOps:
         self._ops.layer_norm_no_affine_quant_fp8_static_bf16(x, act_scale, float(eps), out)
         return out
 
+    def adaln_modulation6_bf16(self, adaln_params, layer_modulation, out=None):
+        expected = (
+            adaln_params.shape[0],
+            adaln_params.shape[1],
+            adaln_params.shape[3],
+        )
+        if out is None:
+            out = tuple(
+                torch.empty(expected, device=adaln_params.device, dtype=torch.bfloat16)
+                for _ in range(6)
+            )
+        self._ops.adaln_modulation6_bf16(
+            adaln_params, layer_modulation, *out
+        )
+        return out
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -102,6 +118,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "ada_layer_norm_fp8.cu"),
             str(PACKAGE / "csrc" / "dit_layer_norm_fp8.cu"),
+            str(PACKAGE / "csrc" / "adaln_modulation6.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -335,6 +352,47 @@ def run(args) -> None:
         shapes = {"wan_video_short": shapes["wan_video_short"]}
     for label, (rows, dim) in shapes.items():
         run_shape(ops, label, rows, dim, args.eps)
+
+    modulation_shapes = {
+        "boundary": (1, 1, 48),
+        "groot_dit": (1, 51, 1536),
+        "motus": (1, 360, 3072),
+        "video_long": (2, 2520, 3072),
+    }
+    if args.mode == "smoke":
+        modulation_shapes = {"boundary": modulation_shapes["boundary"]}
+    for label, (batch, sequence, dim) in modulation_shapes.items():
+        params = torch.randn(
+            (batch, sequence, 6, dim), device="cuda", dtype=torch.float32
+        )
+        modulation = torch.randn(
+            (6, dim), device="cuda", dtype=torch.float32
+        )
+        expected = tuple(
+            (params[:, :, index, :] + modulation[index]).to(torch.bfloat16)
+            for index in range(6)
+        )
+        out = ops.adaln_modulation6_bf16(params, modulation)
+        for index, (got, ref) in enumerate(zip(out, expected, strict=True)):
+            if not torch.equal(got, ref):
+                diff = (got.float() - ref.float()).abs()
+                raise AssertionError(
+                    f"{label}/adaln_modulation6/out{index}: "
+                    f"max_abs={diff.max().item()}"
+                )
+        compiled = torch.compile(
+            lambda p, m: ops.adaln_modulation6_bf16(p, m),
+            fullgraph=True,
+        )
+        compiled_out = compiled(params, modulation)
+        for index, (got, ref) in enumerate(
+            zip(compiled_out, expected, strict=True)
+        ):
+            if not torch.equal(got, ref):
+                raise AssertionError(
+                    f"{label}/adaln_modulation6_compile/out{index} mismatch"
+                )
+        print(f"PASS {label}/adaln_modulation6: exact six-output parity")
 
 
 def main() -> None:

@@ -26,6 +26,7 @@ void flashrt_xqa_bf16_fp8kv(
   launchMHAFlashInfer(
       static_cast<uint32_t>(sm_count),
       4,
+      6,
       0,
       q_scale,
       nullptr,

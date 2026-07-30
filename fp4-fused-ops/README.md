@@ -21,6 +21,10 @@ chains.
 - `silu_mul_two_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, out_packed=None, out_sfa=None)`
 - `silu_mul_two_mul_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed=None, out_sfa=None)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None)`
+- `quantize_bf16_to_nvfp4_linear(input, packed=None, scale_factors=None)`
+- `rms_silu_nvfp4_ndhwc_bf16(x, gamma, awq_inv_scale=None, eps=1e-6, packed=None, scale_factors=None)`
+- `bf16_rms_norm_ncdhw(x, gamma, bias=None, eps=1e-6, out=None)`
+- `bf16_rms_silu_ncdhw(x, gamma, prev_cache=None, eps=1e-6, out=None, next_cache=None)`
 
 Tensor contract:
 
@@ -34,6 +38,9 @@ Tensor contract:
   shapes should use `residual_add_rms_norm_fp4_sfa_v2_fp16`.
 - All dimensions must be divisible by 16. Unsupported shapes raise instead of
   silently taking a slow or partial path.
+- Linear NVFP4 uses E2M1 values and linear UE4M3 scale bytes per 16 channels.
+- NCDHW RMS kernels accept BF16 `(B,C,T,H,W)`, even `C <= 1024`; the fused
+  NVFP4 producer requires `C % 128 == 0`.
 
 ## Minimal Usage
 
@@ -49,6 +56,10 @@ packed, sfa = ops.silu_mul_fp4_sfa_v2_fp16(merged)
 # Optional debug/validation path. The hot path should pass packed/SFA directly
 # to the adjacent FP4 GEMM instead of dequantizing.
 dequant = ops.dequantize_fp4_sfa_fp16(packed, sfa)
+
+video = torch.randn((1, 128, 5, 9, 11), device="cuda", dtype=torch.bfloat16)
+gamma = torch.ones((128,), device="cuda", dtype=torch.bfloat16)
+packed_video, linear_scales = ops.rms_silu_nvfp4_ndhwc_bf16(video, gamma)
 ```
 
 ## Validation
@@ -65,3 +76,4 @@ Validation checks:
   envelope;
 - v2 fast paths are checked against v1 where the v1 kernel is valid;
 - unsupported shapes are rejected explicitly.
+- new NCDHW/cache outputs and linear NVFP4 bytes match raw launchers bitwise.

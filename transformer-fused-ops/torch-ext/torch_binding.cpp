@@ -13,6 +13,7 @@
 #include "kernels/nexn2_misc.cuh"
 #include "kernels/nexn2_router_topk.cuh"
 #include "kernels/qwen36_misc.cuh"
+#include "kernels/relu2_quantize_fp8.cuh"
 #include "kernels/rms_norm_gated_silu_qwen36.cuh"
 #include "kernels/silu_mul_qwen36.cuh"
 #include "registration.h"
@@ -274,6 +275,36 @@ void nexn2_router_topk_bf16(torch::Tensor const& logits, torch::Tensor& out_idx,
 #endif
 }
 
+void relu2_quantize_fp8_static_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& scale,
+    torch::Tensor& output) {
+  check_bf16(input, "input");
+  check_f32(scale, "scale");
+  check_cuda_contiguous(output, "output");
+  TORCH_CHECK(
+      output.scalar_type() == c10::ScalarType::Float8_e4m3fn,
+      "output must have dtype torch.float8_e4m3fn");
+  TORCH_CHECK(output.sizes() == input.sizes(), "output shape mismatch");
+  TORCH_CHECK(input.numel() > 0 && input.numel() % 2 == 0,
+              "input numel must be positive and even");
+  TORCH_CHECK(scale.numel() == 1, "scale must contain one FP32 value");
+  same_device(input, scale, "input", "scale");
+  same_device(input, output, "input", "output");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(input.device());
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  flash_rt::kernels::relu2_quantize_fp8_static_bf16(
+      input.data_ptr(),
+      output.data_ptr(),
+      scale.data_ptr<float>(),
+      checked_int(input.numel(), "numel"),
+      stream);
+#else
+  TORCH_CHECK(false, "transformer-fused-ops was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("rms_norm_gated_silu_bf16(Tensor x, Tensor gate, Tensor weight, float eps, Tensor! out) -> ()");
   ops.def("silu_mul_bf16(Tensor gate, Tensor up, Tensor! out) -> ()");
@@ -285,6 +316,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nexn2_lin_split_qkv_broadcast_bf16(Tensor conv_out, Tensor! q32, Tensor! k32, Tensor! v32) -> ()");
   ops.def("nexn2_split_q_gate_bf16(Tensor q_proj, Tensor! q_pre, Tensor! gate) -> ()");
   ops.def("nexn2_router_topk_bf16(Tensor logits, Tensor! out_idx, Tensor! out_val, int k) -> ()");
+  ops.def("relu2_quantize_fp8_static_bf16(Tensor input, Tensor scale, Tensor! output) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("rms_norm_gated_silu_bf16", torch::kCUDA, &rms_norm_gated_silu_bf16);
   ops.impl("silu_mul_bf16", torch::kCUDA, &silu_mul_bf16);
@@ -296,6 +328,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("nexn2_lin_split_qkv_broadcast_bf16", torch::kCUDA, &nexn2_lin_split_qkv_broadcast_bf16);
   ops.impl("nexn2_split_q_gate_bf16", torch::kCUDA, &nexn2_split_q_gate_bf16);
   ops.impl("nexn2_router_topk_bf16", torch::kCUDA, &nexn2_router_topk_bf16);
+  ops.impl("relu2_quantize_fp8_static_bf16", torch::kCUDA, &relu2_quantize_fp8_static_bf16);
 #endif
 }
 

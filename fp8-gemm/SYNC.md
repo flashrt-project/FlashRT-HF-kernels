@@ -11,6 +11,8 @@ Copied source files:
 - `csrc/gemm/fp8_smallM_handtuned_sm120.cuh`
 - `csrc/gemm/fp8_smallM_handtuned_ldmatrix_sm120.cu`
 - `csrc/gemm/fp8_smallM_handtuned_ldmatrix_sm120.cuh`
+- `csrc/gemm/cutlass_sm120_block128_fp8_gemm.cu`
+- `csrc/gemm/cutlass_sm120_block128_fp8_gemm.cuh`
 
 Local packaging edits:
 
@@ -35,3 +37,6 @@ Runtime constraints:
   for public release.
 - `alpha` is a host float scale multiplier, normally
   `input_scale * weight_scale`.
+- The blockwise path consumes FP32 scales with layouts `(M, K/128)` and
+  `(N/128, K/128)`. It is the same CUTLASS kernel and schedule dispatcher used
+  by the upstream FlashRT pointer API.

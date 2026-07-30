@@ -51,6 +51,8 @@ on:
       - "fp8-prefill-attention-blackwell/**"
       - "grouped-moe-gemm/**"
       - "smallm-ffn-megakernels-blackwell/**"
+      - "blockwise-fp8-producers/**"
+      - "padded-fp8-producers/**"
   workflow_dispatch:
     inputs:
       package:
@@ -106,6 +108,8 @@ on:
           - fp8-prefill-attention-blackwell
           - grouped-moe-gemm
           - smallm-ffn-megakernels-blackwell
+          - blockwise-fp8-producers
+          - padded-fp8-producers
 
 permissions:
   contents: read
@@ -167,6 +171,8 @@ jobs:
           - fp8-prefill-attention-blackwell
           - grouped-moe-gemm
           - smallm-ffn-megakernels-blackwell
+          - blockwise-fp8-producers
+          - padded-fp8-producers
 
     steps:
       - uses: actions/checkout@v4

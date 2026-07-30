@@ -57,6 +57,36 @@ void qkv_split_per_head_norm_rope_bf16(
     float eps,
     cudaStream_t stream);
 
+void qkv_split_bias_rope_bf16(
+    const void* packed_qkv,
+    const void* qkv_bias,
+    const float* cos,
+    const float* sin,
+    void* q_out,
+    void* k_out,
+    void* v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int rope_stride,
+    cudaStream_t stream);
+
+void qkv_split_bias_rope_fp16(
+    const void* packed_qkv,
+    const void* qkv_bias,
+    const float* cos,
+    const float* sin,
+    void* q_out,
+    void* k_out,
+    void* v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int rope_stride,
+    cudaStream_t stream);
+
 void qkv_split_rope_kvcache_bf16(
     const void* packed_qkv,
     const void* rope,

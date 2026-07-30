@@ -97,6 +97,90 @@ class SourceOps:
         )
         return q_out, k_out
 
+    def qkv_split_bias_rope_bf16(
+        self,
+        packed,
+        qkv_bias,
+        cos,
+        sin,
+        q_heads,
+        kv_heads,
+        head_dim,
+        q_out=None,
+        k_out=None,
+        v_out=None,
+    ):
+        batch, seq_len, _ = packed.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, head_dim),
+                device=packed.device,
+                dtype=torch.bfloat16,
+            )
+        if k_out is None:
+            k_out = torch.empty(
+                (batch, seq_len, kv_heads, head_dim),
+                device=packed.device,
+                dtype=torch.bfloat16,
+            )
+        if v_out is None:
+            v_out = torch.empty_like(k_out)
+        self._ops.qkv_split_bias_rope_bf16(
+            packed,
+            qkv_bias,
+            cos,
+            sin,
+            int(q_heads),
+            int(kv_heads),
+            int(head_dim),
+            q_out,
+            k_out,
+            v_out,
+        )
+        return q_out, k_out, v_out
+
+    def qkv_split_bias_rope_fp16(
+        self,
+        packed,
+        qkv_bias,
+        cos,
+        sin,
+        q_heads,
+        kv_heads,
+        head_dim,
+        q_out=None,
+        k_out=None,
+        v_out=None,
+    ):
+        batch, seq_len, _ = packed.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, head_dim),
+                device=packed.device,
+                dtype=torch.float16,
+            )
+        if k_out is None:
+            k_out = torch.empty(
+                (batch, seq_len, kv_heads, head_dim),
+                device=packed.device,
+                dtype=torch.float16,
+            )
+        if v_out is None:
+            v_out = torch.empty_like(k_out)
+        self._ops.qkv_split_bias_rope_fp16(
+            packed,
+            qkv_bias,
+            cos,
+            sin,
+            int(q_heads),
+            int(kv_heads),
+            int(head_dim),
+            q_out,
+            k_out,
+            v_out,
+        )
+        return q_out, k_out, v_out
+
     def qkv_split_joint3_cat_bf16(
         self,
         packed_v,

@@ -76,6 +76,11 @@ class SourceOps:
         self.ops.nexn2_router_topk_bf16(logits, idx, val, int(k))
         return idx, val
 
+    def relu2_quantize_fp8_static_bf16(self, x, scale):
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+        self.ops.relu2_quantize_fp8_static_bf16(x, scale, out)
+        return out
+
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -96,6 +101,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "kernels" / "qwen36_misc.cu"),
             str(PACKAGE / "csrc" / "kernels" / "nexn2_misc.cu"),
             str(PACKAGE / "csrc" / "kernels" / "nexn2_router_topk.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "relu2_quantize_fp8.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -203,6 +209,36 @@ def run(ops, mode: str) -> int:
     ref_val, ref_idx = torch.topk(router.float(), 8)
     if not torch.equal(idx.cpu(), ref_idx.to(torch.int32).cpu()) or not torch.allclose(val.cpu(), ref_val.cpu()):
         raise AssertionError("router topk mismatch")
+    count += 1
+
+    for shape in [(1, 128), (51, 1536), (277, 2048), (1024, 4096)]:
+        x = (torch.randn(shape, device="cuda") * 0.5).to(torch.bfloat16)
+        scale = torch.tensor([0.01], device="cuda", dtype=torch.float32)
+        got = ops.relu2_quantize_fp8_static_bf16(x, scale)
+        expected = (
+            torch.relu(x.float()).square().div(scale).clamp(max=448.0)
+        ).to(torch.float8_e4m3fn)
+        if not torch.equal(got, expected):
+            mismatch = int((got != expected).sum().item())
+            raise AssertionError(f"relu2 quant mismatch: {mismatch}")
+        count += 1
+
+    compile_x = torch.randn(
+        (51, 1536), device="cuda", dtype=torch.bfloat16
+    )
+    compile_scale = torch.tensor(
+        [0.01], device="cuda", dtype=torch.float32
+    )
+
+    def invoke(value, scale):
+        return ops.relu2_quantize_fp8_static_bf16(value, scale)
+
+    eager = invoke(compile_x, compile_scale)
+    compiled = torch.compile(invoke, fullgraph=True)(
+        compile_x, compile_scale
+    )
+    if not torch.equal(compiled, eager):
+        raise AssertionError("relu2 quant compile mismatch")
     count += 1
     return count
 

@@ -67,6 +67,55 @@ class SourceOps:
         self._ops.cast_bf16_to_fp32(src, dst)
         return dst
 
+    def pack_tail_bf16(self, tail, flat_dim):
+        out = torch.empty((flat_dim,), device=tail.device, dtype=tail.dtype)
+        self._ops.pack_tail_bf16(tail, int(flat_dim), out)
+        return out
+
+    def add_bias_zero_tail_bf16(self, input, bias, valid_cols):
+        out = torch.empty_like(input)
+        self._ops.add_bias_zero_tail_bf16(input, bias, int(valid_cols), out)
+        return out
+
+    def extract_tail_f32_to_bf16(self, flat, tail_numel):
+        out = torch.empty((tail_numel,), device=flat.device, dtype=torch.bfloat16)
+        self._ops.extract_tail_f32_to_bf16(flat, int(tail_numel), out)
+        return out
+
+    def add_bias_pair_bf16(self, input, bias_a, bias_b):
+        out = torch.empty_like(input)
+        self._ops.add_bias_pair_bf16(input, bias_a, bias_b, out)
+        return out
+
+    def unipc_step_f32_bf16(
+        self,
+        sample,
+        velocity,
+        prev_m1,
+        prev_m2,
+        prev_last_sample,
+        sigma,
+        corrector_order,
+        predictor_order,
+        corrector_coefficients,
+        predictor_coefficients,
+    ):
+        outputs = [torch.empty_like(sample) for _ in range(3)]
+        self._ops.unipc_step_f32_bf16(
+            sample,
+            velocity,
+            prev_m1,
+            prev_m2,
+            prev_last_sample,
+            float(sigma),
+            int(corrector_order),
+            int(predictor_order),
+            *map(float, corrector_coefficients),
+            *map(float, predictor_coefficients),
+            *outputs,
+        )
+        return tuple(outputs)
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -179,6 +228,144 @@ def run_video_tests(ops) -> int:
     return count
 
 
+def run_tail_tests(ops) -> int:
+    count = 0
+    for flat_dim, tail_numel in [(32, 7), (257, 51), (4096, 1024)]:
+        tail = torch.randn((tail_numel,), device="cuda", dtype=torch.bfloat16)
+        got = ops.pack_tail_bf16(tail, flat_dim)
+        ref = torch.zeros((flat_dim,), device="cuda", dtype=torch.bfloat16)
+        ref[-tail_numel:] = tail
+        assert_close(f"pack_tail {flat_dim=} {tail_numel=}", got, ref, 0.0)
+
+        flat = torch.randn((flat_dim,), device="cuda", dtype=torch.float32)
+        got = ops.extract_tail_f32_to_bf16(flat, tail_numel)
+        ref = flat[-tail_numel:].to(torch.bfloat16)
+        assert_close(f"extract_tail {flat_dim=} {tail_numel=}", got, ref, 0.0)
+        count += 2
+
+    for rows, cols, valid_cols in [(1, 16, 7), (51, 64, 32), (105, 257, 256)]:
+        input = torch.randn((rows, cols), device="cuda", dtype=torch.bfloat16)
+        bias = torch.randn((cols,), device="cuda", dtype=torch.bfloat16)
+        got = ops.add_bias_zero_tail_bf16(input, bias, valid_cols)
+        ref = (input.float() + bias.float()).to(torch.bfloat16)
+        ref[:, valid_cols:] = 0
+        assert_close(
+            f"add_bias_zero_tail {rows=} {cols=} {valid_cols=}",
+            got,
+            ref,
+            0.0,
+        )
+
+        bias_b = torch.randn((cols,), device="cuda", dtype=torch.bfloat16)
+        got = ops.add_bias_pair_bf16(input, bias, bias_b)
+        ref = (input.float() + bias.float()).to(torch.bfloat16)
+        ref = (ref.float() + bias_b.float()).to(torch.bfloat16)
+        assert_close(f"add_bias_pair {rows=} {cols=}", got, ref, 0.0)
+        count += 2
+
+    tail = torch.randn((51,), device="cuda", dtype=torch.bfloat16)
+    input = torch.randn((51, 64), device="cuda", dtype=torch.bfloat16)
+    bias_a = torch.randn((64,), device="cuda", dtype=torch.bfloat16)
+    bias_b = torch.randn((64,), device="cuda", dtype=torch.bfloat16)
+
+    def invoke(tail, input, bias_a, bias_b):
+        return (
+            ops.pack_tail_bf16(tail, 257),
+            ops.add_bias_pair_bf16(input, bias_a, bias_b),
+        )
+
+    eager = invoke(tail, input, bias_a, bias_b)
+    compiled = torch.compile(invoke, fullgraph=True)(tail, input, bias_a, bias_b)
+    for got, expected in zip(compiled, eager):
+        torch.testing.assert_close(got, expected, rtol=0.0, atol=0.0)
+    print("PASS action-tail torch.compile fullgraph")
+    return count + 1
+
+
+def run_unipc_tests(ops) -> int:
+    count = 0
+    corrector = (0.75, 0.2, -0.1, 0.05, 0.4)
+    predictor = (0.8, 0.3, -0.07)
+    for shape in [(1,), (257,), (1, 16, 17, 8, 8)]:
+        sample = torch.randn(shape, device="cuda", dtype=torch.float32)
+        velocity = torch.randn(
+            shape, device="cuda", dtype=torch.bfloat16
+        )
+        prev_m1 = torch.randn_like(sample)
+        prev_m2 = torch.randn_like(sample)
+        prev_last = torch.randn_like(sample)
+        for corrector_order, predictor_order in [(0, 1), (1, 1), (1, 2), (2, 2)]:
+            got_next, got_m, got_last = ops.unipc_step_f32_bf16(
+                sample,
+                velocity,
+                prev_m1,
+                prev_m2,
+                prev_last,
+                0.37,
+                corrector_order,
+                predictor_order,
+                corrector,
+                predictor,
+            )
+            sigma_velocity = (velocity.float() * 0.37).to(
+                torch.bfloat16
+            ).float()
+            expected_m = sample - sigma_velocity
+            expected_last = corrector[0] * sample + corrector[4] * expected_m
+            if corrector_order >= 1:
+                expected_last = (
+                    expected_last
+                    + corrector[1] * prev_last
+                    + corrector[2] * prev_m1
+                )
+            if corrector_order >= 2:
+                expected_last = expected_last + corrector[3] * prev_m2
+            expected_next = (
+                predictor[0] * expected_last + predictor[1] * expected_m
+            )
+            if predictor_order >= 2:
+                expected_next = expected_next + predictor[2] * prev_m1
+            torch.testing.assert_close(
+                got_m, expected_m, rtol=1e-6, atol=1e-6
+            )
+            torch.testing.assert_close(
+                got_last, expected_last, rtol=2e-6, atol=2e-6
+            )
+            torch.testing.assert_close(
+                got_next, expected_next, rtol=2e-6, atol=2e-6
+            )
+            count += 1
+
+    sample = torch.randn((257,), device="cuda", dtype=torch.float32)
+    velocity = torch.randn(
+        (257,), device="cuda", dtype=torch.bfloat16
+    )
+    history = [torch.randn_like(sample) for _ in range(3)]
+
+    def invoke(sample, velocity, prev_m1, prev_m2, prev_last):
+        return ops.unipc_step_f32_bf16(
+            sample,
+            velocity,
+            prev_m1,
+            prev_m2,
+            prev_last,
+            0.37,
+            2,
+            2,
+            corrector,
+            predictor,
+        )
+
+    eager = invoke(sample, velocity, *history)
+    compiled = torch.compile(invoke, fullgraph=True)(
+        sample, velocity, *history
+    )
+    for got, expected in zip(compiled, eager):
+        torch.testing.assert_close(got, expected, rtol=0.0, atol=0.0)
+    print("PASS unipc_step torch.compile fullgraph")
+    return count + 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -188,7 +375,12 @@ def main() -> int:
         raise RuntimeError("CUDA is required")
     torch.manual_seed(0)
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
-    total = run_elementwise_tests(ops) + run_video_tests(ops)
+    total = (
+        run_elementwise_tests(ops)
+        + run_video_tests(ops)
+        + run_tail_tests(ops)
+        + run_unipc_tests(ops)
+    )
     torch.cuda.synchronize()
     print(f"diffusion-step-ops correctness passed: {total} checks")
     return 0

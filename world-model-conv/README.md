@@ -2,8 +2,17 @@
 
 Native CUDA kernels for world-model / video-diffusion convolution hot paths.
 
-The first exported kernel is `fp8_conv3d_v18_ncdhw_res_bf16out`, a Blackwell
-SM120a FP8 3D causal convolution with:
+The package exports:
+
+- `fp8_conv3d_v18_ncdhw_res_bf16out`
+- `fp8_causal_conv3d_ndhwc_bf16`
+- `fp8_conv2d_3x3_nhwc_bf16`
+- `fp8_conv2d_3x3_ncdhw_bf16`
+- `nvfp4_causal_conv3d_ndhwc_bf16`
+- `nvfp4_causal_conv3d_residual_ncdhw_bf16`
+
+The original `fp8_conv3d_v18_ncdhw_res_bf16out` is a Blackwell SM120a FP8
+3D causal convolution with:
 
 - virtual cache/new concat on the time axis,
 - direct causal output over `T_new`,
@@ -46,3 +55,8 @@ wmc.fp8_conv3d_v18_ncdhw_res_bf16out(
 - Output/residual layout: NCDHW.
 
 See `VALIDATION.md` and `benchmarks/RESULTS.md`.
+
+The FP8 Conv2D paths cover NHWC and NCDHW tensor seams. The causal Conv3D
+paths consume prepacked FP8 or NVFP4 activations/weights and expose optional
+preallocated outputs for CUDA Graph runtimes. Unsupported channel, kernel,
+stride and architecture combinations raise before launch.

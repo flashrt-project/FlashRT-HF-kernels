@@ -24,5 +24,11 @@ python benchmarks/benchmark.py --backend source --warmup 50 --iters 500
 kernel-builder check-config .
 ```
 
-The source JIT validation forces `TORCH_CUDA_ARCH_LIST=12.0a` because the
-kernel uses architecture-specific Blackwell FP8 MMA instructions.
+The full source matrix additionally covers FP8 causal Conv3D, FP8 Conv2D in
+NHWC/NCDHW seams, NVFP4 causal Conv3D and residual output variants. It checks
+max/p99/mean error, cosine, invalid-shape rejection, fullgraph tracing, raw
+native parity and cuDNN/PyTorch convolution baselines where the numerical
+contract is equivalent.
+
+The source JIT validation forces `TORCH_CUDA_ARCH_LIST=12.0a` because these
+kernels use architecture-specific Blackwell low-precision MMA instructions.

@@ -260,6 +260,62 @@ def layer_norm_no_affine_quant_fp8_static_bf16(
     return out
 
 
+@torch.library.register_fake(add_op_namespace_prefix("adaln_modulation6_bf16"))
+def _adaln_modulation6_bf16_fake(
+    adaln_params: torch.Tensor,
+    layer_modulation: torch.Tensor,
+    out0: torch.Tensor,
+    out1: torch.Tensor,
+    out2: torch.Tensor,
+    out3: torch.Tensor,
+    out4: torch.Tensor,
+    out5: torch.Tensor,
+) -> None:
+    if adaln_params.dim() != 4 or adaln_params.shape[2] != 6:
+        raise RuntimeError(
+            "adaln_params must have shape (batch, sequence, 6, dim)"
+        )
+    expected = (
+        adaln_params.shape[0],
+        adaln_params.shape[1],
+        adaln_params.shape[3],
+    )
+    if layer_modulation.shape != (6, expected[2]):
+        raise RuntimeError("layer_modulation must have shape (6, dim)")
+    for output in (out0, out1, out2, out3, out4, out5):
+        if output.shape != expected:
+            raise RuntimeError(
+                "each output must have shape (batch, sequence, dim)"
+            )
+    return None
+
+
+def adaln_modulation6_bf16(
+    adaln_params: torch.Tensor,
+    layer_modulation: torch.Tensor,
+    *,
+    out: tuple[torch.Tensor, ...] | None = None,
+) -> tuple[torch.Tensor, ...]:
+    """Add six FP32 AdaLN modulation vectors and return six BF16 tensors."""
+
+    batch, sequence, _, dim = adaln_params.shape
+    if out is None:
+        out = tuple(
+            torch.empty(
+                (batch, sequence, dim),
+                device=adaln_params.device,
+                dtype=torch.bfloat16,
+            )
+            for _ in range(6)
+        )
+    if len(out) != 6:
+        raise RuntimeError("out must contain six tensors")
+    ops.adaln_modulation6_bf16(
+        adaln_params, layer_modulation, *out
+    )
+    return out
+
+
 __all__ = [
     "ada_layer_norm_quant_fp8_bf16",
     "ada_layer_norm_quant_fp8_modfp8_bf16",
@@ -267,5 +323,6 @@ __all__ = [
     "ada_layer_norm_quant_nvfp4_swizzled_bf16",
     "ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16",
     "layer_norm_no_affine_quant_fp8_static_bf16",
+    "adaln_modulation6_bf16",
     "swizzled_sf_size",
 ]

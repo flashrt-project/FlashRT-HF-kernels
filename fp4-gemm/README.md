@@ -13,6 +13,11 @@ paths.
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
 - `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=0)`
+- `nvfp4_gemm_residual_bf16(a_packed, b_packed, sfa, sfb, residual, alpha=1.0, out=None)`
+- `nvfp4_gemm_bias_gelu_bf16(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out=None)`
+- `nvfp4_gemm_bias_gelu_nvfp4(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out_packed=None, out_sfa=None)`
+- `nvfp4_gemm_streamk_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None)`
+- `nvfp4_gemm_streamk_bias_bf16(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out=None)`
 - `fp4_w4a16_linear_bf16(...)` is retained as a compatibility alias
 
 ## Tensor Contract
@@ -51,6 +56,11 @@ y = ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0)
 The quantize/dequantize helpers are included for examples and validation. A
 production runtime should keep weights prepacked and should avoid quantizing in
 the hot path unless that producer kernel is part of the intended low-bit block.
+
+Use the bias/GELU and residual variants to avoid returning to BF16
+elementwise code between low-bit GEMMs. Stream-K variants are selected only
+for the validated large down-projection shapes; unsupported shapes reject
+rather than silently selecting a losing schedule.
 
 ## Validation
 

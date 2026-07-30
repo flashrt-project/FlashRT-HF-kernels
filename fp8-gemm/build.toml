@@ -19,7 +19,7 @@ src = [
 
 [kernel.fp8_gemm]
 backend = "cuda"
-depends = ["torch"]
+depends = ["torch", "cutlass_4_0"]
 include = ["csrc"]
 cuda-minver = "12.8"
 cuda-capabilities = ["12.0a"]
@@ -30,4 +30,6 @@ src = [
   "csrc/fp8_smallM_handtuned_sm120.cuh",
   "csrc/fp8_smallM_handtuned_ldmatrix_sm120.cu",
   "csrc/fp8_smallM_handtuned_ldmatrix_sm120.cuh",
+  "csrc/cutlass_sm120_block128_fp8_gemm.cu",
+  "csrc/cutlass_sm120_block128_fp8_gemm.cuh",
 ]

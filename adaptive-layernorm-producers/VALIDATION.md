@@ -35,6 +35,7 @@ Covered operators:
 | `layer_norm_no_affine_quant_fp8_static_bf16` | FP8 reference contract |
 | `ada_layer_norm_quant_nvfp4_swizzled_bf16` | exact packed output and exact swizzled scale-factor output for representative rows |
 | `ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16` | exact packed output and exact swizzled scale-factor output for representative rows |
+| `adaln_modulation6_bf16` | exact six-output BF16 parity, fullgraph compile, raw native and CUDA Graph benchmark |
 
 FP8 long-shape validation allows only adjacent FP8-code boundary differences
 caused by reference reduction/order at quantization thresholds. The gate still

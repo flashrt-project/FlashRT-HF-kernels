@@ -37,6 +37,29 @@ def _fp8_linear_residual_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("fp8_blockwise_linear_bf16"))
+def _fp8_blockwise_linear_bf16_fake(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if input.dim() != 2 or weight.dim() != 2:
+        raise RuntimeError("input and weight must be rank-2 tensors")
+    m, k = input.shape
+    n = weight.shape[0]
+    if weight.shape[1] != k or n % 128 or k % 128:
+        raise RuntimeError("weight shape is invalid or N/K are not divisible by 128")
+    if input_scale.shape != (m, k // 128):
+        raise RuntimeError("input_scale must have shape (M, K / 128)")
+    if weight_scale.shape != (n // 128, k // 128):
+        raise RuntimeError("weight_scale must have shape (N / 128, K / 128)")
+    if out.shape != (m, n):
+        raise RuntimeError("out must have shape (M, N)")
+    return None
+
+
 def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
     """Return the FlashRT tile selected by the public dispatcher."""
 
@@ -126,3 +149,24 @@ def fp8_linear_residual_bf16(
 
     ops.fp8_linear_residual_bf16(input, weight, float(alpha), int(variant), residual)
     return residual
+
+
+def fp8_blockwise_linear_bf16(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    input_scale: torch.Tensor,
+    weight_scale: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Block-128 scaled FP8 linear with BF16 output on SM120."""
+
+    if out is None:
+        out = torch.empty(
+            (input.shape[0], weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    ops.fp8_blockwise_linear_bf16(
+        input, weight, input_scale, weight_scale, out
+    )
+    return out

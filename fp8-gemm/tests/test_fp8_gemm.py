@@ -84,6 +84,20 @@ class SourceOps:
         self._ops.fp8_linear_residual_bf16(x, w, float(alpha), int(variant), residual)
         return residual
 
+    def fp8_blockwise_linear_bf16(
+        self, x, w, input_scale, weight_scale, out=None
+    ):
+        if out is None:
+            out = torch.empty(
+                (x.shape[0], w.shape[0]),
+                device=x.device,
+                dtype=torch.bfloat16,
+            )
+        self._ops.fp8_blockwise_linear_bf16(
+            x, w, input_scale, weight_scale, out
+        )
+        return out
+
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -99,6 +113,22 @@ def load_source_ops() -> SourceOps:
         raise RuntimeError(f"missing kernel-builder registration include: {REGISTRATION_INCLUDE}")
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _current_arch_list())
     namespace = "fp8_gemm_source_test"
+    cutlass_include = Path(
+        os.environ.get(
+            "CUTLASS_INCLUDE",
+            str(
+                ROOT.parent
+                / "flashrt_pr31_review"
+                / "third_party"
+                / "cutlass"
+                / "include"
+            ),
+        )
+    )
+    if not (cutlass_include / "cutlass" / "cutlass.h").is_file():
+        raise RuntimeError(
+            "CUTLASS 4 include path is required; set CUTLASS_INCLUDE"
+        )
     load(
         name=namespace,
         sources=[
@@ -106,8 +136,14 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "fp8_gemv_m1_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_ldmatrix_sm120.cu"),
+            str(PACKAGE / "csrc" / "cutlass_sm120_block128_fp8_gemm.cu"),
         ],
-        extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
+        extra_include_paths=[
+            str(PACKAGE / "csrc"),
+            str(REGISTRATION_INCLUDE),
+            str(cutlass_include),
+            str(cutlass_include.parent / "tools" / "util" / "include"),
+        ],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
         extra_cuda_cflags=["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL"],
         verbose=False,
@@ -252,6 +288,97 @@ def run_residual_case(ops) -> Metrics:
     )
 
 
+def run_blockwise_case(
+    ops, name: str, shape: tuple[int, int, int]
+) -> Metrics:
+    m, k, n = shape
+    gen = torch.Generator(device="cuda").manual_seed(5000 + m + k + n)
+    x = (torch.randn((m, k), device="cuda", generator=gen) * 0.4).to(
+        torch.float8_e4m3fn
+    )
+    w = (torch.randn((n, k), device="cuda", generator=gen) * 0.4).to(
+        torch.float8_e4m3fn
+    )
+    input_scale = (
+        0.005
+        + 0.02
+        * torch.rand((m, k // 128), device="cuda", generator=gen)
+    ).float().contiguous()
+    weight_scale = (
+        0.005
+        + 0.02
+        * torch.rand((n // 128, k // 128), device="cuda", generator=gen)
+    ).float().contiguous()
+    expanded_input_scale = input_scale.repeat_interleave(128, dim=1)
+    expanded_weight_scale = weight_scale.repeat_interleave(
+        128, dim=0
+    ).repeat_interleave(128, dim=1)
+    expected = (
+        (x.float() * expanded_input_scale)
+        @ (w.float() * expanded_weight_scale).T
+    ).to(torch.bfloat16)
+    got = ops.fp8_blockwise_linear_bf16(
+        x, w, input_scale, weight_scale
+    )
+    torch.cuda.synchronize()
+    max_abs, mean_abs, p99_abs, cos = compare(got, expected)
+    passed = (
+        max_abs <= 0.0625
+        and mean_abs <= 0.003
+        and p99_abs <= 0.015625
+        and cos >= 0.9999
+    )
+    return Metrics(
+        shape=name,
+        M=m,
+        K=k,
+        N=n,
+        variant=0,
+        tile="cutlass_sm120_block128",
+        max_abs=max_abs,
+        mean_abs=mean_abs,
+        p99_abs=p99_abs,
+        cosine=cos,
+        dtype=str(got.dtype),
+        tolerance=(
+            "max_abs<=0.0625 mean_abs<=0.003 "
+            "p99_abs<=0.015625 cosine>=0.9999"
+        ),
+        passed=passed,
+    )
+
+
+def run_blockwise_compile_case(ops) -> None:
+    m, k, n = (51, 1536, 1536)
+    gen = torch.Generator(device="cuda").manual_seed(9153)
+    x = (torch.randn((m, k), device="cuda", generator=gen) * 0.4).to(
+        torch.float8_e4m3fn
+    )
+    w = (torch.randn((n, k), device="cuda", generator=gen) * 0.4).to(
+        torch.float8_e4m3fn
+    )
+    input_scale = torch.rand(
+        (m, k // 128), device="cuda", generator=gen, dtype=torch.float32
+    ).mul_(0.02).add_(0.005)
+    weight_scale = torch.rand(
+        (n // 128, k // 128),
+        device="cuda",
+        generator=gen,
+        dtype=torch.float32,
+    ).mul_(0.02).add_(0.005)
+
+    def invoke(input, weight, input_scale, weight_scale):
+        return ops.fp8_blockwise_linear_bf16(
+            input, weight, input_scale, weight_scale
+        )
+
+    eager = invoke(x, w, input_scale, weight_scale)
+    compiled = torch.compile(invoke, fullgraph=True)(
+        x, w, input_scale, weight_scale
+    )
+    torch.testing.assert_close(compiled, eager, rtol=0.0, atol=0.0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -269,12 +396,32 @@ def main() -> None:
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     rows = [run_case(ops, name, SHAPES[name]) for name in MODES[args.mode]]
     rows.append(run_residual_case(ops))
+    blockwise_shapes = [
+        ("blockwise_decode", (1, 1024, 1024)),
+        ("blockwise_action", (51, 1536, 1536)),
+    ]
+    if args.mode == "full":
+        blockwise_shapes += [
+            ("blockwise_groot", (277, 2048, 2048)),
+            ("blockwise_vision", (1024, 1152, 1152)),
+            ("blockwise_video", (2520, 3072, 3072)),
+            ("blockwise_qwen_mlp", (128, 4096, 12288)),
+        ]
+    rows.extend(
+        run_blockwise_case(ops, name, shape)
+        for name, shape in blockwise_shapes
+    )
+    run_blockwise_compile_case(ops)
 
     failed = [row for row in rows if not row.passed]
     payload = {"passed": len(rows) - len(failed), "failed": len(failed), "rows": [asdict(row) for row in rows]}
     print(json.dumps(payload, indent=2, sort_keys=True))
     if args.json_out:
-        Path(args.json_out).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        output_path = Path(args.json_out)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        )
     if failed:
         raise SystemExit(1)
 

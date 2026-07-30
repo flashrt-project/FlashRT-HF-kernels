@@ -141,6 +141,154 @@ __global__ void update_cache2_ncdhw_bf16_kernel(
   out[idx] = value;
 }
 
+__global__ void avg_pool3d_channels_bf16_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    __nv_bfloat16* __restrict__ out,
+    int total,
+    int channels,
+    int frames,
+    int height,
+    int width,
+    int out_channels,
+    int out_frames,
+    int out_height,
+    int out_width,
+    int factor_t,
+    int factor_s,
+    int group_size,
+    int pad_t) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= total) return;
+
+  int rem = idx;
+  const int ow = rem % out_width;
+  rem /= out_width;
+  const int oh = rem % out_height;
+  rem /= out_height;
+  const int ot = rem % out_frames;
+  rem /= out_frames;
+  const int oc = rem % out_channels;
+  const int batch = rem / out_channels;
+
+  const int factor = factor_t * factor_s * factor_s;
+  float acc = 0.0f;
+  #pragma unroll
+  for (int group = 0; group < 8; ++group) {
+    if (group >= group_size) break;
+    int channel_factor = oc * group_size + group;
+    const int ws = channel_factor % factor_s;
+    channel_factor /= factor_s;
+    const int hs = channel_factor % factor_s;
+    channel_factor /= factor_s;
+    const int tt = channel_factor % factor_t;
+    const int channel = channel_factor / factor_t;
+    if (channel >= channels || oc * group_size + group >= channels * factor) {
+      continue;
+    }
+    const int padded_t = ot * factor_t + tt;
+    if (padded_t < pad_t) continue;
+    const int input_t = padded_t - pad_t;
+    if (input_t >= frames) continue;
+    const int input_h = oh * factor_s + hs;
+    const int input_w = ow * factor_s + ws;
+    const long long input_idx =
+        (((static_cast<long long>(batch) * channels + channel) * frames +
+          input_t) *
+             height +
+         input_h) *
+            width +
+        input_w;
+    acc += __bfloat162float(x[input_idx]);
+  }
+  out[idx] = __float2bfloat16(acc / static_cast<float>(group_size));
+}
+
+__global__ void channel_to_space3d_bf16_kernel(
+    const __nv_bfloat16* __restrict__ x,
+    __nv_bfloat16* __restrict__ out,
+    int in_channels,
+    int out_channels,
+    int frames,
+    int height,
+    int width,
+    int temporal_factor,
+    int spatial_factor,
+    int repeats,
+    int out_frames,
+    long long total) {
+  const long long index =
+      static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (index >= total) return;
+  const int out_width = width * spatial_factor;
+  const int out_height = height * spatial_factor;
+  const int out_w = index % out_width;
+  long long rem = index / out_width;
+  const int out_h = rem % out_height;
+  rem /= out_height;
+  const int out_t = rem % out_frames;
+  rem /= out_frames;
+  const int out_c = rem % out_channels;
+  const int batch = rem / out_channels;
+  const int full_t =
+      out_t + (frames * temporal_factor - out_frames);
+  const int dt = full_t % temporal_factor;
+  const int in_t = full_t / temporal_factor;
+  const int dh = out_h % spatial_factor;
+  const int in_h = out_h / spatial_factor;
+  const int dw = out_w % spatial_factor;
+  const int in_w = out_w / spatial_factor;
+  const int subpixel =
+      ((dt * spatial_factor) + dh) * spatial_factor + dw;
+  const int expanded_channel =
+      out_c * temporal_factor * spatial_factor * spatial_factor + subpixel;
+  const int in_c = expanded_channel / repeats;
+  if (in_c >= in_channels) return;
+  const long long input_index =
+      (((static_cast<long long>(batch) * in_channels + in_c) * frames +
+        in_t) *
+           height +
+       in_h) *
+          width +
+      in_w;
+  out[index] = x[input_index];
+}
+
+__global__ void pack_causal_cache3_nhwc_bf16_kernel(
+    const __nv_bfloat16* __restrict__ previous,
+    const __nv_bfloat16* __restrict__ current,
+    __nv_bfloat16* __restrict__ out,
+    int channels,
+    int height,
+    int width,
+    long long total) {
+  for (long long index =
+           static_cast<long long>(blockIdx.x) * blockDim.x + threadIdx.x;
+       index < total;
+       index += static_cast<long long>(blockDim.x) * gridDim.x) {
+    const int channel3 = index % (3LL * channels);
+    long long rem = index / (3LL * channels);
+    const int out_w = rem % width;
+    rem /= width;
+    const int out_h = rem % height;
+    const int batch = rem / height;
+    const int plane = channel3 / channels;
+    const int channel = channel3 - plane * channels;
+    const long long hw = static_cast<long long>(out_h) * width + out_w;
+    if (plane < 2) {
+      out[index] = previous[
+          ((static_cast<long long>(batch) * channels + channel) * 2 +
+           plane) *
+              height * width +
+          hw];
+    } else {
+      out[index] = current[
+          (static_cast<long long>(batch) * channels + channel) *
+              height * width +
+          hw];
+    }
+  }
+}
+
 }  // namespace
 
 void ncdhw_to_blc_bf16(
@@ -237,6 +385,92 @@ void update_cache2_ncdhw_bf16(
       frames,
       height,
       width,
+      total);
+}
+
+void avg_pool3d_channels_bf16(
+    const void* x,
+    void* out,
+    int batch,
+    int channels,
+    int frames,
+    int height,
+    int width,
+    int out_channels,
+    int factor_t,
+    int factor_s,
+    int group_size,
+    cudaStream_t stream) {
+  const int pad_t = (factor_t - (frames % factor_t)) % factor_t;
+  const int out_frames = (frames + pad_t) / factor_t;
+  const int out_height = height / factor_s;
+  const int out_width = width / factor_s;
+  const long long total64 =
+      static_cast<long long>(batch) * out_channels * out_frames * out_height *
+      out_width;
+  avg_pool3d_channels_bf16_kernel<<<
+      static_cast<unsigned>((total64 + 255) / 256), 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(x),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      static_cast<int>(total64),
+      channels,
+      frames,
+      height,
+      width,
+      out_channels,
+      out_frames,
+      out_height,
+      out_width,
+      factor_t,
+      factor_s,
+      group_size,
+      pad_t);
+}
+
+void channel_to_space3d_bf16(
+    const void* x,
+    void* out,
+    int batch,
+    int in_channels,
+    int out_channels,
+    int frames,
+    int height,
+    int width,
+    int temporal_factor,
+    int spatial_factor,
+    int repeats,
+    bool first_chunk,
+    cudaStream_t stream) {
+  const int out_frames =
+      frames * temporal_factor - (first_chunk ? temporal_factor - 1 : 0);
+  const long long total =
+      static_cast<long long>(batch) * out_channels * out_frames *
+      (height * spatial_factor) * (width * spatial_factor);
+  channel_to_space3d_bf16_kernel<<<
+      static_cast<unsigned>((total + 255) / 256), 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(x),
+      reinterpret_cast<__nv_bfloat16*>(out), in_channels, out_channels,
+      frames, height, width, temporal_factor, spatial_factor, repeats,
+      out_frames, total);
+}
+
+void pack_causal_cache3_nhwc_bf16(
+    const void* previous,
+    const void* current,
+    void* out,
+    int batch,
+    int channels,
+    int height,
+    int width,
+    cudaStream_t stream) {
+  const long long total =
+      static_cast<long long>(batch) * height * width * 3 * channels;
+  int blocks = static_cast<int>((total + 255) / 256);
+  if (blocks > 4096) blocks = 4096;
+  pack_causal_cache3_nhwc_bf16_kernel<<<blocks, 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(previous),
+      reinterpret_cast<const __nv_bfloat16*>(current),
+      reinterpret_cast<__nv_bfloat16*>(out), channels, height, width,
       total);
 }
 

@@ -24,11 +24,13 @@ class BenchResult:
     N: int
     K: int
     variant: int
+    native_us: float
     flashrt_us: float
     torch_eager_us: float
     torch_compile_us: float
     speedup_vs_eager: float
     speedup_vs_compile: float
+    wrapper_over_native: float
     max_abs: float
     mean_abs: float
     p99_abs: float
@@ -60,7 +62,7 @@ def measure(fn, warmup: int, iters: int) -> float:
     return float(start.elapsed_time(end) * 1000.0 / iters)
 
 
-def bench_case(helpers, ops, name: str, shape: tuple[int, int, int], warmup: int, iters: int) -> list[BenchResult]:
+def bench_case(helpers, ops, native, name: str, shape: tuple[int, int, int], warmup: int, iters: int) -> list[BenchResult]:
     m, n, k = shape
     a_packed, b_packed, sfa, sfb, expected = helpers.prepare_quantized(ops, m, n, k)
     a_deq = torch.empty((m, k), device="cuda", dtype=torch.float16)
@@ -75,6 +77,7 @@ def bench_case(helpers, ops, name: str, shape: tuple[int, int, int], warmup: int
     torch_eager_us = measure(torch_ref, warmup, iters)
     compiled_ref = torch.compile(torch_ref, mode="max-autotune-no-cudagraphs")
     torch_compile_us = measure(compiled_ref, warmup, iters)
+    stream = torch.cuda.current_stream().cuda_stream
     results: list[BenchResult] = []
     for variant in (0, 1, 2):
         out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
@@ -86,6 +89,29 @@ def bench_case(helpers, ops, name: str, shape: tuple[int, int, int], warmup: int
             warmup,
             iters,
         )
+        native_function = (
+            native.fp4_w4a16_gemm_sm120_bf16out
+            if variant == 0
+            else native.fp4_w4a16_gemm_sm120_bf16out_widen
+            if variant == 1
+            else native.fp4_w4a16_gemm_sm120_bf16out_pingpong
+        )
+        native_us = measure(
+            lambda: native_function(
+                a_packed.data_ptr(),
+                b_packed.data_ptr(),
+                out.data_ptr(),
+                m,
+                n,
+                k,
+                sfa.data_ptr(),
+                sfb.data_ptr(),
+                1.0,
+                stream,
+            ),
+            warmup,
+            iters,
+        )
         results.append(
             BenchResult(
                 shape=name,
@@ -93,11 +119,13 @@ def bench_case(helpers, ops, name: str, shape: tuple[int, int, int], warmup: int
                 N=n,
                 K=k,
                 variant=variant,
+                native_us=native_us,
                 flashrt_us=flashrt_us,
                 torch_eager_us=torch_eager_us,
                 torch_compile_us=torch_compile_us,
                 speedup_vs_eager=torch_eager_us / flashrt_us,
                 speedup_vs_compile=torch_compile_us / flashrt_us,
+                wrapper_over_native=flashrt_us / native_us,
                 max_abs=max_abs,
                 mean_abs=mean_abs,
                 p99_abs=p99_abs,
@@ -119,6 +147,11 @@ def main() -> int:
     args = parser.parse_args()
 
     helpers = load_helpers()
+    sys.path.insert(0, str(ROOT.parent / "official" / "FlashRT"))
+    try:
+        import flash_rt.flash_rt_kernels as native
+    finally:
+        sys.path.pop(0)
     ops = (
         helpers.load_source_ops()
         if args.backend == "source"
@@ -128,12 +161,20 @@ def main() -> int:
         "small_m16_n128_k128": (16, 128, 128),
         "small_m32_n256_k256": (32, 256, 256),
         "mlp_tile_m64_n512_k512": (64, 512, 512),
+        "groot_dit_projection": (51, 1536, 1536),
+        "vla_projection": (105, 2048, 2048),
+        "motus_up": (360, 14336, 3072),
+        "motus_down": (360, 3072, 14336),
     }
     if args.mode == "smoke":
         shapes = {"small_m16_n128_k128": shapes["small_m16_n128_k128"]}
     results: list[BenchResult] = []
     for name, shape in shapes.items():
-        results.extend(bench_case(helpers, ops, name, shape, args.warmup, args.iterations))
+        results.extend(
+            bench_case(
+                helpers, ops, native, name, shape, args.warmup, args.iterations
+            )
+        )
     payload = {
         "mode": args.mode,
         "backend": args.backend,

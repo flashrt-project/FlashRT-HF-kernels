@@ -25,5 +25,10 @@ cuda-minver = "12.8"
 cuda-capabilities = ["12.0a"]
 src = [
   "csrc/fp8_conv3d_sm120_v18.cu",
+  "csrc/fp8_causal_conv3d_sm120.cu",
+  "csrc/fp8_conv2d_3x3_sm120.cu",
+  "csrc/nvfp4_causal_conv3d_sm120.cu",
+  "csrc/nvfp4_causal_conv3d_residual_sm120.cu",
+  "csrc/nvfp4_causal_conv3d_residual_k128_sm120.cu",
   "csrc/world_model_conv.cuh",
 ]

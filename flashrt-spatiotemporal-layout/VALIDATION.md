@@ -18,6 +18,13 @@ Required before publishing this package:
      --shapes all
    ```
 
+   Native parity and compiled-reference gate:
+
+   ```bash
+   python flashrt-spatiotemporal-layout/benchmarks/benchmark_native_parity.py \
+     --backend source
+   ```
+
 3. Kernel-builder artifact build:
 
    ```bash
@@ -41,6 +48,11 @@ Required before publishing this package:
      --artifact <artifact-path> \
      --shapes all
    ```
+
+   Repeat `benchmark_native_parity.py --backend installed
+   --artifact <artifact-path>`. Acceptance requires exact output, direct-call
+   wrapper overhead no greater than 5% or 0.5 us, and CUDA Graph replay
+   overhead no greater than 5% or 0.25 us versus the original native entry.
 
 6. Multi-hardware matrix:
 

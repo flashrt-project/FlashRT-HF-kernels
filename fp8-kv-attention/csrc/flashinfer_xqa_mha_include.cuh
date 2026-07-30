@@ -1426,7 +1426,7 @@ __device__ inline void smemFp16ArraySum(uint32_t idxWarp, Array2D<LdGrain, rows,
 #pragma unroll
   for (uint32_t i = 0; i < nbGrainsPerThrd; i++) {
     Vec<AccType, LdGrain::size> result;
-    result.fill(AccType{0, 0});
+    result.fill(AccType{});
     uint32_t const idx = nbThrds * i + tid;
 #pragma unroll
     for (uint32_t j = 0; j < nbTiles; j++) {
@@ -2934,7 +2934,8 @@ static uint32_t configureKernel() {
 
 static uint32_t const hostSmemSize = configureKernel();
 
-void launchMHAFlashInfer(uint32_t multiProcessorCount, uint32_t nbKHeads, uint32_t slidingWinSize,
+void launchMHAFlashInfer(uint32_t multiProcessorCount, uint32_t nbKHeads,
+                         uint32_t runtimeHeadGrpSize, uint32_t slidingWinSize,
                          float qScale, float const* qScalePtr, OutputHead* output,
 #if LOW_PREC_OUTPUT
                          float rcpOutScale,
@@ -2961,7 +2962,7 @@ void launchMHAFlashInfer(uint32_t multiProcessorCount, uint32_t nbKHeads, uint32
                               divUp(maxSeqLen, ctaTile.x));
   }();
 #if SPEC_DEC
-  const uint32_t nbTokenBlocksPerGrp = divUp(qSeqLen * headGrpSize, rowsPerBlock);
+  const uint32_t nbTokenBlocksPerGrp = divUp(qSeqLen * runtimeHeadGrpSize, rowsPerBlock);
   dim3 const dimGrid{nbSubSeqPerSeq, nbKHeads * nbTokenBlocksPerGrp, batchSize};
 #else
   dim3 const dimGrid{nbSubSeqPerSeq, nbKHeads, batchSize};
@@ -2986,7 +2987,7 @@ void launchMHAFlashInfer(uint32_t multiProcessorCount, uint32_t nbKHeads, uint32
 
   cudaLaunchKernelEx(&launchCfg, kernel_mha,
 #if SPEC_DEC
-                     qSeqLen, nbKHeads, headGrpSize, qCuSeqLens,
+                     qSeqLen, nbKHeads, runtimeHeadGrpSize, qCuSeqLens,
 #else
                      nbKHeads,
 #endif

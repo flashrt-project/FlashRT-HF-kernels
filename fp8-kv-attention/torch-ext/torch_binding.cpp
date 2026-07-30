@@ -18,9 +18,21 @@
 namespace {
 
 constexpr int64_t kPageSize = 128;
-constexpr int64_t kNumQHeads = 24;
-constexpr int64_t kNumKVHeads = 4;
-constexpr int64_t kHeadDim = 256;
+
+struct XqaShape {
+  int64_t num_q_heads;
+  int64_t num_kv_heads;
+  int64_t head_dim;
+};
+
+bool supported_shape(XqaShape const& shape) {
+  return (shape.num_q_heads == 24 && shape.num_kv_heads == 4 &&
+          shape.head_dim == 256) ||
+         (shape.num_q_heads == 32 && shape.num_kv_heads == 8 &&
+          shape.head_dim == 128) ||
+         (shape.num_q_heads == 16 && shape.num_kv_heads == 8 &&
+          shape.head_dim == 128);
+}
 
 void check_cuda_contiguous(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.is_cuda(), name, " must be a CUDA tensor");
@@ -51,19 +63,20 @@ int checked_int(int64_t value, const char* name) {
   return static_cast<int>(value);
 }
 
-int64_t q_seq_len_from_shape(torch::Tensor const& q) {
+int64_t q_seq_len_from_shape(torch::Tensor const& q, XqaShape* shape) {
   if (q.dim() == 3) {
-    TORCH_CHECK(q.size(1) == kNumQHeads && q.size(2) == kHeadDim,
-                "rank-3 q must have shape (q_seq, 24, 256)");
+    shape->num_q_heads = q.size(1);
+    shape->head_dim = q.size(2);
     return q.size(0);
   }
   if (q.dim() == 5) {
-    TORCH_CHECK(q.size(0) == 1 && q.size(1) == 1 &&
-                    q.size(3) == kNumQHeads && q.size(4) == kHeadDim,
-                "rank-5 q must have shape (1, 1, q_seq, 24, 256)");
+    TORCH_CHECK(q.size(0) == 1 && q.size(1) == 1,
+                "rank-5 q must begin with shape (1, 1, ...)");
+    shape->num_q_heads = q.size(3);
+    shape->head_dim = q.size(4);
     return q.size(2);
   }
-  TORCH_CHECK(false, "q must have rank 3 (q_seq,24,256) or rank 5 (1,1,q_seq,24,256)");
+  TORCH_CHECK(false, "q must have rank 3 or rank 5");
 }
 
 void check_same_device(torch::Tensor const& a, torch::Tensor const& b,
@@ -95,18 +108,24 @@ void xqa_bf16_fp8kv(
   check_bf16(q, "q");
   check_bf16(out, "out");
   TORCH_CHECK(out.sizes() == q.sizes(), "out must have the same shape as q");
-  const int64_t q_seq = q_seq_len_from_shape(q);
+  XqaShape shape{};
+  const int64_t q_seq = q_seq_len_from_shape(q, &shape);
   TORCH_CHECK(q_seq > 0 && q_seq <= 32,
               "v1 XQA package supports 1 <= q_seq <= 32 speculative/decode rows");
 
   check_fp8_e4m3(k_cache, "k_cache");
   check_fp8_e4m3(v_cache, "v_cache");
   TORCH_CHECK(k_cache.dim() == 4 && v_cache.sizes() == k_cache.sizes(),
-              "k_cache/v_cache must have shape (pages, 128, 4, 256)");
+              "k_cache/v_cache must have shape (pages, 128, num_kv_heads, head_dim)");
+  shape.num_kv_heads = k_cache.size(2);
+  TORCH_CHECK(supported_shape(shape),
+              "unsupported XQA shape: q_heads=", shape.num_q_heads,
+              ", kv_heads=", shape.num_kv_heads,
+              ", head_dim=", shape.head_dim,
+              "; supported configurations are 24/4/256, 32/8/128, and 16/8/128");
   TORCH_CHECK(k_cache.size(1) == kPageSize &&
-                  k_cache.size(2) == kNumKVHeads &&
-                  k_cache.size(3) == kHeadDim,
-              "k_cache/v_cache must have shape (pages, 128, 4, 256)");
+                  k_cache.size(3) == shape.head_dim,
+              "k_cache/v_cache page or head dimension does not match q");
   TORCH_CHECK(k_cache.size(0) > 0, "k_cache must contain at least one page");
 
   check_int32(page_table, "page_table");
@@ -139,9 +158,13 @@ void xqa_bf16_fp8kv(
               "max_seq_len must be positive and covered by k_cache pages");
   TORCH_CHECK(max_seq_len % kPageSize == 0,
               "max_seq_len must be rounded to the 128-token page size");
-  if (k_stride_page <= 0) k_stride_page = kPageSize * kNumKVHeads * kHeadDim;
-  if (k_stride_token <= 0) k_stride_token = kNumKVHeads * kHeadDim;
-  if (k_stride_head <= 0) k_stride_head = kHeadDim;
+  if (k_stride_page <= 0) {
+    k_stride_page = kPageSize * shape.num_kv_heads * shape.head_dim;
+  }
+  if (k_stride_token <= 0) {
+    k_stride_token = shape.num_kv_heads * shape.head_dim;
+  }
+  if (k_stride_head <= 0) k_stride_head = shape.head_dim;
 
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(q.device());
@@ -153,26 +176,32 @@ void xqa_bf16_fp8kv(
     sm_count = prop.multiProcessorCount;
   }
   auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
-  flashrt_xqa_bf16_fp8kv(
-      q.data_ptr(),
-      k_cache.data_ptr(),
-      v_cache.data_ptr(),
-      static_cast<const int32_t*>(page_table.data_ptr()),
-      reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
-      reinterpret_cast<const uint32_t*>(mask.data_ptr()),
-      out.data_ptr(),
-      reinterpret_cast<uint32_t*>(semaphores.data_ptr()),
-      scratch.data_ptr(),
-      checked_int(max_seq_len, "max_seq_len"),
-      checked_int(q_seq, "q_seq"),
-      checked_int(sm_count, "sm_count"),
-      static_cast<float>(q_scale),
-      static_cast<float>(kv_scale),
-      enable_pdl,
-      k_stride_page,
-      k_stride_token,
-      k_stride_head,
-      stream);
+  if (shape.head_dim == 256) {
+    flashrt_xqa_bf16_fp8kv(
+        q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
+        static_cast<const int32_t*>(page_table.data_ptr()),
+        reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
+        reinterpret_cast<const uint32_t*>(mask.data_ptr()), out.data_ptr(),
+        reinterpret_cast<uint32_t*>(semaphores.data_ptr()), scratch.data_ptr(),
+        checked_int(max_seq_len, "max_seq_len"),
+        checked_int(q_seq, "q_seq"), checked_int(sm_count, "sm_count"),
+        static_cast<float>(q_scale), static_cast<float>(kv_scale), enable_pdl,
+        k_stride_page, k_stride_token, k_stride_head, stream);
+  } else {
+    flashrt_xqa_bf16_fp8kv_d128(
+        q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
+        static_cast<const int32_t*>(page_table.data_ptr()),
+        reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
+        reinterpret_cast<const uint32_t*>(mask.data_ptr()), out.data_ptr(),
+        reinterpret_cast<uint32_t*>(semaphores.data_ptr()), scratch.data_ptr(),
+        checked_int(max_seq_len, "max_seq_len"),
+        checked_int(q_seq, "q_seq"),
+        checked_int(shape.num_kv_heads, "num_kv_heads"),
+        checked_int(shape.num_q_heads / shape.num_kv_heads, "head_group_size"),
+        checked_int(sm_count, "sm_count"), static_cast<float>(q_scale),
+        static_cast<float>(kv_scale), enable_pdl, k_stride_page, k_stride_token,
+        k_stride_head, stream);
+  }
 #else
   TORCH_CHECK(false, "fp8-kv-attention was not built with CUDA support");
 #endif

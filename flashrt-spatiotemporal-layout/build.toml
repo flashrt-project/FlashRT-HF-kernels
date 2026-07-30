@@ -25,4 +25,8 @@ cuda-minver = "12.8"
 src = [
   "csrc/spatiotemporal_layout.cu",
   "csrc/spatiotemporal_layout.cuh",
+  "csrc/bf16_ndhwc_to_ncdhw_transpose.cu",
+  "csrc/bf16_ndhwc_to_ncdhw_transpose.cuh",
+  "csrc/bf16_quant_fp8_ncdhw_to_ndhwc.cu",
+  "csrc/bf16_quant_fp8_ncdhw_to_ndhwc.cuh",
 ]

@@ -17,7 +17,8 @@ Command:
 python fp8-gemm/tests/test_fp8_gemm.py --backend source --mode full
 ```
 
-Result: 8/8 checks passed.
+Result: 14/14 checks passed, plus the blockwise custom op passed
+`torch.compile(fullgraph=True)` with bitwise-equal output to the eager wrapper.
 
 Covered public v1 rows:
 
@@ -25,6 +26,13 @@ Covered public v1 rows:
 - small-M GEMM: `M in {8,16,32,64}` with representative
   transformer/diffuser-adjacent `K,N` rows
 - M=1 residual-add GEMV
+- block-128 scaled FP8 GEMM at:
+  - `(M,K,N)=(1,1024,1024)`
+  - `(51,1536,1536)`
+  - `(277,2048,2048)`
+  - `(1024,1152,1152)`
+  - `(2520,3072,3072)`
+  - `(128,4096,12288)`
 
 Metrics:
 
@@ -34,6 +42,17 @@ Metrics:
 - cosine similarity
 - output dtype
 - tolerance
+
+The blockwise rows use the stricter gate:
+
+- `max_abs <= 0.0625`
+- `mean_abs <= 0.003`
+- `p99_abs <= 0.015625`
+- cosine similarity `>= 0.9999`
+
+The release benchmark also compares the Tensor wrapper against an independent
+binding of the original FlashRT pointer API. Matching source code alone is not
+treated as proof of zero wrapper overhead.
 
 ## Source Benchmark
 

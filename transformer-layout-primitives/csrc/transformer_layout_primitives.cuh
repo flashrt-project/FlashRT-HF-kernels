@@ -3,6 +3,7 @@
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+#include <cstdint>
 
 namespace flashrt_hub {
 namespace transformer_layout {
@@ -24,6 +25,19 @@ void qk_rmsnorm_rope_bf16(__nv_bfloat16* qk, const __nv_bfloat16* weight,
                           const __nv_bfloat16* cos, const __nv_bfloat16* sin,
                           int rows, int heads, int head_dim, float eps,
                           cudaStream_t stream);
+void qk_pair_rmsnorm_rope_bf16(
+    const __nv_bfloat16* q, const __nv_bfloat16* k,
+    const __nv_bfloat16* q_weight, const __nv_bfloat16* k_weight,
+    const __nv_bfloat16* cos, const __nv_bfloat16* sin,
+    __nv_bfloat16* q_out, __nv_bfloat16* k_out,
+    int rows, int q_heads, int k_heads, int head_dim, float eps,
+    cudaStream_t stream);
+void gather_rows_bf16(
+    const __nv_bfloat16* src, const int64_t* row_indices,
+    __nv_bfloat16* dst, int rows, int hidden, cudaStream_t stream);
+void scatter_rows_bf16(
+    const __nv_bfloat16* src, const int64_t* row_indices,
+    __nv_bfloat16* dst, int rows, int hidden, cudaStream_t stream);
 
 }  // namespace transformer_layout
 }  // namespace flashrt_hub

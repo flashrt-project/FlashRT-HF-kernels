@@ -52,6 +52,34 @@ class SourceOps:
         self.ops.qk_rmsnorm_rope_bf16_(qk, weight, cos, sin, float(eps))
         return qk
 
+    def qk_pair_rmsnorm_rope_bf16(
+        self, q, k, q_weight, k_weight, cos, sin, eps=1e-6, q_out=None, k_out=None
+    ):
+        if q_out is None:
+            q_out = torch.empty_like(q)
+        if k_out is None:
+            k_out = torch.empty_like(k)
+        self.ops.qk_pair_rmsnorm_rope_bf16(
+            q, k, q_weight, k_weight, cos, sin, float(eps), q_out, k_out
+        )
+        return q_out, k_out
+
+    def gather_rows_bf16(self, src, row_indices, out=None):
+        if out is None:
+            out = torch.empty(
+                (row_indices.numel(), src.shape[1]), device=src.device, dtype=src.dtype
+            )
+        self.ops.gather_rows_bf16(src, row_indices, out)
+        return out
+
+    def scatter_rows_bf16(self, src, row_indices, destination_rows, out=None):
+        if out is None:
+            out = torch.zeros(
+                (destination_rows, src.shape[1]), device=src.device, dtype=src.dtype
+            )
+        self.ops.scatter_rows_bf16(src, row_indices, out)
+        return out
+
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -116,6 +144,21 @@ def qk_rmsnorm_rope_ref(
     return rotate_half_ref(normed, cos, sin)
 
 
+def qk_pair_rmsnorm_rope_ref(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return (
+        qk_rmsnorm_rope_ref(q, q_weight, cos, sin, eps),
+        qk_rmsnorm_rope_ref(k, k_weight, cos, sin, eps),
+    )
+
+
 def metrics(got: torch.Tensor, ref: torch.Tensor) -> tuple[float, float, float]:
     diff = (got.float() - ref.float()).abs()
     cos = torch.nn.functional.cosine_similarity(got.float().flatten(), ref.float().flatten(), dim=0).item()
@@ -127,6 +170,15 @@ def assert_close(name: str, got: torch.Tensor, ref: torch.Tensor, atol: float, c
     print(f"{name}: max_abs={max_abs:.6f} mean_abs={mean_abs:.6f} cosine={cos:.8f}")
     if max_abs > atol or cos < cos_min:
         raise AssertionError(f"{name} failed: max_abs={max_abs} cosine={cos}")
+
+
+def expect_runtime_error(name: str, fn) -> None:
+    try:
+        fn()
+    except RuntimeError:
+        print(f"{name}: rejected")
+        return
+    raise AssertionError(f"{name}: expected RuntimeError")
 
 
 def run(ops, mode: str) -> int:
@@ -169,6 +221,38 @@ def run(ops, mode: str) -> int:
         torch.testing.assert_close(scattered.cpu(), ref_scatter.cpu(), rtol=0, atol=0)
         count += 1
 
+    cpu_rng_state = torch.random.get_rng_state()
+    cuda_rng_state = torch.cuda.get_rng_state()
+    indexed_shapes = [(17, 5, 64), (277, 51, 128)] if mode == "smoke" else [
+        (1, 1, 8),
+        (17, 5, 64),
+        (277, 51, 128),
+        (2520, 105, 1152),
+        (5070, 257, 4096),
+    ]
+    for source_rows, selected_rows, hidden in indexed_shapes:
+        src = torch.randn(
+            (source_rows, hidden), device="cuda", dtype=torch.bfloat16
+        )
+        indices = torch.randperm(source_rows, device="cuda", dtype=torch.int64)[
+            :selected_rows
+        ].contiguous()
+        got = ops.gather_rows_bf16(src, indices)
+        ref = src.index_select(0, indices)
+        torch.testing.assert_close(got, ref, rtol=0, atol=0)
+        count += 1
+
+        destination_rows = source_rows + 3
+        got = ops.scatter_rows_bf16(ref, indices, destination_rows)
+        ref_scatter = torch.zeros(
+            (destination_rows, hidden), device="cuda", dtype=torch.bfloat16
+        )
+        ref_scatter.index_copy_(0, indices, ref)
+        torch.testing.assert_close(got, ref_scatter, rtol=0, atol=0)
+        count += 1
+    torch.random.set_rng_state(cpu_rng_state)
+    torch.cuda.set_rng_state(cuda_rng_state)
+
     repeat_shapes = [(17, 4, 64, 2), (128, 8, 128, 4)] if mode == "smoke" else [
         (1, 1, 64, 8),
         (17, 4, 64, 2),
@@ -205,6 +289,74 @@ def run(ops, mode: str) -> int:
         assert_close(f"qk_rmsnorm_rope seq={seq} heads={heads} dim={dim}", got, ref, atol=0.015625, cos_min=0.999999)
         count += 1
 
+    pair_shapes = [(17, 16, 8, 128), (49, 16, 16, 72)] if mode == "smoke" else [
+        (1, 16, 8, 128),
+        (17, 16, 8, 128),
+        (49, 16, 16, 72),
+        (51, 16, 16, 80),
+        (65, 32, 8, 128),
+        (277, 16, 8, 128),
+        (512, 24, 24, 128),
+        (2520, 24, 24, 128),
+        (5070, 24, 24, 128),
+    ]
+    for rows, q_heads, k_heads, dim in pair_shapes:
+        q = torch.randn((rows, q_heads, dim), device="cuda", dtype=torch.bfloat16)
+        k = torch.randn((rows, k_heads, dim), device="cuda", dtype=torch.bfloat16)
+        q_weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+        k_weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+        angles = torch.randn((rows, dim // 2), device="cuda", dtype=torch.float32)
+        cos_half = angles.cos().to(torch.bfloat16)
+        sin_half = angles.sin().to(torch.bfloat16)
+        cos = torch.cat((cos_half, cos_half), dim=-1)
+        sin = torch.cat((sin_half, sin_half), dim=-1)
+        got_q, got_k = ops.qk_pair_rmsnorm_rope_bf16(
+            q, k, q_weight, k_weight, cos, sin
+        )
+        staged_q = q.clone()
+        staged_k = k.clone()
+        ops.qk_rmsnorm_rope_bf16_(staged_q, q_weight, cos, sin)
+        ops.qk_rmsnorm_rope_bf16_(staged_k, k_weight, cos, sin)
+        torch.testing.assert_close(got_q, staged_q, rtol=0, atol=0)
+        torch.testing.assert_close(got_k, staged_k, rtol=0, atol=0)
+        ref_q, ref_k = qk_pair_rmsnorm_rope_ref(
+            q, k, q_weight, k_weight, cos, sin
+        )
+        label = f"qk_pair rows={rows} qh={q_heads} kh={k_heads} dim={dim}"
+        assert_close(f"{label}/q", got_q, ref_q, atol=0.015625, cos_min=0.999999)
+        assert_close(f"{label}/k", got_k, ref_k, atol=0.015625, cos_min=0.999999)
+        count += 4
+
+    q = torch.randn((17, 4, 64), device="cuda", dtype=torch.bfloat16)
+    k = torch.randn((17, 2, 64), device="cuda", dtype=torch.bfloat16)
+    weight = torch.ones((64,), device="cuda", dtype=torch.bfloat16)
+    cos = torch.ones((17, 64), device="cuda", dtype=torch.bfloat16)
+    sin = torch.zeros_like(cos)
+    expect_runtime_error(
+        "qk_pair mismatched rows",
+        lambda: ops.qk_pair_rmsnorm_rope_bf16(
+            q, k[:-1].contiguous(), weight, weight, cos, sin
+        ),
+    )
+    expect_runtime_error(
+        "qk_pair invalid head_dim",
+        lambda: ops.qk_pair_rmsnorm_rope_bf16(
+            q[:, :, :-1].contiguous(),
+            k[:, :, :-1].contiguous(),
+            weight[:-1].contiguous(),
+            weight[:-1].contiguous(),
+            cos[:, :-1].contiguous(),
+            sin[:, :-1].contiguous(),
+        ),
+    )
+    expect_runtime_error(
+        "qk_pair noncontiguous",
+        lambda: ops.qk_pair_rmsnorm_rope_bf16(
+            q.transpose(0, 1), k, weight, weight, cos, sin
+        ),
+    )
+    count += 3
+
     return count
 
 
@@ -223,6 +375,33 @@ def run_compile_default_eps(ops) -> int:
     got = x.clone()
     compiled(got, weight, cos, sin)
     assert_close("qk_rmsnorm_rope compile default eps", got, ref, atol=0.015625, cos_min=0.999999)
+
+    k = torch.randn((seq, 2, dim), device="cuda", dtype=torch.bfloat16)
+    k_weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+    pair_ref = qk_pair_rmsnorm_rope_ref(x, k, weight, k_weight, cos, sin)
+
+    def invoke_pair(q, key, qw, kw, rope_cos, rope_sin):
+        return ops.qk_pair_rmsnorm_rope_bf16(q, key, qw, kw, rope_cos, rope_sin)
+
+    compiled_pair = torch.compile(invoke_pair, fullgraph=True)
+    got_q, got_k = compiled_pair(x, k, weight, k_weight, cos, sin)
+    assert_close("qk_pair compile default eps/q", got_q, pair_ref[0], atol=0.015625, cos_min=0.999999)
+    assert_close("qk_pair compile default eps/k", got_k, pair_ref[1], atol=0.015625, cos_min=0.999999)
+    return 3
+
+
+def run_indexed_compile(ops) -> int:
+    src = torch.randn((277, 128), device="cuda", dtype=torch.bfloat16)
+    indices = torch.randperm(277, device="cuda", dtype=torch.int64)[:51].contiguous()
+
+    def invoke(src, indices):
+        gathered = ops.gather_rows_bf16(src, indices)
+        return ops.scatter_rows_bf16(gathered, indices, src.shape[0])
+
+    eager = invoke(src, indices)
+    compiled = torch.compile(invoke, fullgraph=True)(src, indices)
+    torch.testing.assert_close(compiled, eager, rtol=0, atol=0)
+    print("PASS gather/scatter torch.compile fullgraph")
     return 1
 
 
@@ -234,6 +413,7 @@ def main() -> int:
     args = parser.parse_args()
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     count = run(ops, args.mode)
+    count += run_indexed_compile(ops)
     if args.backend == "installed":
         count += run_compile_default_eps(ops)
     print(f"transformer-layout-primitives {args.backend} {args.mode}: passed {count}/{count}")

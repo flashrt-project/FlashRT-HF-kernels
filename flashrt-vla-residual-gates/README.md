@@ -17,8 +17,11 @@ three BF16 outputs in one CUDA launch.
 
 ## Exported APIs
 
+- `bias_residual_bf16(residual, x, bias, out=None)`
 - `joint3_bias_gate_residual_bf16(v_residual, v_x, v_bias, v_gate, a_residual, a_x, a_bias, a_gate, u_residual, u_x, v_out=None, a_out=None, u_out=None)`
 - `joint3_bias_gate_residual_action_nobias_bf16(v_residual, v_x, v_bias, v_gate, a_residual, a_x, a_gate, u_residual, u_x, v_out=None, a_out=None, u_out=None)`
+- `joint3_bias_fp8_gate_residual_bf16(v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, a_residual, a_x, a_bias, a_gate, u_residual, u_x, v_out=None, a_out=None, u_out=None)`
+- `joint3_bias_fp8_gate_residual_action_nobias_bf16(v_residual, v_x, v_bias, v_gate_fp8, v_gate_scale, a_residual, a_x, a_gate, u_residual, u_x, v_out=None, a_out=None, u_out=None)`
 
 ## Tensor Conventions
 
@@ -26,6 +29,8 @@ three BF16 outputs in one CUDA launch.
 - Bias tensors are contiguous BF16 vectors with shape `(dim,)`.
 - `dim` must be even.
 - Outputs are BF16 matrices with the same shape as their segment residual.
+- FP8 video gates use `torch.float8_e4m3fn` plus an FP32 scalar
+  dequantization scale. Action and und segments remain BF16.
 
 ## Minimal Usage
 
@@ -64,6 +69,9 @@ v_out, a_out, u_out = ops.joint3_bias_gate_residual_action_nobias_bf16(
     u_x,
 )
 ```
+
+For an FP8 video gate, call the corresponding
+`joint3_bias_fp8_gate_residual_*` function and pass `v_gate_scale`.
 
 ## Validation
 

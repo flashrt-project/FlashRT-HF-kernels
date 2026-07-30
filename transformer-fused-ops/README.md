@@ -14,9 +14,13 @@ FlashRT native CUDA fused helper kernels for transformer hot paths.
 - `nexn2_lin_split_qkv_broadcast_bf16`
 - `nexn2_split_q_gate_bf16`
 - `nexn2_router_topk_bf16`
+- `relu2_quantize_fp8_static_bf16(input, scale, out=None)`
 
 These are Tensor APIs meant for static-buffer runtimes and CUDA Graph friendly
 model demos. Unsupported shapes fail explicitly.
+
+`relu2_quantize_fp8_static_bf16` fuses ReLU-squared and static-scale FP8 E4M3
+quantization. Pass `out=` for static-buffer and CUDA Graph runtimes.
 
 ## Validation
 

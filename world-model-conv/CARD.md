@@ -18,6 +18,11 @@ runtime hot paths.
 ## Available Functions
 
 - `fp8_conv3d_v18_ncdhw_res_bf16out`
+- `fp8_causal_conv3d_ndhwc_bf16`
+- `fp8_conv2d_3x3_nhwc_bf16`
+- `fp8_conv2d_3x3_ncdhw_bf16`
+- `nvfp4_causal_conv3d_ndhwc_bf16`
+- `nvfp4_causal_conv3d_residual_ncdhw_bf16`
 
 ## Usage
 

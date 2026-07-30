@@ -12,3 +12,10 @@ void rope_rotate_half_bf16_(torch::Tensor& x, torch::Tensor const& cos, torch::T
 void qk_rmsnorm_rope_bf16_(torch::Tensor& qk, torch::Tensor const& weight,
                            torch::Tensor const& cos, torch::Tensor const& sin,
                            double eps);
+void qk_pair_rmsnorm_rope_bf16(
+    torch::Tensor const& q, torch::Tensor const& k,
+    torch::Tensor const& q_weight, torch::Tensor const& k_weight,
+    torch::Tensor const& cos, torch::Tensor const& sin,
+    double eps, torch::Tensor& q_out, torch::Tensor& k_out);
+void gather_rows_bf16(torch::Tensor const& src, torch::Tensor const& row_indices, torch::Tensor& dst);
+void scatter_rows_bf16(torch::Tensor const& src, torch::Tensor const& row_indices, torch::Tensor& dst);

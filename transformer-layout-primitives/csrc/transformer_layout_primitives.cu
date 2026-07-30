@@ -128,6 +128,73 @@ __global__ void qk_rmsnorm_rope_kernel(__nv_bfloat16* qk, const __nv_bfloat16* w
   }
 }
 
+__global__ void qk_pair_rmsnorm_rope_kernel(
+    const __nv_bfloat16* q, const __nv_bfloat16* k,
+    const __nv_bfloat16* q_weight, const __nv_bfloat16* k_weight,
+    const __nv_bfloat16* cos, const __nv_bfloat16* sin,
+    __nv_bfloat16* q_out, __nv_bfloat16* k_out,
+    int rows, int q_heads, int k_heads, int head_dim, float eps) {
+  extern __shared__ float partial[];
+  const int q_vectors = rows * q_heads;
+  const int vector = blockIdx.x;
+  const bool is_q = vector < q_vectors;
+  const int local_vector = is_q ? vector : vector - q_vectors;
+  const int heads = is_q ? q_heads : k_heads;
+  const int row = local_vector / heads;
+  const int base = local_vector * head_dim;
+  const __nv_bfloat16* input = is_q ? q : k;
+  const __nv_bfloat16* weight = is_q ? q_weight : k_weight;
+  __nv_bfloat16* output = is_q ? q_out : k_out;
+
+  float ss = 0.0f;
+  for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+    const float value = __bfloat162float(input[base + d]);
+    ss += value * value;
+  }
+  const float rms = rsqrtf(block_sum(ss, partial) / head_dim + eps);
+  for (int d = threadIdx.x; d < head_dim; d += blockDim.x) {
+    output[base + d] = __float2bfloat16(
+        __bfloat162float(input[base + d]) * rms * __bfloat162float(weight[d]));
+  }
+  __syncthreads();
+
+  const int half = head_dim >> 1;
+  for (int d = threadIdx.x; d < half; d += blockDim.x) {
+    const float c = __bfloat162float(cos[row * head_dim + d]);
+    const float si = __bfloat162float(sin[row * head_dim + d]);
+    const float lo = __bfloat162float(output[base + d]);
+    const float hi = __bfloat162float(output[base + half + d]);
+    output[base + d] = __float2bfloat16(lo * c - hi * si);
+    output[base + half + d] = __float2bfloat16(hi * c + lo * si);
+  }
+}
+
+__global__ void gather_rows_kernel(
+    const __nv_bfloat16* __restrict__ src,
+    const int64_t* __restrict__ row_indices,
+    __nv_bfloat16* __restrict__ dst,
+    int total,
+    int hidden) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= total) return;
+  const int row = idx / hidden;
+  const int col = idx - row * hidden;
+  dst[idx] = src[row_indices[row] * hidden + col];
+}
+
+__global__ void scatter_rows_kernel(
+    const __nv_bfloat16* __restrict__ src,
+    const int64_t* __restrict__ row_indices,
+    __nv_bfloat16* __restrict__ dst,
+    int total,
+    int hidden) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= total) return;
+  const int row = idx / hidden;
+  const int col = idx - row * hidden;
+  dst[row_indices[row] * hidden + col] = src[idx];
+}
+
 }  // namespace
 
 void fill_neginf_bf16(__nv_bfloat16* dst, int n, cudaStream_t stream) {
@@ -169,6 +236,35 @@ void qk_rmsnorm_rope_bf16(__nv_bfloat16* qk, const __nv_bfloat16* weight,
                           cudaStream_t stream) {
   qk_rmsnorm_rope_kernel<<<rows * heads, 256, 8 * sizeof(float), stream>>>(
       qk, weight, cos, sin, rows, heads, head_dim, eps);
+}
+
+void qk_pair_rmsnorm_rope_bf16(
+    const __nv_bfloat16* q, const __nv_bfloat16* k,
+    const __nv_bfloat16* q_weight, const __nv_bfloat16* k_weight,
+    const __nv_bfloat16* cos, const __nv_bfloat16* sin,
+    __nv_bfloat16* q_out, __nv_bfloat16* k_out,
+    int rows, int q_heads, int k_heads, int head_dim, float eps,
+    cudaStream_t stream) {
+  qk_pair_rmsnorm_rope_kernel<<<
+      rows * (q_heads + k_heads), 256, 8 * sizeof(float), stream>>>(
+      q, k, q_weight, k_weight, cos, sin, q_out, k_out,
+      rows, q_heads, k_heads, head_dim, eps);
+}
+
+void gather_rows_bf16(
+    const __nv_bfloat16* src, const int64_t* row_indices,
+    __nv_bfloat16* dst, int rows, int hidden, cudaStream_t stream) {
+  const int total = rows * hidden;
+  gather_rows_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
+      src, row_indices, dst, total, hidden);
+}
+
+void scatter_rows_bf16(
+    const __nv_bfloat16* src, const int64_t* row_indices,
+    __nv_bfloat16* dst, int rows, int hidden, cudaStream_t stream) {
+  const int total = rows * hidden;
+  scatter_rows_kernel<<<(total + 255) / 256, 256, 0, stream>>>(
+      src, row_indices, dst, total, hidden);
 }
 
 }  // namespace transformer_layout

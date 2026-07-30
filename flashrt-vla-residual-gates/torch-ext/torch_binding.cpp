@@ -52,6 +52,25 @@ void check_bias(torch::Tensor const& bias, int64_t dim, const char* name) {
               name, " must have shape (dim,)");
 }
 
+void check_fp8_gate(torch::Tensor const& gate,
+                    torch::Tensor const& reference,
+                    const char* name) {
+  TORCH_CHECK(gate.is_cuda(), name, " must be a CUDA tensor");
+  TORCH_CHECK(gate.is_contiguous(), name, " must be contiguous");
+  TORCH_CHECK(gate.scalar_type() == torch::kFloat8_e4m3fn,
+              name, " must have dtype torch.float8_e4m3fn");
+  TORCH_CHECK(gate.sizes() == reference.sizes(),
+              name, " must have the same shape as v_residual");
+}
+
+void check_fp32_scalar(torch::Tensor const& scale, const char* name) {
+  TORCH_CHECK(scale.is_cuda(), name, " must be a CUDA tensor");
+  TORCH_CHECK(scale.is_contiguous(), name, " must be contiguous");
+  TORCH_CHECK(scale.scalar_type() == torch::kFloat32,
+              name, " must have dtype torch.float32");
+  TORCH_CHECK(scale.numel() == 1, name, " must be a scalar tensor");
+}
+
 }  // namespace
 
 void gate_residual_bf16(
@@ -251,6 +270,112 @@ void joint3_bias_gate_residual_action_nobias_bf16(
 #endif
 }
 
+void joint3_bias_fp8_gate_residual_bf16(
+    torch::Tensor const& v_residual,
+    torch::Tensor const& v_x,
+    torch::Tensor const& v_bias,
+    torch::Tensor const& v_gate_fp8,
+    torch::Tensor const& v_gate_scale,
+    torch::Tensor& v_out,
+    torch::Tensor const& a_residual,
+    torch::Tensor const& a_x,
+    torch::Tensor const& a_bias,
+    torch::Tensor const& a_gate,
+    torch::Tensor& a_out,
+    torch::Tensor const& u_residual,
+    torch::Tensor const& u_x,
+    torch::Tensor& u_out) {
+  check_matrix(v_residual, "v_residual");
+  check_like(v_x, v_residual, "v_x", "v_residual");
+  check_bias(v_bias, v_residual.size(1), "v_bias");
+  check_fp8_gate(v_gate_fp8, v_residual, "v_gate_fp8");
+  check_fp32_scalar(v_gate_scale, "v_gate_scale");
+  check_like(v_out, v_residual, "v_out", "v_residual");
+  check_matrix(a_residual, "a_residual");
+  check_like(a_x, a_residual, "a_x", "a_residual");
+  check_bias(a_bias, a_residual.size(1), "a_bias");
+  check_like(a_gate, a_residual, "a_gate", "a_residual");
+  check_like(a_out, a_residual, "a_out", "a_residual");
+  check_matrix(u_residual, "u_residual");
+  check_like(u_x, u_residual, "u_x", "u_residual");
+  check_like(u_out, u_residual, "u_out", "u_residual");
+  for (auto const& tensor : {
+           v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+           a_residual, a_x, a_bias, a_gate, a_out,
+           u_residual, u_x, u_out}) {
+    TORCH_CHECK(tensor.get_device() == v_residual.get_device(),
+                "all tensors must be on the same CUDA device");
+  }
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(v_residual.device());
+  auto stream = at::cuda::getCurrentCUDAStream(v_residual.get_device()).stream();
+  flash_rt::vla_residual_gates::joint3_bias_fp8_gate_residual_bf16(
+      v_residual.data_ptr(), v_x.data_ptr(), v_bias.data_ptr(),
+      v_gate_fp8.data_ptr(), v_gate_scale.data_ptr<float>(), v_out.data_ptr(),
+      static_cast<int>(v_residual.numel()), static_cast<int>(v_residual.size(1)),
+      a_residual.data_ptr(), a_x.data_ptr(), a_bias.data_ptr(),
+      a_gate.data_ptr(), a_out.data_ptr(), static_cast<int>(a_residual.numel()),
+      static_cast<int>(a_residual.size(1)), u_residual.data_ptr(),
+      u_x.data_ptr(), u_out.data_ptr(), static_cast<int>(u_residual.numel()),
+      static_cast<int>(u_residual.size(1)), stream);
+#else
+  TORCH_CHECK(false, "flashrt-vla-residual-gates was not built with CUDA support");
+#endif
+}
+
+void joint3_bias_fp8_gate_residual_action_nobias_bf16(
+    torch::Tensor const& v_residual,
+    torch::Tensor const& v_x,
+    torch::Tensor const& v_bias,
+    torch::Tensor const& v_gate_fp8,
+    torch::Tensor const& v_gate_scale,
+    torch::Tensor& v_out,
+    torch::Tensor const& a_residual,
+    torch::Tensor const& a_x,
+    torch::Tensor const& a_gate,
+    torch::Tensor& a_out,
+    torch::Tensor const& u_residual,
+    torch::Tensor const& u_x,
+    torch::Tensor& u_out) {
+  check_matrix(v_residual, "v_residual");
+  check_like(v_x, v_residual, "v_x", "v_residual");
+  check_bias(v_bias, v_residual.size(1), "v_bias");
+  check_fp8_gate(v_gate_fp8, v_residual, "v_gate_fp8");
+  check_fp32_scalar(v_gate_scale, "v_gate_scale");
+  check_like(v_out, v_residual, "v_out", "v_residual");
+  check_matrix(a_residual, "a_residual");
+  check_like(a_x, a_residual, "a_x", "a_residual");
+  check_like(a_gate, a_residual, "a_gate", "a_residual");
+  check_like(a_out, a_residual, "a_out", "a_residual");
+  check_matrix(u_residual, "u_residual");
+  check_like(u_x, u_residual, "u_x", "u_residual");
+  check_like(u_out, u_residual, "u_out", "u_residual");
+  for (auto const& tensor : {
+           v_x, v_bias, v_gate_fp8, v_gate_scale, v_out,
+           a_residual, a_x, a_gate, a_out, u_residual, u_x, u_out}) {
+    TORCH_CHECK(tensor.get_device() == v_residual.get_device(),
+                "all tensors must be on the same CUDA device");
+  }
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(v_residual.device());
+  auto stream = at::cuda::getCurrentCUDAStream(v_residual.get_device()).stream();
+  flash_rt::vla_residual_gates::
+      joint3_bias_fp8_gate_residual_action_nobias_bf16(
+          v_residual.data_ptr(), v_x.data_ptr(), v_bias.data_ptr(),
+          v_gate_fp8.data_ptr(), v_gate_scale.data_ptr<float>(),
+          v_out.data_ptr(), static_cast<int>(v_residual.numel()),
+          static_cast<int>(v_residual.size(1)), a_residual.data_ptr(),
+          a_x.data_ptr(), a_gate.data_ptr(), a_out.data_ptr(),
+          static_cast<int>(a_residual.numel()),
+          static_cast<int>(a_residual.size(1)), u_residual.data_ptr(),
+          u_x.data_ptr(), u_out.data_ptr(),
+          static_cast<int>(u_residual.numel()),
+          static_cast<int>(u_residual.size(1)), stream);
+#else
+  TORCH_CHECK(false, "flashrt-vla-residual-gates was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("gate_residual_bf16("
           "Tensor residual, Tensor x, Tensor gate, Tensor! out) -> ()");
@@ -264,6 +389,16 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor v_residual, Tensor v_x, Tensor v_bias, Tensor v_gate, Tensor! v_out, "
           "Tensor a_residual, Tensor a_x, Tensor a_gate, Tensor! a_out, "
           "Tensor u_residual, Tensor u_x, Tensor! u_out) -> ()");
+  ops.def("joint3_bias_fp8_gate_residual_bf16("
+          "Tensor v_residual, Tensor v_x, Tensor v_bias, Tensor v_gate_fp8, "
+          "Tensor v_gate_scale, Tensor! v_out, Tensor a_residual, Tensor a_x, "
+          "Tensor a_bias, Tensor a_gate, Tensor! a_out, Tensor u_residual, "
+          "Tensor u_x, Tensor! u_out) -> ()");
+  ops.def("joint3_bias_fp8_gate_residual_action_nobias_bf16("
+          "Tensor v_residual, Tensor v_x, Tensor v_bias, Tensor v_gate_fp8, "
+          "Tensor v_gate_scale, Tensor! v_out, Tensor a_residual, Tensor a_x, "
+          "Tensor a_gate, Tensor! a_out, Tensor u_residual, Tensor u_x, "
+          "Tensor! u_out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("gate_residual_bf16",
            torch::kCUDA,
@@ -277,6 +412,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("joint3_bias_gate_residual_action_nobias_bf16",
            torch::kCUDA,
            &joint3_bias_gate_residual_action_nobias_bf16);
+  ops.impl("joint3_bias_fp8_gate_residual_bf16",
+           torch::kCUDA,
+           &joint3_bias_fp8_gate_residual_bf16);
+  ops.impl("joint3_bias_fp8_gate_residual_action_nobias_bf16",
+           torch::kCUDA,
+           &joint3_bias_fp8_gate_residual_action_nobias_bf16);
 #endif
 }
 

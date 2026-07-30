@@ -28,6 +28,7 @@ src = [
   "csrc/xqa_config.cuh",
   "csrc/xqa_bf16_fp8kv.cu",
   "csrc/xqa_bf16_fp8kv.cuh",
+  "csrc/xqa_mha_d128.cu",
   "csrc/flashinfer_xqa_mha_include.cuh",
   "csrc/attention/flashinfer_xqa_src/barriers.cuh",
   "csrc/attention/flashinfer_xqa_src/cuda_hint.cuh",

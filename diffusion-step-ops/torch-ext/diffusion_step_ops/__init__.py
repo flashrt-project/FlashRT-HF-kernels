@@ -94,6 +94,115 @@ def _cast_bf16_to_fp32_fake(src: torch.Tensor, dst: torch.Tensor) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("pack_tail_bf16"))
+def _pack_tail_bf16_fake(tail: torch.Tensor, flat_dim: int, out: torch.Tensor) -> None:
+    if tail.dim() != 1 or out.shape != (flat_dim,) or flat_dim < tail.numel():
+        raise RuntimeError("pack_tail_bf16 expects tail (N,), flat_dim >= N, out (flat_dim,)")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("add_bias_zero_tail_bf16"))
+def _add_bias_zero_tail_bf16_fake(
+    input: torch.Tensor,
+    bias: torch.Tensor,
+    valid_cols: int,
+    out: torch.Tensor,
+) -> None:
+    if (
+        input.dim() != 2
+        or bias.shape != (input.shape[1],)
+        or out.shape != input.shape
+        or valid_cols < 0
+        or valid_cols > input.shape[1]
+    ):
+        raise RuntimeError(
+            "add_bias_zero_tail_bf16 expects input/out (rows, cols), "
+            "bias (cols,), valid_cols in [0, cols]"
+        )
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("extract_tail_f32_to_bf16"))
+def _extract_tail_f32_to_bf16_fake(
+    flat: torch.Tensor,
+    tail_numel: int,
+    out: torch.Tensor,
+) -> None:
+    if flat.dim() != 1 or tail_numel <= 0 or tail_numel > flat.numel() or out.shape != (tail_numel,):
+        raise RuntimeError(
+            "extract_tail_f32_to_bf16 expects flat (N,), tail_numel in [1, N], out (tail_numel,)"
+        )
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("add_bias_pair_bf16"))
+def _add_bias_pair_bf16_fake(
+    input: torch.Tensor,
+    bias_a: torch.Tensor,
+    bias_b: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if (
+        input.dim() != 2
+        or bias_a.shape != (input.shape[1],)
+        or bias_b.shape != bias_a.shape
+        or out.shape != input.shape
+    ):
+        raise RuntimeError(
+            "add_bias_pair_bf16 expects input/out (rows, hidden) and biases (hidden,)"
+        )
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("unipc_step_f32_bf16"))
+def _unipc_step_f32_bf16_fake(
+    sample: torch.Tensor,
+    velocity: torch.Tensor,
+    prev_m1: torch.Tensor,
+    prev_m2: torch.Tensor,
+    prev_last_sample: torch.Tensor,
+    sigma: float,
+    corrector_order: int,
+    predictor_order: int,
+    c_sample: float,
+    c_last: float,
+    c_prev_m1: float,
+    c_prev_m2: float,
+    c_curr_m: float,
+    p_sample: float,
+    p_curr_m: float,
+    p_prev_m1: float,
+    next_sample: torch.Tensor,
+    current_m: torch.Tensor,
+    current_last_sample: torch.Tensor,
+) -> None:
+    del (
+        sigma,
+        corrector_order,
+        predictor_order,
+        c_sample,
+        c_last,
+        c_prev_m1,
+        c_prev_m2,
+        c_curr_m,
+        p_sample,
+        p_curr_m,
+        p_prev_m1,
+    )
+    for tensor in (
+        velocity,
+        prev_m1,
+        prev_m2,
+        prev_last_sample,
+        next_sample,
+        current_m,
+        current_last_sample,
+    ):
+        if tensor.shape != sample.shape:
+            raise RuntimeError("all UniPC tensors must have the same shape")
+    return None
+
+
 def add_bf16(a: torch.Tensor, b: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Return ``a + b`` for contiguous BF16 CUDA tensors."""
 
@@ -175,12 +284,121 @@ def cast_bf16_to_fp32(src: torch.Tensor, *, out: Optional[torch.Tensor] = None) 
     return out
 
 
+def pack_tail_bf16(
+    tail: torch.Tensor,
+    flat_dim: int,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Place a BF16 tail at the end of a zero-filled flat BF16 tensor."""
+
+    if out is None:
+        out = torch.empty((flat_dim,), device=tail.device, dtype=tail.dtype)
+    ops.pack_tail_bf16(tail, int(flat_dim), out)
+    return out
+
+
+def add_bias_zero_tail_bf16(
+    input: torch.Tensor,
+    bias: torch.Tensor,
+    valid_cols: int,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Add a column bias and zero columns at or beyond ``valid_cols``."""
+
+    if out is None:
+        out = torch.empty_like(input)
+    ops.add_bias_zero_tail_bf16(input, bias, int(valid_cols), out)
+    return out
+
+
+def extract_tail_f32_to_bf16(
+    flat: torch.Tensor,
+    tail_numel: int,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Extract the final ``tail_numel`` FP32 values and cast them to BF16."""
+
+    if out is None:
+        out = torch.empty((tail_numel,), device=flat.device, dtype=torch.bfloat16)
+    ops.extract_tail_f32_to_bf16(flat, int(tail_numel), out)
+    return out
+
+
+def add_bias_pair_bf16(
+    input: torch.Tensor,
+    bias_a: torch.Tensor,
+    bias_b: torch.Tensor,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Add two BF16 row-broadcast biases with BF16 rounding after each add."""
+
+    if out is None:
+        out = torch.empty_like(input)
+    ops.add_bias_pair_bf16(input, bias_a, bias_b, out)
+    return out
+
+
+def unipc_step_f32_bf16(
+    sample: torch.Tensor,
+    velocity: torch.Tensor,
+    prev_m1: torch.Tensor,
+    prev_m2: torch.Tensor,
+    prev_last_sample: torch.Tensor,
+    sigma: float,
+    corrector_order: int,
+    predictor_order: int,
+    corrector_coefficients: tuple[float, float, float, float, float],
+    predictor_coefficients: tuple[float, float, float],
+    *,
+    next_sample: Optional[torch.Tensor] = None,
+    current_m: Optional[torch.Tensor] = None,
+    current_last_sample: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Run one UniPC predictor/corrector update."""
+
+    if len(corrector_coefficients) != 5:
+        raise RuntimeError("corrector_coefficients must have five values")
+    if len(predictor_coefficients) != 3:
+        raise RuntimeError("predictor_coefficients must have three values")
+    if next_sample is None:
+        next_sample = torch.empty_like(sample)
+    if current_m is None:
+        current_m = torch.empty_like(sample)
+    if current_last_sample is None:
+        current_last_sample = torch.empty_like(sample)
+    ops.unipc_step_f32_bf16(
+        sample,
+        velocity,
+        prev_m1,
+        prev_m2,
+        prev_last_sample,
+        float(sigma),
+        int(corrector_order),
+        int(predictor_order),
+        *map(float, corrector_coefficients),
+        *map(float, predictor_coefficients),
+        next_sample,
+        current_m,
+        current_last_sample,
+    )
+    return next_sample, current_m, current_last_sample
+
+
 __all__ = [
     "add_bf16",
+    "add_bias_pair_bf16",
+    "add_bias_zero_tail_bf16",
     "cast_bf16_to_fp32",
     "cfg_combine_into_residual_bf16",
     "cfg_combine_into_residual_fp16",
     "euler_step_bf16",
+    "extract_tail_f32_to_bf16",
     "motus_decode_postprocess_bf16_to_fp32",
+    "pack_tail_bf16",
     "teacher_force_first_frame_bf16",
+    "unipc_step_f32_bf16",
 ]

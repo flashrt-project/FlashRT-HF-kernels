@@ -62,6 +62,68 @@ def _qk_rmsnorm_rope_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("qk_pair_rmsnorm_rope_bf16"))
+def _qk_pair_rmsnorm_rope_bf16_fake(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    eps: float,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+) -> None:
+    if (
+        q.dim() != 3
+        or k.dim() != 3
+        or q.shape[0] != k.shape[0]
+        or q.shape[2] != k.shape[2]
+        or q.shape[2] < 8
+        or q.shape[2] > 256
+        or q.shape[2] % 2 != 0
+        or q_weight.shape != (q.shape[2],)
+        or k_weight.shape != q_weight.shape
+        or cos.shape != (q.shape[0], q.shape[2])
+        or sin.shape != cos.shape
+        or q_out.shape != q.shape
+        or k_out.shape != k.shape
+    ):
+        raise RuntimeError(
+            "qk_pair_rmsnorm_rope_bf16 expects q/k (rows, heads, even_dim), "
+            "weights (dim,), cos/sin (rows, dim), and matching outputs"
+        )
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gather_rows_bf16"))
+def _gather_rows_bf16_fake(
+    src: torch.Tensor,
+    row_indices: torch.Tensor,
+    dst: torch.Tensor,
+) -> None:
+    if src.dim() != 2 or row_indices.dim() != 1 or dst.shape != (row_indices.numel(), src.shape[1]):
+        raise RuntimeError(
+            "gather_rows_bf16 expects src (source_rows, hidden), "
+            "row_indices (rows,), dst (rows, hidden)"
+        )
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("scatter_rows_bf16"))
+def _scatter_rows_bf16_fake(
+    src: torch.Tensor,
+    row_indices: torch.Tensor,
+    dst: torch.Tensor,
+) -> None:
+    if src.dim() != 2 or row_indices.dim() != 1 or src.shape != (row_indices.numel(), dst.shape[1]):
+        raise RuntimeError(
+            "scatter_rows_bf16 expects src (rows, hidden), "
+            "row_indices (rows,), dst (destination_rows, hidden)"
+        )
+    return None
+
+
 def fill_neginf_bf16(dst: torch.Tensor) -> torch.Tensor:
     ops.fill_neginf_bf16(dst)
     return dst
@@ -118,6 +180,61 @@ def qk_rmsnorm_rope_bf16_(
     return qk
 
 
+def qk_pair_rmsnorm_rope_bf16(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    eps: float = 1e-6,
+    *,
+    q_out: Optional[torch.Tensor] = None,
+    k_out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if q_out is None:
+        q_out = torch.empty_like(q)
+    if k_out is None:
+        k_out = torch.empty_like(k)
+    ops.qk_pair_rmsnorm_rope_bf16(
+        q, k, q_weight, k_weight, cos, sin, float(eps), q_out, k_out
+    )
+    return q_out, k_out
+
+
+def gather_rows_bf16(
+    src: torch.Tensor,
+    row_indices: torch.Tensor,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Gather rows using in-range CUDA int64 indices without host synchronization."""
+
+    if out is None:
+        out = torch.empty(
+            (row_indices.numel(), src.shape[1]), device=src.device, dtype=src.dtype
+        )
+    ops.gather_rows_bf16(src, row_indices, out)
+    return out
+
+
+def scatter_rows_bf16(
+    src: torch.Tensor,
+    row_indices: torch.Tensor,
+    destination_rows: int,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Scatter rows to unique, in-range CUDA int64 indices."""
+
+    if out is None:
+        out = torch.zeros(
+            (destination_rows, src.shape[1]), device=src.device, dtype=src.dtype
+        )
+    ops.scatter_rows_bf16(src, row_indices, out)
+    return out
+
+
 __all__ = [
     "fill_neginf_bf16",
     "add_bias_bf16_",
@@ -126,4 +243,7 @@ __all__ = [
     "text_scatter_bf16",
     "rope_rotate_half_bf16_",
     "qk_rmsnorm_rope_bf16_",
+    "qk_pair_rmsnorm_rope_bf16",
+    "gather_rows_bf16",
+    "scatter_rows_bf16",
 ]

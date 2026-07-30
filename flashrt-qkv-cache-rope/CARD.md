@@ -11,6 +11,8 @@ writes, plus a sequence GQA cache-write path for static decoder loops.
 
 ## Kernels
 
+- `qkv_split_bf16`: split equal-head packed BF16 QKV into preallocated
+  attention-ready Q/K/V tensors without normalization or RoPE.
 - `qkv_split_norm_rope_bf16`: split packed BF16 QKV, RMSNorm Q/K, apply RoPE to
   Q/K, and write BF16 Q/K tensors.
 - `qkv_split_bias_norm_rope_v_bf16`: add packed QKV bias, RMSNorm Q/K, apply
@@ -19,6 +21,12 @@ writes, plus a sequence GQA cache-write path for static decoder loops.
   into preallocated joint Q/K/V workspaces.
 - `qkv_split_joint3_cat_bf16`: VLA-oriented path that fuses video/action/und
   QKV postprocess and writes one attention-ready joint Q/K/V workspace.
+- `qkv_split_bias_rope_bf16`: add packed GQA/equal-head QKV bias, split Q/K/V,
+  apply split-half RoPE to Q/K, and write attention-ready BF16 outputs.
+- `qkv_split_bias_rope_fp16`: same input contract, with FP16 Q/K/V output for
+  FP16 attention islands.
+- `qkv_split_per_head_norm_rope_bf16`: split packed GQA QKV, apply per-head
+  Q/K RMSNorm and rotate-half RoPE, and write BF16 Q/K/V.
 - `qkv_split_rope_kvcache_bf16`: split GQA packed QKV, apply interleaved RoPE
   to Q/K, and write K/V into preallocated sequence caches.
 - `decode_q_norm_rope_stage_bf16`: RMSNorm Q, apply rotate-half RoPE, and
@@ -32,6 +40,8 @@ The decode APIs are fixed to `head_dim == 128` and use BF16 `(64,)` cos/sin
 vectors. Unsupported shapes are rejected at the Tensor binding layer.
 The GQA sequence API uses BF16 interleaved `(seq_len, head_dim)` RoPE rows and
 supports different Q and KV head counts.
+The fused bias+RoPE API accepts FP32 half-width or full-width RoPE tables and
+supports even head dimensions from 8 through 256.
 
 ## Hardware
 

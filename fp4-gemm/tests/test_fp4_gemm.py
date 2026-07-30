@@ -39,6 +39,12 @@ SHAPES = {
     "mlp_tile_m64_n512_k512": (64, 512, 512),
 }
 
+EPILOGUE_SHAPES = {
+    "epilogue_tile": (64, 512, 512),
+    "motus_up": (360, 14336, 3072),
+    "motus_down": (360, 3072, 14336),
+}
+
 MODES = {
     "smoke": ["small_m16_n128_k128"],
     "full": list(SHAPES),
@@ -86,6 +92,33 @@ class SourceOps:
     def nvfp4_gemm_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=0):
         self._ops.nvfp4_gemm_bf16(a, b, sfa, sfb, out, float(alpha), int(variant))
 
+    def nvfp4_gemm_residual_bf16(self, a, b, sfa, sfb, residual, out, alpha=1.0):
+        self._ops.nvfp4_gemm_residual_bf16(
+            a, b, sfa, sfb, residual, out, float(alpha)
+        )
+
+    def nvfp4_gemm_bias_gelu_bf16(self, a, b, sfa, sfb, bias, out, alpha=1.0):
+        self._ops.nvfp4_gemm_bias_gelu_bf16(
+            a, b, sfa, sfb, bias, out, float(alpha)
+        )
+
+    def nvfp4_gemm_bias_gelu_nvfp4(
+        self, a, b, sfa, sfb, bias, out_packed, out_sfa, alpha=1.0
+    ):
+        self._ops.nvfp4_gemm_bias_gelu_nvfp4(
+            a, b, sfa, sfb, bias, out_packed, out_sfa, float(alpha)
+        )
+
+    def nvfp4_gemm_streamk_bf16(self, a, b, sfa, sfb, out, alpha=1.0):
+        self._ops.nvfp4_gemm_streamk_bf16(a, b, sfa, sfb, out, float(alpha))
+
+    def nvfp4_gemm_streamk_bias_bf16(
+        self, a, b, sfa, sfb, bias, out, alpha=1.0
+    ):
+        self._ops.nvfp4_gemm_streamk_bias_bf16(
+            a, b, sfa, sfb, bias, out, float(alpha)
+        )
+
 
 class InstalledOps:
     """Adapt the public return-value API to the in-place test interface."""
@@ -127,6 +160,36 @@ class InstalledOps:
             variant=int(variant),
         )
 
+    def nvfp4_gemm_residual_bf16(self, a, b, sfa, sfb, residual, out, alpha=1.0):
+        self._module.nvfp4_gemm_residual_bf16(
+            a, b, sfa, sfb, residual, alpha=float(alpha), out=out
+        )
+
+    def nvfp4_gemm_bias_gelu_bf16(self, a, b, sfa, sfb, bias, out, alpha=1.0):
+        self._module.nvfp4_gemm_bias_gelu_bf16(
+            a, b, sfa, sfb, bias, alpha=float(alpha), out=out
+        )
+
+    def nvfp4_gemm_bias_gelu_nvfp4(
+        self, a, b, sfa, sfb, bias, out_packed, out_sfa, alpha=1.0
+    ):
+        self._module.nvfp4_gemm_bias_gelu_nvfp4(
+            a, b, sfa, sfb, bias, alpha=float(alpha),
+            out_packed=out_packed, out_sfa=out_sfa,
+        )
+
+    def nvfp4_gemm_streamk_bf16(self, a, b, sfa, sfb, out, alpha=1.0):
+        self._module.nvfp4_gemm_streamk_bf16(
+            a, b, sfa, sfb, alpha=float(alpha), out=out
+        )
+
+    def nvfp4_gemm_streamk_bias_bf16(
+        self, a, b, sfa, sfb, bias, out, alpha=1.0
+    ):
+        self._module.nvfp4_gemm_streamk_bias_bf16(
+            a, b, sfa, sfb, bias, alpha=float(alpha), out=out
+        )
+
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -150,6 +213,9 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_w4a16_gemm_sm120.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cu"),
             str(PACKAGE / "csrc" / "quantize" / "quantize_fp4_sfa.cu"),
             str(PACKAGE / "csrc" / "dequantize_fp4_sfa.cu"),
         ],
@@ -217,6 +283,19 @@ def prepare_quantized(ops: SourceOps, m: int, n: int, k: int):
     return a_packed, b_packed, sfa, sfb, expected
 
 
+def prepare_quantized_full(ops: SourceOps, m: int, n: int, k: int):
+    a_fp16, b_fp16 = make_inputs(m, n, k, seed=9000 + m + n + k)
+    a_packed, sfa = ops.alloc_fp4(m, k)
+    b_packed, sfb = ops.alloc_fp4(n, k)
+    ops.quantize_fp4_sfa_fp16(a_fp16, a_packed, sfa, False)
+    ops.quantize_fp4_sfa_fp16(b_fp16, b_packed, sfb, True)
+    a_deq = torch.empty_like(a_fp16)
+    b_deq = torch.empty_like(b_fp16)
+    ops.dequantize_fp4_sfa_fp16(a_packed, sfa, a_deq, False)
+    ops.dequantize_fp4_sfa_fp16(b_packed, sfb, b_deq, True)
+    return a_packed, b_packed, sfa, sfb, a_deq, b_deq
+
+
 def run_case(ops: SourceOps, name: str, shape: tuple[int, int, int]) -> list[Metrics]:
     m, n, k = shape
     a_packed, b_packed, sfa, sfb, expected = prepare_quantized(ops, m, n, k)
@@ -243,6 +322,87 @@ def run_case(ops: SourceOps, name: str, shape: tuple[int, int, int]) -> list[Met
         )
 
     return results
+
+
+def result_row(name, shape, workload, got, expected, *, fp4_output=False):
+    max_abs, mean_abs, p99_abs, cosine = metrics(got, expected)
+    if fp4_output:
+        mean_magnitude = float(expected.float().abs().mean().item())
+        rms = float(expected.float().square().mean().sqrt().item())
+        passed = (
+            cosine >= 0.9993
+            and mean_abs / max(mean_magnitude, 1e-12) <= 0.01
+            and p99_abs / max(rms, 1e-12) <= 0.15
+        )
+    else:
+        passed = (
+            cosine >= 0.999
+            and mean_abs <= 0.008
+            and p99_abs <= 0.0625
+        )
+    return Metrics(
+        shape=name,
+        M=shape[0],
+        N=shape[1],
+        K=shape[2],
+        workload=workload,
+        variant=None,
+        max_abs=max_abs,
+        mean_abs=mean_abs,
+        p99_abs=p99_abs,
+        cosine=cosine,
+        passed=passed,
+    )
+
+
+def run_epilogue_case(ops, name: str, shape: tuple[int, int, int]):
+    m, n, k = shape
+    a, b, sfa, sfb, a_deq, b_deq = prepare_quantized_full(ops, m, n, k)
+    matmul = a_deq.float() @ b_deq.float().T
+    bias = (torch.randn(n, device="cuda") * 0.02).to(torch.bfloat16)
+    residual = torch.randn((m, n), device="cuda", dtype=torch.bfloat16)
+    rows = []
+
+    out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+    ops.nvfp4_gemm_residual_bf16(a, b, sfa, sfb, residual, out)
+    expected = (matmul + residual.float()).to(torch.bfloat16)
+    rows.append(result_row(name, shape, "nvfp4_gemm_residual_bf16", out, expected))
+
+    ops.nvfp4_gemm_bias_gelu_bf16(a, b, sfa, sfb, bias, out)
+    expected_gelu = torch.nn.functional.gelu(
+        matmul + bias.float().view(1, -1), approximate="tanh"
+    ).to(torch.bfloat16)
+    rows.append(result_row(name, shape, "nvfp4_gemm_bias_gelu_bf16", out, expected_gelu))
+
+    out_packed, out_sfa = ops.alloc_fp4(m, n)
+    ops.nvfp4_gemm_bias_gelu_nvfp4(
+        a, b, sfa, sfb, bias, out_packed, out_sfa
+    )
+    out_deq = torch.empty((m, n), device="cuda", dtype=torch.float16)
+    ops.dequantize_fp4_sfa_fp16(out_packed, out_sfa, out_deq, False)
+    staged_packed, staged_sfa = ops.alloc_fp4(m, n)
+    ops.quantize_fp4_sfa_fp16(
+        expected_gelu.to(torch.float16), staged_packed, staged_sfa, False
+    )
+    staged_deq = torch.empty_like(out_deq)
+    ops.dequantize_fp4_sfa_fp16(
+        staged_packed, staged_sfa, staged_deq, False
+    )
+    rows.append(
+        result_row(
+            name, shape, "nvfp4_gemm_bias_gelu_nvfp4",
+            out_deq, staged_deq, fp4_output=True,
+        )
+    )
+
+    ops.nvfp4_gemm_streamk_bf16(a, b, sfa, sfb, out)
+    expected_linear = matmul.to(torch.bfloat16)
+    rows.append(result_row(name, shape, "nvfp4_gemm_streamk_bf16", out, expected_linear))
+
+    ops.nvfp4_gemm_streamk_bias_bf16(a, b, sfa, sfb, bias, out)
+    expected_bias = (matmul + bias.float().view(1, -1)).to(torch.bfloat16)
+    rows.append(result_row(name, shape, "nvfp4_gemm_streamk_bias_bf16", out, expected_bias))
+    return rows
 
 
 def check_installed_compile(ops: InstalledOps) -> dict[str, object]:
@@ -286,6 +446,9 @@ def main() -> int:
     results: list[Metrics] = []
     for name in MODES[args.mode]:
         results.extend(run_case(ops, name, SHAPES[name]))
+    if args.mode == "full":
+        for name, shape in EPILOGUE_SHAPES.items():
+            results.extend(run_epilogue_case(ops, name, shape))
     compile_check = None
     if args.backend == "installed" and args.mode == "full":
         compile_check = check_installed_compile(ops)

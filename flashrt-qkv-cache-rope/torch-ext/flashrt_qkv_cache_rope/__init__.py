@@ -115,6 +115,70 @@ def _qkv_split_per_head_norm_rope_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("qkv_split_bias_rope_bf16"))
+def _qkv_split_bias_rope_bf16_fake(
+    packed_qkv: torch.Tensor,
+    qkv_bias: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+    v_out: torch.Tensor,
+) -> None:
+    batch, seq_len, width = packed_qkv.shape
+    expected_width = (q_heads + 2 * kv_heads) * head_dim
+    if width != expected_width:
+        raise RuntimeError("packed_qkv has an invalid QKV width")
+    if qkv_bias.shape != (expected_width,):
+        raise RuntimeError("qkv_bias has an invalid shape")
+    if head_dim < 8 or head_dim > 256 or head_dim % 2:
+        raise RuntimeError("head_dim must be even and in [8, 256]")
+    if cos.shape not in (
+        (batch, seq_len, head_dim // 2),
+        (batch, seq_len, head_dim),
+    ):
+        raise RuntimeError("cos has an invalid shape")
+    if sin.shape != cos.shape:
+        raise RuntimeError("sin must have the same shape as cos")
+    if q_out.shape != (batch, seq_len, q_heads, head_dim):
+        raise RuntimeError("q_out has an invalid shape")
+    if k_out.shape != (batch, seq_len, kv_heads, head_dim):
+        raise RuntimeError("k_out has an invalid shape")
+    if v_out.shape != k_out.shape:
+        raise RuntimeError("v_out must have the same shape as k_out")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("qkv_split_bias_rope_fp16"))
+def _qkv_split_bias_rope_fp16_fake(
+    packed_qkv: torch.Tensor,
+    qkv_bias: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+    v_out: torch.Tensor,
+) -> None:
+    return _qkv_split_bias_rope_bf16_fake(
+        packed_qkv,
+        qkv_bias,
+        cos,
+        sin,
+        q_heads,
+        kv_heads,
+        head_dim,
+        q_out,
+        k_out,
+        v_out,
+    )
+
+
 @torch.library.register_fake(add_op_namespace_prefix("qkv_split_rope_kvcache_bf16"))
 def _qkv_split_rope_kvcache_bf16_fake(
     packed_qkv: torch.Tensor,
@@ -482,6 +546,94 @@ def qkv_split_per_head_norm_rope_bf16(
     return q_out, k_out, v_out
 
 
+def qkv_split_bias_rope_bf16(
+    packed_qkv: torch.Tensor,
+    qkv_bias: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    q_out: torch.Tensor | None = None,
+    k_out: torch.Tensor | None = None,
+    v_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Add packed QKV bias, split Q/K/V, and apply split-half RoPE to Q/K."""
+
+    batch, seq_len, _ = packed_qkv.shape
+    if q_out is None:
+        q_out = torch.empty(
+            (batch, seq_len, q_heads, head_dim),
+            device=packed_qkv.device,
+            dtype=torch.bfloat16,
+        )
+    if k_out is None:
+        k_out = torch.empty(
+            (batch, seq_len, kv_heads, head_dim),
+            device=packed_qkv.device,
+            dtype=torch.bfloat16,
+        )
+    if v_out is None:
+        v_out = torch.empty_like(k_out)
+    ops.qkv_split_bias_rope_bf16(
+        packed_qkv,
+        qkv_bias,
+        cos,
+        sin,
+        int(q_heads),
+        int(kv_heads),
+        int(head_dim),
+        q_out,
+        k_out,
+        v_out,
+    )
+    return q_out, k_out, v_out
+
+
+def qkv_split_bias_rope_fp16(
+    packed_qkv: torch.Tensor,
+    qkv_bias: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    q_out: torch.Tensor | None = None,
+    k_out: torch.Tensor | None = None,
+    v_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Add bias, split packed QKV, apply RoPE, and emit FP16 attention inputs."""
+
+    batch, seq_len, _ = packed_qkv.shape
+    if q_out is None:
+        q_out = torch.empty(
+            (batch, seq_len, q_heads, head_dim),
+            device=packed_qkv.device,
+            dtype=torch.float16,
+        )
+    if k_out is None:
+        k_out = torch.empty(
+            (batch, seq_len, kv_heads, head_dim),
+            device=packed_qkv.device,
+            dtype=torch.float16,
+        )
+    if v_out is None:
+        v_out = torch.empty_like(k_out)
+    ops.qkv_split_bias_rope_fp16(
+        packed_qkv,
+        qkv_bias,
+        cos,
+        sin,
+        int(q_heads),
+        int(kv_heads),
+        int(head_dim),
+        q_out,
+        k_out,
+        v_out,
+    )
+    return q_out, k_out, v_out
+
+
 def qkv_split_bf16(
     packed_qkv: torch.Tensor,
     heads: int,
@@ -711,6 +863,8 @@ __all__ = [
     "decode_k_norm_rope_kvwrite_bf16",
     "decode_k_norm_rope_kvwrite_devpos_bf16",
     "qkv_split_per_head_norm_rope_bf16",
+    "qkv_split_bias_rope_bf16",
+    "qkv_split_bias_rope_fp16",
     "qkv_split_bf16",
     "qkv_split_rope_kvcache_bf16",
     "qkv_split_norm_rope_bf16",

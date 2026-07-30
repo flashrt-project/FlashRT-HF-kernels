@@ -38,3 +38,26 @@ Notes:
   compatibility; do not oversell its standalone speedup.
 - Installed-artifact benchmark must be regenerated after the unified HF Jobs
   batch build.
+
+## Native, Tensor wrapper, eager and compile
+
+The Cosmos Edge-derived additions were also compared directly with their
+original FlashRT CUDA launchers. Direct calls include their respective host
+dispatch paths. CUDA Graph rows capture 32 launches and report time per launch,
+which isolates the actual hot-path device work.
+
+| Workload | Native us | Wrapper us | Wrapper/native | Graph native us | Graph wrapper us | Graph wrapper/native | Eager us | Compile us | Native exact |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| UniPC `B1x16x17x8x8` | 2.192 | 3.700 | 1.688 | 1.089 | 1.089 | 1.000 | 60.049 | 25.655 | yes |
+| pack tail `1024 -> 4096` | 2.055 | 2.301 | 1.119 | 0.896 | 0.960 | 1.072 | 5.939 | 21.018 | yes |
+| extract tail `4096 -> 1024` | 1.999 | 2.379 | 1.190 | 0.896 | 0.960 | 1.072 | 4.425 | 20.910 | yes |
+| bias + zero tail `105x257` | 4.175 | 2.530 | 0.606 | 2.177 | 1.217 | 0.559 | 16.870 | 21.922 | yes |
+| two-stage bias `105x257` | 4.248 | 2.247 | 0.529 | 2.175 | 1.216 | 0.559 | 26.296 | 22.620 | yes |
+
+The direct-call ratios for these launch-floor operations are Python/Tensor
+dispatcher overhead, not slower CUDA kernels. The CUDA Graph numbers are the
+relevant runtime-pipeline gate.
+
+The two bias rows intentionally improve on the original native contract:
+FlashRT first copied the input and then launched an in-place bias kernel; the
+generic Hub API reads the input and writes the final output in one launch.

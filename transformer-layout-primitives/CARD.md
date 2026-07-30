@@ -12,6 +12,9 @@ text_gather_bf16
 text_scatter_bf16
 rope_rotate_half_bf16_
 qk_rmsnorm_rope_bf16_
+qk_pair_rmsnorm_rope_bf16
+gather_rows_bf16
+scatter_rows_bf16
 ```
 
 ## Usage
@@ -21,6 +24,7 @@ from kernels import get_kernel
 
 ops = get_kernel("flashrt/transformer-layout-primitives", version=1)
 q = ops.qk_rmsnorm_rope_bf16_(q, weight, cos, sin)
+selected = ops.gather_rows_bf16(hidden_states, row_indices)
 ```
 
 ## Notes

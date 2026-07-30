@@ -30,6 +30,7 @@ The full FlashRT model runtime and serving pipeline live upstream at
 - `ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift, eps=1e-5, packed=None, sf_swizzled=None)`
 - `ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16(x, scale_fp8, shift_fp8, scale_deq, shift_deq, eps=1e-5, packed=None, sf_swizzled=None)`
 - `layer_norm_no_affine_quant_fp8_static_bf16(x, act_scale, eps=1e-5, out=None)`
+- `adaln_modulation6_bf16(adaln_params, layer_modulation, out=None)`
 - `swizzled_sf_size(rows, dim)`
 
 ## Tensor Contract
@@ -44,6 +45,8 @@ The full FlashRT model runtime and serving pipeline live upstream at
   layout. Allocate with `swizzled_sf_size(rows, dim)`.
 - `dim` must be even for FP8 outputs and divisible by 16 for NVFP4 outputs.
 - The package targets CUDA 12.8+ and Blackwell-class deployment paths.
+- `adaln_modulation6_bf16` takes FP32 `(6, dim)` parameters plus FP32
+  `(batch, 6 * dim)` modulation and returns six BF16 `(batch, dim)` tensors.
 
 ## Minimal Usage
 
@@ -73,6 +76,14 @@ NVFP4 producer:
 
 ```python
 packed, sf = ops.ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift)
+```
+
+Six-way DiT modulation:
+
+```python
+params = torch.randn((6, dim), device="cuda", dtype=torch.float32)
+modulation = torch.randn((rows, 6 * dim), device="cuda", dtype=torch.float32)
+outputs = ops.adaln_modulation6_bf16(params, modulation)
 ```
 
 ## Validation

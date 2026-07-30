@@ -59,6 +59,33 @@ def _dequant_fake(packed: torch.Tensor, sfa: torch.Tensor, out: torch.Tensor, is
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_residual_bf16"))
+def _residual_fake(a, b, sfa, sfb, residual, out, alpha: float = 1.0) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_bias_gelu_bf16"))
+def _bias_gelu_fake(a, b, sfa, sfb, bias, out, alpha: float = 1.0) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_bias_gelu_nvfp4"))
+def _bias_gelu_nvfp4_fake(
+    a, b, sfa, sfb, bias, out_packed, out_sfa, alpha: float = 1.0
+) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_streamk_bf16"))
+def _streamk_fake(a, b, sfa, sfb, out, alpha: float = 1.0) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_streamk_bias_bf16"))
+def _streamk_bias_fake(a, b, sfa, sfb, bias, out, alpha: float = 1.0) -> None:
+    return None
+
+
 def quantize_fp4_sfa_fp16(
     x: torch.Tensor,
     packed: torch.Tensor | None = None,
@@ -113,10 +140,115 @@ def fp4_w4a16_linear_bf16(
     )
 
 
+def nvfp4_gemm_residual_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    residual: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty_like(residual)
+    ops.nvfp4_gemm_residual_bf16(
+        a_packed, b_packed, sfa, sfb, residual, out, float(alpha)
+    )
+    return out
+
+
+def nvfp4_gemm_bias_gelu_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    bias: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.bfloat16,
+        )
+    ops.nvfp4_gemm_bias_gelu_bf16(
+        a_packed, b_packed, sfa, sfb, bias, out, float(alpha)
+    )
+    return out
+
+
+def nvfp4_gemm_bias_gelu_nvfp4(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    bias: torch.Tensor,
+    alpha: float = 1.0,
+    out_packed: torch.Tensor | None = None,
+    out_sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    m, n = a_packed.shape[0], b_packed.shape[0]
+    if out_packed is None:
+        out_packed = torch.empty((m, n // 2), device=a_packed.device, dtype=torch.uint8)
+    if out_sfa is None:
+        out_sfa = torch.empty((sfa_size_bytes(m, n),), device=a_packed.device, dtype=torch.uint8)
+    ops.nvfp4_gemm_bias_gelu_nvfp4(
+        a_packed, b_packed, sfa, sfb, bias, out_packed, out_sfa, float(alpha)
+    )
+    return out_packed, out_sfa
+
+
+def nvfp4_gemm_streamk_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.bfloat16,
+        )
+    ops.nvfp4_gemm_streamk_bf16(
+        a_packed, b_packed, sfa, sfb, out, float(alpha)
+    )
+    return out
+
+
+def nvfp4_gemm_streamk_bias_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    bias: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.bfloat16,
+        )
+    ops.nvfp4_gemm_streamk_bias_bf16(
+        a_packed, b_packed, sfa, sfb, bias, out, float(alpha)
+    )
+    return out
+
+
 __all__ = [
     "dequantize_fp4_sfa_fp16",
     "fp4_w4a16_linear_bf16",
     "nvfp4_gemm_bf16",
+    "nvfp4_gemm_bias_gelu_bf16",
+    "nvfp4_gemm_bias_gelu_nvfp4",
+    "nvfp4_gemm_residual_bf16",
+    "nvfp4_gemm_streamk_bf16",
+    "nvfp4_gemm_streamk_bias_bf16",
     "quantize_fp4_sfa_fp16",
     "sfa_size_bytes",
 ]

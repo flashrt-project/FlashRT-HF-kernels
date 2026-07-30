@@ -54,6 +54,28 @@ measured their exact shape.
 | `M=1,K=4096,N=8192` | 8 | `gemv_fp8_m1_w8` | 10.272 | 15.82x | pass |
 | `M=1,K=4096,N=8192` | 16 | `gemv_fp8_m1_w16` | 10.278 | 15.80x | pass |
 
+## Block-128 Scaled GEMM
+
+Measured on RTX 5090 against an independent binding of the original FlashRT
+pointer API. The wrapper and native columns execute the same production
+CUTLASS kernel from separate extension modules. PyTorch eager and compile
+dequantize the block-scaled tensors to FP32, run the GEMM, and cast to BF16.
+CUTLASS is already the native implementation, so there is no additional
+contract-equivalent library row.
+
+| Workload `(M,K,N)` | Native us | Wrapper us | Wrapper/native | Eager us | Compile us | Max abs | P99 abs | Cosine |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| decode `(1,1024,1024)` | 10.287 | 10.276 | 0.999 | 36.256 | 42.242 | 0.000000 | 0.000000 | 1.0000001 |
+| action `(51,1536,1536)` | 14.364 | 14.360 | 1.000 | 55.595 | 51.500 | 0.000061 | 0.000000 | 1.0000001 |
+| GROOT `(277,2048,2048)` | 28.698 | 28.692 | 1.000 | 104.895 | 73.989 | 0.000122 | 0.000000 | 1.0000001 |
+| vision `(1024,1152,1152)` | 18.456 | 18.466 | 1.001 | 101.103 | 79.565 | 0.000122 | 0.000000 | 1.0000000 |
+| video `(2520,3072,3072)` | 114.188 | 114.696 | 1.004 | 1032.687 | 930.219 | 0.000244 | 0.000000 | 1.0000000 |
+| Qwen MLP `(128,4096,12288)` | 51.258 | 51.253 | 1.000 | 892.744 | 390.698 | 0.000244 | 0.000000 | 1.0000000 |
+
+All wrapper outputs were bitwise equal to the original native entry. The
+PyTorch-reference metrics above use production-scale ranges; the wider full
+correctness sweep remains the release gate.
+
 ## Release Status
 
 - Source correctness: passed.

@@ -27,19 +27,29 @@ REGISTRATION_INCLUDE = (
 )
 
 PAGE = 128
-QH = 24
-KVH = 4
-HD = 256
+CONFIGS = {
+    "qwen36": (24, 4, 256),
+    "qwen3_vl": (32, 8, 128),
+    "cosmos_edge": (16, 8, 128),
+}
 
 SHAPES = {
-    "decode_128": (1, 128),
-    "decode_1024": (1, 1024),
-    "verify4_1024": (4, 1024),
-    "verify8_4096": (8, 4096),
+    "qwen36_decode_128": ("qwen36", 1, 128),
+    "qwen36_verify8_4096": ("qwen36", 8, 4096),
+    "qwen3_vl_decode_1024": ("qwen3_vl", 1, 1024),
+    "qwen3_vl_verify4_4096": ("qwen3_vl", 4, 4096),
+    "qwen3_vl_verify8_32768": ("qwen3_vl", 8, 32768),
+    "cosmos_edge_decode_1024": ("cosmos_edge", 1, 1024),
+    "cosmos_edge_verify4_4096": ("cosmos_edge", 4, 4096),
+    "cosmos_edge_verify8_32768": ("cosmos_edge", 8, 32768),
 }
 MODES = {
-    "smoke": ["decode_128"],
-    "headline": ["decode_1024", "verify4_1024"],
+    "smoke": ["qwen36_decode_128", "qwen3_vl_decode_1024", "cosmos_edge_decode_1024"],
+    "headline": [
+        "qwen36_verify8_4096",
+        "qwen3_vl_verify4_4096",
+        "cosmos_edge_verify4_4096",
+    ],
     "full": list(SHAPES.keys()),
 }
 
@@ -47,6 +57,10 @@ MODES = {
 @dataclass
 class Metrics:
     shape: str
+    config: str
+    q_heads: int
+    kv_heads: int
+    head_dim: int
     q_seq: int
     kv_seq: int
     max_abs: float
@@ -77,20 +91,22 @@ class SourceOps:
         return rows.to(device=device)
 
     @staticmethod
-    def allocate_workspace(q_seq: int, device="cuda"):
-        sem_count = KVH * (((q_seq * (QH // KVH)) + 31) // 32)
+    def allocate_workspace(q_seq: int, q_heads: int, kv_heads: int, device="cuda"):
+        sem_count = kv_heads * (((q_seq * (q_heads // kv_heads)) + 31) // 32)
         sem = torch.zeros(max(256, sem_count), device=device, dtype=torch.int32)
         scratch = torch.empty(256 << 20, device=device, dtype=torch.uint8)
         return sem, scratch
 
     def xqa_bf16_fp8kv(self, q, k_cache, v_cache, kv_seq):
         q_seq = q.shape[0]
+        q_heads, head_dim = q.shape[1:]
+        kv_heads = k_cache.shape[2]
         pages = k_cache.shape[0]
         page_table = torch.arange(pages, device=q.device, dtype=torch.int32).view(1, pages)
         seq_lens = torch.tensor([[kv_seq]], device=q.device, dtype=torch.int32)
         mask = self.causal_spec_mask(q_seq, q.device)
         out = torch.empty_like(q)
-        sem, scratch = self.allocate_workspace(q_seq, q.device)
+        sem, scratch = self.allocate_workspace(q_seq, q_heads, kv_heads, q.device)
         self._ops.xqa_bf16_fp8kv(
             q,
             k_cache,
@@ -106,9 +122,9 @@ class SourceOps:
             1.0,
             True,
             0,
-            PAGE * KVH * HD,
-            KVH * HD,
-            HD,
+            PAGE * kv_heads * head_dim,
+            kv_heads * head_dim,
+            head_dim,
         )
         return out
 
@@ -135,6 +151,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "xqa_mha_configured.cu"),
             str(PACKAGE / "csrc" / "xqa_bf16_fp8kv.cu"),
+            str(PACKAGE / "csrc" / "xqa_mha_d128.cu"),
         ],
         extra_include_paths=[
             str(PACKAGE / "csrc"),
@@ -167,31 +184,36 @@ def load_installed_ops(artifact: str | None):
             sys.path.remove(artifact)
 
 
-def make_inputs(q_seq: int, kv_seq: int, seed: int):
+def make_inputs(config: str, q_seq: int, kv_seq: int, seed: int):
+    q_heads, kv_heads, head_dim = CONFIGS[config]
     gen = torch.Generator(device="cuda")
     gen.manual_seed(seed)
     pages = (kv_seq + PAGE - 1) // PAGE
-    q = (torch.randn((q_seq, QH, HD), device="cuda", generator=gen) * 0.1).to(torch.bfloat16)
-    k_bf16 = (torch.randn((pages, PAGE, KVH, HD), device="cuda", generator=gen) * 0.1).to(torch.bfloat16)
-    v_bf16 = (torch.randn((pages, PAGE, KVH, HD), device="cuda", generator=gen) * 0.1).to(torch.bfloat16)
+    q = (torch.randn((q_seq, q_heads, head_dim), device="cuda", generator=gen) * 0.1).to(torch.bfloat16)
+    k_bf16 = (
+        torch.randn((pages, PAGE, kv_heads, head_dim), device="cuda", generator=gen) * 0.1
+    ).to(torch.bfloat16)
+    v_bf16 = (
+        torch.randn((pages, PAGE, kv_heads, head_dim), device="cuda", generator=gen) * 0.1
+    ).to(torch.bfloat16)
     return q, k_bf16.to(torch.float8_e4m3fn), v_bf16.to(torch.float8_e4m3fn)
 
 
 def reference(q: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, kv_seq: int) -> torch.Tensor:
     q_seq = q.shape[0]
-    k = k_cache.reshape(-1, KVH, HD)[:kv_seq].float()
-    v = v_cache.reshape(-1, KVH, HD)[:kv_seq].float()
-    out = torch.empty_like(q)
-    scale = HD ** -0.5
-    for qi in range(q_seq):
-        valid = kv_seq - q_seq + qi + 1
-        valid = max(1, min(valid, kv_seq))
-        for h in range(QH):
-            kh = h // (QH // KVH)
-            scores = (q[qi, h].float()[None, :] * k[:valid, kh]).sum(dim=1) * scale
-            probs = torch.softmax(scores, dim=0)
-            out[qi, h] = (probs[:, None] * v[:valid, kh]).sum(dim=0).to(torch.bfloat16)
-    return out
+    q_heads, head_dim = q.shape[1:]
+    kv_heads = k_cache.shape[2]
+    group = q_heads // kv_heads
+    k = k_cache.reshape(-1, kv_heads, head_dim)[:kv_seq].float()
+    v = v_cache.reshape(-1, kv_heads, head_dim)[:kv_seq].float()
+    k = k.repeat_interleave(group, dim=1)
+    v = v.repeat_interleave(group, dim=1)
+    scores = torch.einsum("qhd,khd->hqk", q.float(), k) * (head_dim**-0.5)
+    positions = torch.arange(kv_seq, device=q.device)
+    valid = kv_seq - q_seq + torch.arange(1, q_seq + 1, device=q.device)
+    scores = scores.masked_fill(positions.view(1, 1, -1) >= valid.view(1, -1, 1), -torch.inf)
+    probs = torch.softmax(scores, dim=-1)
+    return torch.einsum("hqk,khd->qhd", probs, v).to(torch.bfloat16)
 
 
 def metrics(got: torch.Tensor, ref: torch.Tensor) -> tuple[float, float, float, float]:
@@ -204,8 +226,9 @@ def metrics(got: torch.Tensor, ref: torch.Tensor) -> tuple[float, float, float, 
     )
 
 
-def run_shape(ops, name: str, q_seq: int, kv_seq: int) -> Metrics:
-    q, k, v = make_inputs(q_seq, kv_seq, seed=1000 + q_seq * 17 + kv_seq)
+def run_shape(ops, name: str, config: str, q_seq: int, kv_seq: int) -> Metrics:
+    q_heads, kv_heads, head_dim = CONFIGS[config]
+    q, k, v = make_inputs(config, q_seq, kv_seq, seed=1000 + q_seq * 17 + kv_seq)
     got = ops.xqa_bf16_fp8kv(q, k, v, kv_seq)
     torch.cuda.synchronize()
     ref = reference(q, k, v, kv_seq)
@@ -213,6 +236,10 @@ def run_shape(ops, name: str, q_seq: int, kv_seq: int) -> Metrics:
     passed = max_abs <= 0.02 and mean_abs <= 0.0025 and cos >= 0.999
     return Metrics(
         shape=name,
+        config=config,
+        q_heads=q_heads,
+        kv_heads=kv_heads,
+        head_dim=head_dim,
         q_seq=q_seq,
         kv_seq=kv_seq,
         max_abs=max_abs,
@@ -242,8 +269,8 @@ def main() -> int:
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     rows = []
     for name in MODES[args.mode]:
-        q_seq, kv_seq = SHAPES[name]
-        row = run_shape(ops, name, q_seq, kv_seq)
+        config, q_seq, kv_seq = SHAPES[name]
+        row = run_shape(ops, name, config, q_seq, kv_seq)
         rows.append(row)
         print(
             f"{row.shape}: max_abs={row.max_abs:.6f} mean_abs={row.mean_abs:.6f} "

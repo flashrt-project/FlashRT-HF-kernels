@@ -33,4 +33,6 @@ src = [
   "csrc/kernels/nexn2_misc.cuh",
   "csrc/kernels/nexn2_router_topk.cu",
   "csrc/kernels/nexn2_router_topk.cuh",
+  "csrc/kernels/relu2_quantize_fp8.cu",
+  "csrc/kernels/relu2_quantize_fp8.cuh",
 ]

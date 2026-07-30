@@ -16,6 +16,10 @@ low-bit paths.
 - `silu_mul_two_fp4_to_fp4`
 - `silu_mul_two_mul_fp4_to_fp4`
 - `dequantize_fp4_sfa_fp16`
+- `quantize_bf16_to_nvfp4_linear`
+- `rms_silu_nvfp4_ndhwc_bf16`
+- `bf16_rms_norm_ncdhw`
+- `bf16_rms_silu_ncdhw`
 
 This package targets Blackwell `sm_120a` and uses CUTLASS/CUTE SFA layouts.
 
@@ -42,3 +46,5 @@ bf16_view = ops.dequantize_fp4_sfa_fp16(packed, sfa)
 - v1 RMS producer paths support `dim <= 2048`.
 - Larger residual/RMS producer shapes should use
   `residual_add_rms_norm_fp4_sfa_v2_fp16`.
+- NCDHW BF16 RMS kernels require even `C <= 1024`; the fused NCDHW-to-NDHWC
+  NVFP4 producer requires `C % 128 == 0`.

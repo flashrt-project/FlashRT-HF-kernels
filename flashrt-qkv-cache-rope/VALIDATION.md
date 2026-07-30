@@ -14,6 +14,9 @@ Required before publishing this package:
    cache prefix/suffix preservation checks, and invalid shape/bounds rejection.
    It also covers the per-head GQA norm/RoPE/staging API with a small row and
    an N1.7-shaped row `(B=1, S=277, q_heads=16, kv_heads=8, head_dim=128)`.
+   The fused bias+RoPE matrix covers GROOT vision, Qwen3-VL vision/text,
+   LingBot vision, and both half-width and full-width RoPE tables.
+   It also covers FP16 output for a GQA HD80 attention-island shape.
 
 2. Source-extension benchmark:
 
@@ -23,6 +26,13 @@ Required before publishing this package:
      --shapes all \
      --warmup 3 \
      --iters 10
+   ```
+
+   Fused bias+RoPE eager/compile comparison:
+
+   ```bash
+   python flashrt-qkv-cache-rope/benchmarks/benchmark_bias_rope.py \
+     --backend source
    ```
 
 3. Kernel-builder artifact build:
@@ -58,6 +68,14 @@ Required before publishing this package:
 
 2026-07-30:
 
+- `qkv_split_bias_rope_bf16` passed full source correctness for head dimensions
+  64, 72, 80, and 128. The native migration harness compared the Tensor
+  wrapper directly with FlashRT's original pointer API on five model-shaped
+  rows: all Q/K/V outputs were bitwise exact and wrapper/native latency ratios
+  ranged from `1.000` to `1.001`.
+- On RTX 5090, the fused bias+RoPE wrapper measured `1.42x` to `6.28x` faster
+  than the equivalent `torch.compile(fullgraph=True)` chain and `3.74x` to
+  `11.34x` faster than eager across the published matrix.
 - Source correctness passed for the expanded API, including the N1.7-shaped
   per-head GQA row. Q/K p99 absolute error was `0.015625`, cosine was at least
   `0.99999619`, and V staging was exact.

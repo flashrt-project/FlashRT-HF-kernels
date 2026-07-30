@@ -108,6 +108,17 @@ def _nexn2_router_topk_fake(logits: torch.Tensor, out_idx: torch.Tensor, out_val
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("relu2_quantize_fp8_static_bf16"))
+def _relu2_quantize_fp8_static_fake(
+    input: torch.Tensor,
+    scale: torch.Tensor,
+    output: torch.Tensor,
+) -> None:
+    if output.shape != input.shape or scale.numel() != 1:
+        raise RuntimeError("output must match input and scale must be scalar")
+    return None
+
+
 def rms_norm_gated_silu_bf16(x, gate, weight, *, eps: float = 1e-6, out: Optional[torch.Tensor] = None):
     if out is None:
         out = torch.empty_like(x)
@@ -191,6 +202,20 @@ def nexn2_router_topk_bf16(logits, k: int = 8, *, out_idx=None, out_val=None):
     return out_idx, out_val
 
 
+def relu2_quantize_fp8_static_bf16(
+    input: torch.Tensor,
+    scale: torch.Tensor,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Compute ``relu(input) ** 2 / scale`` and quantize to FP8 E4M3."""
+
+    if out is None:
+        out = torch.empty_like(input, dtype=torch.float8_e4m3fn)
+    ops.relu2_quantize_fp8_static_bf16(input, scale, out)
+    return out
+
+
 __all__ = [
     "argmax_bf16",
     "embedding_lookup_bf16",
@@ -202,4 +227,5 @@ __all__ = [
     "sigmoid_mul_bf16",
     "silu_mul_bf16",
     "spec_accept_greedy_bf16",
+    "relu2_quantize_fp8_static_bf16",
 ]

@@ -15,6 +15,7 @@
 #include "fp8_gemv_m1_sm120.cuh"
 #include "fp8_smallM_handtuned_ldmatrix_sm120.cuh"
 #include "fp8_smallM_handtuned_sm120.cuh"
+#include "cutlass_sm120_block128_fp8_gemm.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -41,6 +42,13 @@ void check_bf16_matrix(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.scalar_type() == torch::kBFloat16,
               name, " must have dtype torch.bfloat16");
   TORCH_CHECK(tensor.dim() == 2, name, " must have shape (rows, cols)");
+}
+
+void check_fp32_matrix(torch::Tensor const& tensor, const char* name) {
+  check_cuda_contiguous(tensor, name);
+  TORCH_CHECK(tensor.scalar_type() == torch::kFloat32,
+              name, " must have dtype torch.float32");
+  TORCH_CHECK(tensor.dim() == 2, name, " must be rank 2");
 }
 
 int checked_positive_int(int64_t value, const char* name) {
@@ -204,12 +212,70 @@ void fp8_linear_residual_bf16(
   launch(input, weight, alpha, variant, residual, true);
 }
 
+void fp8_blockwise_linear_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& weight_scale,
+    torch::Tensor& out) {
+  check_fp8_matrix(input, "input");
+  check_fp8_matrix(weight, "weight");
+  check_fp32_matrix(input_scale, "input_scale");
+  check_fp32_matrix(weight_scale, "weight_scale");
+  check_bf16_matrix(out, "out");
+  const int64_t M = input.size(0);
+  const int64_t K = input.size(1);
+  const int64_t N = weight.size(0);
+  TORCH_CHECK(weight.size(1) == K,
+              "weight must have shape (N, input.shape[1])");
+  TORCH_CHECK(K % 128 == 0 && N % 128 == 0,
+              "N and K must be divisible by 128");
+  TORCH_CHECK(input_scale.sizes() ==
+                  torch::IntArrayRef({M, K / 128}),
+              "input_scale must have shape (M, K / 128)");
+  TORCH_CHECK(weight_scale.sizes() ==
+                  torch::IntArrayRef({N / 128, K / 128}),
+              "weight_scale must have shape (N / 128, K / 128)");
+  TORCH_CHECK(out.sizes() == torch::IntArrayRef({M, N}),
+              "out must have shape (M, N)");
+  TORCH_CHECK(input.get_device() == weight.get_device() &&
+                  input.get_device() == input_scale.get_device() &&
+                  input.get_device() == weight_scale.get_device() &&
+                  input.get_device() == out.get_device(),
+              "all tensors must be on the same CUDA device");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(input.device());
+  auto* props = at::cuda::getDeviceProperties(input.get_device());
+  TORCH_CHECK(props->major == 12 && props->minor == 0,
+              "fp8_blockwise_linear_bf16 currently requires SM120");
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  flash_rt::gemm::fp8_block128_gemm_cutlass_sm120_bf16out(
+      input.data_ptr(),
+      weight.data_ptr(),
+      out.data_ptr(),
+      checked_positive_int(M, "M"),
+      checked_positive_int(N, "N"),
+      checked_positive_int(K, "K"),
+      input_scale.data_ptr<float>(),
+      weight_scale.data_ptr<float>(),
+      stream);
+#else
+  TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("fp8_linear_bf16(Tensor input, Tensor weight, float alpha, int variant, Tensor! out) -> ()");
   ops.def("fp8_linear_residual_bf16(Tensor input, Tensor weight, float alpha, int variant, Tensor! residual) -> ()");
+  ops.def("fp8_blockwise_linear_bf16("
+          "Tensor input, Tensor weight, Tensor input_scale, "
+          "Tensor weight_scale, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("fp8_linear_bf16", torch::kCUDA, &fp8_linear_bf16);
   ops.impl("fp8_linear_residual_bf16", torch::kCUDA, &fp8_linear_residual_bf16);
+  ops.impl("fp8_blockwise_linear_bf16",
+           torch::kCUDA,
+           &fp8_blockwise_linear_bf16);
 #endif
 }
 

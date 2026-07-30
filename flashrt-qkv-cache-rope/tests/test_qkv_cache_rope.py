@@ -147,6 +147,90 @@ class SourceOps:
         )
         return q_out, k_out, v_out
 
+    def qkv_split_bias_rope_bf16(
+        self,
+        packed_qkv,
+        qkv_bias,
+        cos,
+        sin,
+        q_heads,
+        kv_heads,
+        head_dim,
+        q_out=None,
+        k_out=None,
+        v_out=None,
+    ):
+        batch, seq_len, _ = packed_qkv.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, head_dim),
+                device=packed_qkv.device,
+                dtype=torch.bfloat16,
+            )
+        if k_out is None:
+            k_out = torch.empty(
+                (batch, seq_len, kv_heads, head_dim),
+                device=packed_qkv.device,
+                dtype=torch.bfloat16,
+            )
+        if v_out is None:
+            v_out = torch.empty_like(k_out)
+        self._ops.qkv_split_bias_rope_bf16(
+            packed_qkv,
+            qkv_bias,
+            cos,
+            sin,
+            int(q_heads),
+            int(kv_heads),
+            int(head_dim),
+            q_out,
+            k_out,
+            v_out,
+        )
+        return q_out, k_out, v_out
+
+    def qkv_split_bias_rope_fp16(
+        self,
+        packed_qkv,
+        qkv_bias,
+        cos,
+        sin,
+        q_heads,
+        kv_heads,
+        head_dim,
+        q_out=None,
+        k_out=None,
+        v_out=None,
+    ):
+        batch, seq_len, _ = packed_qkv.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, head_dim),
+                device=packed_qkv.device,
+                dtype=torch.float16,
+            )
+        if k_out is None:
+            k_out = torch.empty(
+                (batch, seq_len, kv_heads, head_dim),
+                device=packed_qkv.device,
+                dtype=torch.float16,
+            )
+        if v_out is None:
+            v_out = torch.empty_like(k_out)
+        self._ops.qkv_split_bias_rope_fp16(
+            packed_qkv,
+            qkv_bias,
+            cos,
+            sin,
+            int(q_heads),
+            int(kv_heads),
+            int(head_dim),
+            q_out,
+            k_out,
+            v_out,
+        )
+        return q_out, k_out, v_out
+
     def qkv_split_bf16(
         self,
         packed_qkv,
@@ -474,6 +558,40 @@ def apply_rotate_half_rope_128(x: torch.Tensor, cos: torch.Tensor, sin: torch.Te
     out[:, :half] = xf[:, :half] * c - xf[:, half:] * s
     out[:, half:] = xf[:, half:] * c + xf[:, :half] * s
     return out.to(torch.bfloat16)
+
+
+def ref_qkv_split_bias_rope(
+    packed_qkv,
+    qkv_bias,
+    cos,
+    sin,
+    q_heads,
+    kv_heads,
+    head_dim,
+    output_dtype=torch.bfloat16,
+):
+    batch, seq_len, _ = packed_qkv.shape
+    q_dim = q_heads * head_dim
+    kv_dim = kv_heads * head_dim
+    biased = packed_qkv.float() + qkv_bias.float().view(1, 1, -1)
+    q = biased[:, :, :q_dim].view(batch, seq_len, q_heads, head_dim)
+    k = biased[:, :, q_dim : q_dim + kv_dim].view(
+        batch, seq_len, kv_heads, head_dim
+    )
+    v = biased[:, :, q_dim + kv_dim :].to(output_dtype).view(
+        batch, seq_len, kv_heads, head_dim
+    )
+    half = head_dim // 2
+    c = cos[..., :half].float().unsqueeze(2)
+    s = sin[..., :half].float().unsqueeze(2)
+
+    def rotate(x):
+        out = torch.empty_like(x)
+        out[..., :half] = x[..., :half] * c - x[..., half:] * s
+        out[..., half:] = x[..., half:] * c + x[..., :half] * s
+        return out.to(output_dtype)
+
+    return rotate(q), rotate(k), v
 
 
 def ref_qkv_split_norm_rope(packed_qkv, norm_q_weight, norm_k_weight, freqs_re, freqs_im, heads, head_dim, rope_seq_len, eps):
@@ -843,6 +961,68 @@ def run_per_head_gqa_shape(
         )
 
 
+def run_bias_rope_shape(
+    ops,
+    label: str,
+    batch: int,
+    seq_len: int,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    full_width_rope: bool,
+) -> None:
+    width = (q_heads + 2 * kv_heads) * head_dim
+    packed = torch.randn(
+        (batch, seq_len, width), device="cuda", dtype=torch.bfloat16
+    )
+    bias = torch.randn((width,), device="cuda", dtype=torch.bfloat16)
+    rope_width = head_dim if full_width_rope else head_dim // 2
+    theta = torch.randn(
+        (batch, seq_len, rope_width), device="cuda", dtype=torch.float32
+    )
+    cos, sin = theta.cos().contiguous(), theta.sin().contiguous()
+    got = ops.qkv_split_bias_rope_bf16(
+        packed, bias, cos, sin, q_heads, kv_heads, head_dim
+    )
+    expected = ref_qkv_split_bias_rope(
+        packed, bias, cos, sin, q_heads, kv_heads, head_dim
+    )
+    for suffix, actual, reference in zip(("q", "k", "v"), got, expected):
+        assert_close_distribution(
+            f"{label}/bias_rope_{suffix}", actual, reference
+        )
+
+
+def run_bias_rope_fp16_shape(
+    ops,
+    label: str,
+    batch: int,
+    seq_len: int,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+) -> None:
+    width = (q_heads + 2 * kv_heads) * head_dim
+    packed = torch.randn(
+        (batch, seq_len, width), device="cuda", dtype=torch.bfloat16
+    )
+    bias = torch.randn((width,), device="cuda", dtype=torch.bfloat16)
+    theta = torch.randn(
+        (batch, seq_len, head_dim), device="cuda", dtype=torch.float32
+    )
+    cos, sin = theta.cos().contiguous(), theta.sin().contiguous()
+    got = ops.qkv_split_bias_rope_fp16(
+        packed, bias, cos, sin, q_heads, kv_heads, head_dim
+    )
+    expected = ref_qkv_split_bias_rope(
+        packed, bias, cos, sin, q_heads, kv_heads, head_dim, torch.float16
+    )
+    for suffix, actual, reference in zip(("q", "k", "v"), got, expected):
+        assert_close_distribution(
+            f"{label}/bias_rope_fp16_{suffix}", actual, reference
+        )
+
+
 def run_rejection_tests(ops) -> None:
     packed, q_w, k_w, freqs_re, freqs_im = make_case(1, 4, 4, 128)
     expect_runtime_error(
@@ -926,6 +1106,42 @@ def run_rejection_tests(ops) -> None:
             2,
         ),
     )
+    packed_bias_rope = torch.randn(
+        (1, 17, (16 + 2 * 8) * 128),
+        device="cuda",
+        dtype=torch.bfloat16,
+    )
+    bias_rope_bias = torch.randn(
+        ((16 + 2 * 8) * 128,), device="cuda", dtype=torch.bfloat16
+    )
+    bias_rope_cos = torch.ones(
+        (1, 17, 64), device="cuda", dtype=torch.float32
+    )
+    bias_rope_sin = torch.zeros_like(bias_rope_cos)
+    expect_runtime_error(
+        "reject bias-rope odd head dim",
+        lambda: ops.qkv_split_bias_rope_bf16(
+            packed_bias_rope,
+            bias_rope_bias,
+            bias_rope_cos,
+            bias_rope_sin,
+            16,
+            8,
+            127,
+        ),
+    )
+    expect_runtime_error(
+        "reject bias-rope table shape",
+        lambda: ops.qkv_split_bias_rope_bf16(
+            packed_bias_rope,
+            bias_rope_bias,
+            bias_rope_cos[..., :-1].contiguous(),
+            bias_rope_sin[..., :-1].contiguous(),
+            16,
+            8,
+            128,
+        ),
+    )
 
 
 def run_installed_compile_test(ops, eps: float) -> None:
@@ -985,11 +1201,32 @@ def run(args) -> None:
     run_per_head_gqa_shape(
         ops, "per_head_gqa_small", 1, 17, 4, 2, args.eps
     )
+    run_bias_rope_shape(
+        ops, "bias_rope_small", 1, 17, 4, 2, 64, False
+    )
+    run_bias_rope_fp16_shape(
+        ops, "bias_rope_fp16_small", 1, 17, 4, 2, 64
+    )
     run_kvcache_shape(ops, "pi05_decoder_gqa", 1, 10, 8, 1, 256)
     if args.mode == "full":
         run_decode_shape(ops, "decode_vla", 24, args.eps)
         run_per_head_gqa_shape(
             ops, "per_head_gqa_n17", 1, 277, 16, 8, args.eps
+        )
+        run_bias_rope_shape(
+            ops, "groot_vit", 1, 277, 16, 16, 64, True
+        )
+        run_bias_rope_shape(
+            ops, "qwen3_vl_vision", 1, 1024, 16, 16, 72, True
+        )
+        run_bias_rope_shape(
+            ops, "lingbot_vision", 1, 1024, 16, 16, 80, True
+        )
+        run_bias_rope_fp16_shape(
+            ops, "lingbot_attention_island", 1, 51, 16, 8, 80
+        )
+        run_bias_rope_shape(
+            ops, "qwen3_vl_text", 1, 277, 32, 8, 128, False
         )
         run_kvcache_shape(ops, "gqa_batch2", 2, 16, 8, 2, 128)
     run_joint3_shape(ops, "small", 4, 128, args.eps)

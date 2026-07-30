@@ -240,6 +240,119 @@ __global__ void qkv_split_per_head_norm_rope_bf16_kernel(
   }
 }
 
+__global__ void qkv_split_bias_rope_bf16_kernel(
+    const __nv_bfloat16* __restrict__ packed_qkv,
+    const __nv_bfloat16* __restrict__ qkv_bias,
+    const float* __restrict__ cos,
+    const float* __restrict__ sin,
+    __nv_bfloat16* __restrict__ q_out,
+    __nv_bfloat16* __restrict__ k_out,
+    __nv_bfloat16* __restrict__ v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int rope_stride) {
+  const int slot = blockIdx.x;
+  const int row = blockIdx.y;
+  if (row >= rows) return;
+
+  const int tid = threadIdx.x;
+  const int half = head_dim / 2;
+  const int q_dim = q_heads * head_dim;
+  const int kv_dim = kv_heads * head_dim;
+  const int packed_stride = q_dim + 2 * kv_dim;
+  const bool is_q = slot < q_heads;
+  const bool is_k = !is_q && slot < q_heads + kv_heads;
+  const int head = is_q ? slot : (is_k ? slot - q_heads
+                                        : slot - q_heads - kv_heads);
+  const int section_offset = is_q ? 0 : (is_k ? q_dim : q_dim + kv_dim);
+  const int section_heads = is_q ? q_heads : kv_heads;
+  const __nv_bfloat16* src =
+      packed_qkv + static_cast<long>(row) * packed_stride
+      + section_offset + head * head_dim;
+  const __nv_bfloat16* bias =
+      qkv_bias + section_offset + head * head_dim;
+  __nv_bfloat16* dst =
+      (is_q ? q_out : (is_k ? k_out : v_out))
+      + (static_cast<long>(row) * section_heads + head) * head_dim;
+
+  if (is_q || is_k) {
+    const int rope_offset = row * rope_stride;
+    for (int d = tid; d < half; d += blockDim.x) {
+      const float c = cos[rope_offset + d];
+      const float s = sin[rope_offset + d];
+      const float x0 =
+          __bfloat162float(src[d]) + __bfloat162float(bias[d]);
+      const float x1 = __bfloat162float(src[d + half])
+          + __bfloat162float(bias[d + half]);
+      dst[d] = __float2bfloat16_rn(x0 * c - x1 * s);
+      dst[d + half] = __float2bfloat16_rn(x1 * c + x0 * s);
+    }
+  } else {
+    for (int d = tid; d < head_dim; d += blockDim.x) {
+      dst[d] = __float2bfloat16_rn(
+          __bfloat162float(src[d]) + __bfloat162float(bias[d]));
+    }
+  }
+}
+
+__global__ void qkv_split_bias_rope_fp16_kernel(
+    const __nv_bfloat16* __restrict__ packed_qkv,
+    const __nv_bfloat16* __restrict__ qkv_bias,
+    const float* __restrict__ cos,
+    const float* __restrict__ sin,
+    __half* __restrict__ q_out,
+    __half* __restrict__ k_out,
+    __half* __restrict__ v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int rope_stride) {
+  const int slot = blockIdx.x;
+  const int row = blockIdx.y;
+  if (row >= rows) return;
+
+  const int tid = threadIdx.x;
+  const int half = head_dim / 2;
+  const int q_dim = q_heads * head_dim;
+  const int kv_dim = kv_heads * head_dim;
+  const int packed_stride = q_dim + 2 * kv_dim;
+  const bool is_q = slot < q_heads;
+  const bool is_k = !is_q && slot < q_heads + kv_heads;
+  const int head = is_q ? slot : (is_k ? slot - q_heads
+                                        : slot - q_heads - kv_heads);
+  const int section_offset = is_q ? 0 : (is_k ? q_dim : q_dim + kv_dim);
+  const int section_heads = is_q ? q_heads : kv_heads;
+  const __nv_bfloat16* src =
+      packed_qkv + static_cast<long>(row) * packed_stride
+      + section_offset + head * head_dim;
+  const __nv_bfloat16* bias =
+      qkv_bias + section_offset + head * head_dim;
+  __half* dst = (is_q ? q_out : (is_k ? k_out : v_out))
+      + (static_cast<long>(row) * section_heads + head) * head_dim;
+
+  if (is_q || is_k) {
+    const int rope_offset = row * rope_stride;
+    for (int d = tid; d < half; d += blockDim.x) {
+      const float c = cos[rope_offset + d];
+      const float s = sin[rope_offset + d];
+      const float x0 =
+          __bfloat162float(src[d]) + __bfloat162float(bias[d]);
+      const float x1 = __bfloat162float(src[d + half])
+          + __bfloat162float(bias[d + half]);
+      dst[d] = __float2half_rn(x0 * c - x1 * s);
+      dst[d + half] = __float2half_rn(x1 * c + x0 * s);
+    }
+  } else {
+    for (int d = tid; d < head_dim; d += blockDim.x) {
+      dst[d] = __float2half_rn(
+          __bfloat162float(src[d]) + __bfloat162float(bias[d]));
+    }
+  }
+}
+
 __global__ void qkv_split_rope_kvcache_bf16_kernel(
     const __nv_bfloat16* __restrict__ packed_qkv,
     const __nv_bfloat16* __restrict__ rope,
@@ -1100,6 +1213,68 @@ void qkv_split_per_head_norm_rope_bf16(
       q_heads,
       kv_heads,
       eps);
+}
+
+void qkv_split_bias_rope_bf16(
+    const void* packed_qkv,
+    const void* qkv_bias,
+    const float* cos,
+    const float* sin,
+    void* q_out,
+    void* k_out,
+    void* v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int rope_stride,
+    cudaStream_t stream) {
+  const int threads = head_dim < 256 ? head_dim : 256;
+  qkv_split_bias_rope_bf16_kernel<<<
+      dim3(q_heads + 2 * kv_heads, rows), threads, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(packed_qkv),
+      reinterpret_cast<const __nv_bfloat16*>(qkv_bias),
+      cos,
+      sin,
+      reinterpret_cast<__nv_bfloat16*>(q_out),
+      reinterpret_cast<__nv_bfloat16*>(k_out),
+      reinterpret_cast<__nv_bfloat16*>(v_out),
+      rows,
+      q_heads,
+      kv_heads,
+      head_dim,
+      rope_stride);
+}
+
+void qkv_split_bias_rope_fp16(
+    const void* packed_qkv,
+    const void* qkv_bias,
+    const float* cos,
+    const float* sin,
+    void* q_out,
+    void* k_out,
+    void* v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int rope_stride,
+    cudaStream_t stream) {
+  const int threads = head_dim < 256 ? head_dim : 256;
+  qkv_split_bias_rope_fp16_kernel<<<
+      dim3(q_heads + 2 * kv_heads, rows), threads, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(packed_qkv),
+      reinterpret_cast<const __nv_bfloat16*>(qkv_bias),
+      cos,
+      sin,
+      reinterpret_cast<__half*>(q_out),
+      reinterpret_cast<__half*>(k_out),
+      reinterpret_cast<__half*>(v_out),
+      rows,
+      q_heads,
+      kv_heads,
+      head_dim,
+      rope_stride);
 }
 
 void qkv_split_rope_kvcache_bf16(

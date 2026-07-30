@@ -147,6 +147,114 @@ __global__ void cast_bf16_to_fp32_kernel(const __nv_bfloat16* __restrict__ src,
   }
 }
 
+__global__ void pack_tail_bf16_kernel(
+    const __nv_bfloat16* __restrict__ tail,
+    __nv_bfloat16* __restrict__ out,
+    int64_t flat_dim,
+    int64_t tail_numel) {
+  const int64_t tail_start = flat_dim - tail_numel;
+  for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       idx < flat_dim;
+       idx += static_cast<int64_t>(blockDim.x) * gridDim.x) {
+    out[idx] = idx < tail_start ? __float2bfloat16(0.0f) : tail[idx - tail_start];
+  }
+}
+
+__global__ void add_bias_zero_tail_bf16_kernel(
+    const __nv_bfloat16* __restrict__ input,
+    const __nv_bfloat16* __restrict__ bias,
+    __nv_bfloat16* __restrict__ out,
+    int64_t total,
+    int64_t cols,
+    int64_t valid_cols) {
+  for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       idx < total;
+       idx += static_cast<int64_t>(blockDim.x) * gridDim.x) {
+    const int64_t col = idx % cols;
+    out[idx] = col >= valid_cols
+        ? __float2bfloat16(0.0f)
+        : __float2bfloat16(
+              __bfloat162float(input[idx]) + __bfloat162float(bias[col]));
+  }
+}
+
+__global__ void extract_tail_f32_to_bf16_kernel(
+    const float* __restrict__ flat,
+    __nv_bfloat16* __restrict__ out,
+    int64_t flat_dim,
+    int64_t tail_numel) {
+  const int64_t tail_start = flat_dim - tail_numel;
+  for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       idx < tail_numel;
+       idx += static_cast<int64_t>(blockDim.x) * gridDim.x) {
+    out[idx] = __float2bfloat16(flat[tail_start + idx]);
+  }
+}
+
+__global__ void add_bias_pair_bf16_kernel(
+    const __nv_bfloat16* __restrict__ input,
+    const __nv_bfloat16* __restrict__ bias_a,
+    const __nv_bfloat16* __restrict__ bias_b,
+    __nv_bfloat16* __restrict__ out,
+    int64_t total,
+    int64_t hidden) {
+  for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       idx < total;
+       idx += static_cast<int64_t>(blockDim.x) * gridDim.x) {
+    const int64_t col = idx % hidden;
+    const __nv_bfloat16 first = __float2bfloat16(
+        __bfloat162float(input[idx]) + __bfloat162float(bias_a[col]));
+    out[idx] = __float2bfloat16(
+        __bfloat162float(first) + __bfloat162float(bias_b[col]));
+  }
+}
+
+__global__ void unipc_step_f32_bf16_kernel(
+    const float* __restrict__ sample,
+    const __nv_bfloat16* __restrict__ velocity,
+    const float* __restrict__ prev_m1,
+    const float* __restrict__ prev_m2,
+    const float* __restrict__ prev_last_sample,
+    float* __restrict__ next_sample,
+    float* __restrict__ current_m,
+    float* __restrict__ current_last_sample,
+    int64_t n,
+    float sigma,
+    int corrector_order,
+    int predictor_order,
+    float c_sample,
+    float c_last,
+    float c_prev_m1,
+    float c_prev_m2,
+    float c_curr_m,
+    float p_sample,
+    float p_curr_m,
+    float p_prev_m1) {
+  for (int64_t idx = static_cast<int64_t>(blockIdx.x) * blockDim.x +
+                         threadIdx.x;
+       idx < n;
+       idx += static_cast<int64_t>(blockDim.x) * gridDim.x) {
+    const float sample_value = sample[idx];
+    const float sigma_velocity = __bfloat162float(
+        __float2bfloat16(sigma * __bfloat162float(velocity[idx])));
+    const float curr_m = sample_value - sigma_velocity;
+
+    float corrected = c_sample * sample_value + c_curr_m * curr_m;
+    if (corrector_order >= 1) {
+      corrected +=
+          c_last * prev_last_sample[idx] + c_prev_m1 * prev_m1[idx];
+    }
+    if (corrector_order >= 2) corrected += c_prev_m2 * prev_m2[idx];
+
+    float next = p_sample * corrected + p_curr_m * curr_m;
+    if (predictor_order >= 2) next += p_prev_m1 * prev_m1[idx];
+
+    current_m[idx] = curr_m;
+    current_last_sample[idx] = corrected;
+    next_sample[idx] = next;
+  }
+}
+
 }  // namespace
 
 void add_bf16_out(const void* a, const void* b, void* out, int64_t n, cudaStream_t stream) {
@@ -247,6 +355,113 @@ void cast_bf16_to_fp32(const void* src, void* dst, int64_t n, cudaStream_t strea
       reinterpret_cast<const __nv_bfloat16*>(src),
       reinterpret_cast<float*>(dst),
       n);
+}
+
+void pack_tail_bf16(
+    const void* tail,
+    void* out,
+    int64_t flat_dim,
+    int64_t tail_numel,
+    cudaStream_t stream) {
+  pack_tail_bf16_kernel<<<launch_blocks(flat_dim), 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(tail),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      flat_dim,
+      tail_numel);
+}
+
+void add_bias_zero_tail_bf16(
+    const void* input,
+    const void* bias,
+    void* out,
+    int64_t rows,
+    int64_t cols,
+    int64_t valid_cols,
+    cudaStream_t stream) {
+  const int64_t total = rows * cols;
+  add_bias_zero_tail_bf16_kernel<<<launch_blocks(total), 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input),
+      reinterpret_cast<const __nv_bfloat16*>(bias),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      total,
+      cols,
+      valid_cols);
+}
+
+void extract_tail_f32_to_bf16(
+    const void* flat,
+    void* out,
+    int64_t flat_dim,
+    int64_t tail_numel,
+    cudaStream_t stream) {
+  extract_tail_f32_to_bf16_kernel<<<launch_blocks(tail_numel), 256, 0, stream>>>(
+      reinterpret_cast<const float*>(flat),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      flat_dim,
+      tail_numel);
+}
+
+void add_bias_pair_bf16(
+    const void* input,
+    const void* bias_a,
+    const void* bias_b,
+    void* out,
+    int64_t rows,
+    int64_t hidden,
+    cudaStream_t stream) {
+  const int64_t total = rows * hidden;
+  add_bias_pair_bf16_kernel<<<launch_blocks(total), 256, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(input),
+      reinterpret_cast<const __nv_bfloat16*>(bias_a),
+      reinterpret_cast<const __nv_bfloat16*>(bias_b),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      total,
+      hidden);
+}
+
+void unipc_step_f32_bf16(
+    const void* sample,
+    const void* velocity,
+    const void* prev_m1,
+    const void* prev_m2,
+    const void* prev_last_sample,
+    void* next_sample,
+    void* current_m,
+    void* current_last_sample,
+    int64_t n,
+    float sigma,
+    int corrector_order,
+    int predictor_order,
+    float c_sample,
+    float c_last,
+    float c_prev_m1,
+    float c_prev_m2,
+    float c_curr_m,
+    float p_sample,
+    float p_curr_m,
+    float p_prev_m1,
+    cudaStream_t stream) {
+  unipc_step_f32_bf16_kernel<<<launch_blocks(n), 256, 0, stream>>>(
+      reinterpret_cast<const float*>(sample),
+      reinterpret_cast<const __nv_bfloat16*>(velocity),
+      reinterpret_cast<const float*>(prev_m1),
+      reinterpret_cast<const float*>(prev_m2),
+      reinterpret_cast<const float*>(prev_last_sample),
+      reinterpret_cast<float*>(next_sample),
+      reinterpret_cast<float*>(current_m),
+      reinterpret_cast<float*>(current_last_sample),
+      n,
+      sigma,
+      corrector_order,
+      predictor_order,
+      c_sample,
+      c_last,
+      c_prev_m1,
+      c_prev_m2,
+      c_curr_m,
+      p_sample,
+      p_curr_m,
+      p_prev_m1);
 }
 
 }  // namespace diffusion_step_ops

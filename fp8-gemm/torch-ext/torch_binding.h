@@ -16,3 +16,10 @@ void fp8_linear_residual_bf16(
     double alpha,
     int64_t variant,
     torch::Tensor& residual);
+
+void fp8_blockwise_linear_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& weight_scale,
+    torch::Tensor& out);
