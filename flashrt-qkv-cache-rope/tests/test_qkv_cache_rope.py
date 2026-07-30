@@ -928,6 +928,41 @@ def run_rejection_tests(ops) -> None:
     )
 
 
+def run_installed_compile_test(ops, eps: float) -> None:
+    packed = torch.randn(
+        (1, 17, (4 + 2 * 2) * 128),
+        device="cuda",
+        dtype=torch.bfloat16,
+    )
+    q_weight = torch.ones((128,), device="cuda", dtype=torch.bfloat16)
+    k_weight = torch.ones_like(q_weight)
+    angle = torch.randn(
+        (1, 17, 128), device="cuda", dtype=torch.bfloat16
+    )
+    cos, sin = angle.cos().contiguous(), angle.sin().contiguous()
+
+    def call(packed_arg, q_weight_arg, k_weight_arg, cos_arg, sin_arg):
+        return ops.qkv_split_per_head_norm_rope_bf16(
+            packed_arg,
+            q_weight_arg,
+            k_weight_arg,
+            cos_arg,
+            sin_arg,
+            4,
+            2,
+            eps,
+        )
+
+    outputs = torch.compile(call, fullgraph=True)(
+        packed, q_weight, k_weight, cos, sin
+    )
+    torch.cuda.synchronize()
+    assert tuple(outputs[0].shape) == (1, 17, 4, 128)
+    assert tuple(outputs[1].shape) == (1, 17, 2, 128)
+    assert tuple(outputs[2].shape) == (1, 17, 2, 128)
+    print("PASS installed per-head GQA torch.compile fullgraph")
+
+
 def run(args) -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
@@ -961,6 +996,8 @@ def run(args) -> None:
     if args.mode == "full":
         run_joint3_shape(ops, "vla", 24, 128, args.eps)
     run_rejection_tests(ops)
+    if args.backend == "installed":
+        run_installed_compile_test(ops, args.eps)
 
 
 def main() -> None:

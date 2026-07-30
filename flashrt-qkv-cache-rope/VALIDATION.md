@@ -65,6 +65,10 @@ Required before publishing this package:
   per-head GQA boundary measured `6.154 us` versus `35.798 us` for a
   `torch.compile(fullgraph=True)` split, per-head norm, rotate-half RoPE, and
   Q/K/V staging chain: `5.82x` faster on RTX 5090.
+- An installed-wrapper-equivalent source build passed
+  `torch.compile(fullgraph=True)` through the public Python API, including
+  fake registration and the default-epsilon call contract. The installed
+  test suite now carries this regression for release artifacts.
 - `kernel-builder-docker check-config .` passed for the repository. Artifact
   rebuild was blocked by external Nix/Cachix fetch timeouts; source compilation
   and execution passed.
