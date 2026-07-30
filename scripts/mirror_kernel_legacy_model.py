@@ -11,12 +11,14 @@ old and new clients can load the same published artifacts.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import tempfile
 from pathlib import Path
 
 from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub.hf_api import RepoFile
 
 
 VERSION_BRANCH_RE = re.compile(r"^v[0-9]+$")
@@ -51,6 +53,73 @@ def get_version_branches(api: HfApi, repo_id: str, token: str) -> list[str]:
     return sorted(
         [branch.name for branch in refs.branches if VERSION_BRANCH_RE.match(branch.name)],
         key=lambda item: int(item[1:]),
+    )
+
+
+def build_manifest(
+    api: HfApi,
+    repo_id: str,
+    repo_type: str,
+    branch: str,
+    token: str,
+) -> dict[str, tuple[int, str | None]]:
+    """Return storage-independent identities for published build files."""
+    files: dict[str, tuple[int, str | None]] = {}
+    metadata_digests: dict[str, str] = {}
+
+    with tempfile.TemporaryDirectory(prefix="flashrt-legacy-verify-") as tmp:
+        local_dir = Path(tmp)
+        snapshot_download(
+            repo_id=repo_id,
+            repo_type=repo_type,
+            revision=branch,
+            local_dir=local_dir,
+            allow_patterns=["build/**/metadata.json"],
+            token=token,
+        )
+        for metadata_path in local_dir.glob("build/*/metadata.json"):
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            variant = metadata_path.parent.relative_to(local_dir).as_posix()
+            for filename, digest in metadata.get("digest", {}).get("files", {}).items():
+                metadata_digests[f"{variant}/{filename}"] = digest
+
+    for entry in api.list_repo_tree(
+        repo_id=repo_id,
+        repo_type=repo_type,
+        revision=branch,
+        recursive=True,
+        expand=True,
+        token=token,
+    ):
+        if not isinstance(entry, RepoFile) or not entry.path.startswith("build/"):
+            continue
+        # A model mirror may store a small shared object as a regular Git blob
+        # while the Kernel repo stores it in LFS. Compare builder-recorded
+        # SHA256 digests so storage representation does not create false
+        # mismatches.
+        digest = metadata_digests.get(entry.path)
+        if digest is None and not entry.path.endswith(".so"):
+            digest = entry.blob_id
+        files[entry.path] = (entry.size, digest)
+    return files
+
+
+def verify_branch(api: HfApi, repo_id: str, branch: str, token: str) -> None:
+    canonical = build_manifest(api, repo_id, "kernel", branch, token)
+    mirror = build_manifest(api, repo_id, "model", branch, token)
+    if canonical == mirror:
+        print(f"Verified {repo_id}@{branch}: canonical and legacy build manifests match")
+        return
+
+    details: list[str] = []
+    for path in sorted(set(canonical) | set(mirror)):
+        if canonical.get(path) != mirror.get(path):
+            details.append(
+                f"- {path}: kernel={canonical.get(path)!r}, model={mirror.get(path)!r}"
+            )
+    raise RuntimeError(
+        f"{repo_id}@{branch} legacy mirror does not match the Kernel repo:\n"
+        + "\n".join(details)
     )
 
 
@@ -125,6 +194,7 @@ def mirror_package(api: HfApi, namespace: str, package: str, token: str) -> tupl
     for branch in versions:
         print(f"Mirroring {repo_id}@{branch} to legacy model repo")
         mirror_branch(api, repo_id, branch, token)
+        verify_branch(api, repo_id, branch, token)
     return repo_id, versions
 
 
@@ -133,6 +203,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--namespace", default="flashrt")
     parser.add_argument("--package", default="all")
     parser.add_argument("--repo-root", default=".")
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Compare canonical and legacy build manifests without uploading.",
+    )
     return parser.parse_args()
 
 
@@ -153,8 +228,17 @@ def main() -> None:
     failures: list[tuple[str, str]] = []
     for package in packages:
         try:
-            repo_id, versions = mirror_package(api, args.namespace, package, token)
-            print(f"OK {repo_id}: mirrored {', '.join(versions)}")
+            repo_id = f"{args.namespace}/{package}"
+            if args.verify_only:
+                versions = get_version_branches(api, repo_id, token)
+                if not versions:
+                    raise RuntimeError(f"{repo_id} has no Kernel Hub vN branches")
+                for branch in versions:
+                    verify_branch(api, repo_id, branch, token)
+                print(f"OK {repo_id}: verified {', '.join(versions)}")
+            else:
+                repo_id, versions = mirror_package(api, args.namespace, package, token)
+                print(f"OK {repo_id}: mirrored {', '.join(versions)}")
         except Exception as exc:  # noqa: BLE001 - CI summary should include every package failure.
             failures.append((package, f"{type(exc).__name__}: {exc}"))
             print(f"FAIL {args.namespace}/{package}: {type(exc).__name__}: {exc}")

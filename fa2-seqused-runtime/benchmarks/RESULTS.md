@@ -2,6 +2,8 @@
 
 ## Logical-head-dimension release candidate
 
+- Split-KV qualification: logical D=40..128 and D=232..256 in steps of 8.
+  Other 8-aligned D through 256 remain supported by the no-split path.
 - GPU: NVIDIA GeForce RTX 5090, SM120
 - Artifact: local `kernel-builder` `torch211-cxx11-cu128-x86_64-linux`
 - PyTorch: `2.11.0+cu128`

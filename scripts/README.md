@@ -16,6 +16,11 @@ Current scripts:
   `kernel-builder-docker check-config`.
 - `release_build_plan.py`: prints the release-candidate build-window command
   sequence; it only executes when called with `--execute`.
+- `mirror_kernel_legacy_model.py`: mirrors canonical Kernel Hub `vN` artifacts
+  to the same-name legacy model repo used by `kernels<0.13`. Every mirror
+  operation verifies variant paths, sizes, generated Python files, metadata,
+  and builder-recorded shared-object digests. Use `--verify-only` to audit
+  without uploading.
 - `run_built_artifact_benchmarks.py`: local release-candidate runner for the
   public `kernels.benchmark.Benchmark` scripts against either local source
   extensions or copied built artifacts. Add `--compile-baseline` to time

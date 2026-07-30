@@ -173,7 +173,7 @@ static int setup_splitkv(FLASH_NAMESPACE::Flash_fwd_params& params,
 [[noreturn]] static void fa2_not_built(const char* which, int v) {
     fprintf(stderr,
         "fvk_attention_fa2: %s=%d was not compiled into this build. "
-        "Rebuild with -DFA2_HDIMS=\"96;128;256\" -DFA2_DTYPES=\"fp16;bf16\" "
+        "Rebuild with -DFA2_HDIMS=\"64;96;128;256\" -DFA2_DTYPES=\"fp16;bf16\" "
         "to enable the full matrix (or add just the value you need).\n",
         which, v);
     std::abort();

@@ -38,6 +38,11 @@ bool supported_head_dim(int64_t d) {
   return d > 0 && d <= 256 && d % 8 == 0;
 }
 
+bool split_supported_head_dim(int64_t d) {
+  return (d >= 40 && d <= 128 && d % 8 == 0) ||
+         (d >= 232 && d <= 256 && d % 8 == 0);
+}
+
 void check_cuda_tensor(const torch::Tensor& x, const char* name) {
   TORCH_CHECK(x.is_cuda(), name, " must be a CUDA tensor");
   TORCH_CHECK(x.layout() == torch::kStrided, name, " must be strided");
@@ -154,6 +159,11 @@ void check_workspace(const torch::Tensor& q, const Shape& shape,
                 "num_sms must be zero when split-KV workspace is absent");
     return;
   }
+  TORCH_CHECK(
+      split_supported_head_dim(shape.head_dim),
+      "split-KV does not support logical head_dim ", shape.head_dim,
+      "; use the no-split path (supported split dimensions are "
+      "40..128 and 232..256 in steps of 8)");
   const auto& lse = *lse_accum;
   const auto& out = *out_accum;
   check_cuda_tensor(lse, "softmax_lse_accum");

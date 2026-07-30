@@ -54,9 +54,12 @@ setup helpers and must stay outside the captured hot path.
 - Causal: BF16, head dimension 128/256.
 - For `Sq != Sk`, causal masking uses FlashAttention's bottom-right alignment:
   query row `i` may attend through KV column `i + Sk - Sq`.
-- Split-KV: all supported non-causal logical dimensions. Accumulator storage
-  is rounded to the next multiple of 32 as required by FA2. D<=64 has its own
-  split-KV specialization rather than being routed through the D=96 bucket.
+- Split-KV: logical D=40..128 and D=232..256 in steps of 8. Exhaustive
+  installed-artifact tests found that the vendored FA2 split templates do not
+  preserve correctness for smaller partial D=64 tiles or D=256 partial tiles
+  below 232. Those dimensions remain supported and automatically use the
+  correct no-split FA2 path. D<=64 has its own split specialization rather
+  than being routed through the D=96 bucket.
 - Query heads must be divisible by KV heads.
 - Last dimension must be contiguous. Padded layouts are supported when batch,
   row, and head strides preserve the kernel's 16-byte vector alignment.

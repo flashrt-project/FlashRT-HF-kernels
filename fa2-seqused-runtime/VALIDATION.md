@@ -10,9 +10,10 @@ Release requires all of the following against the installed Hub artifact:
 3. BF16 causal attention at D=128/256, including explicit bottom-right mask
    references for rectangular query/KV lengths.
 4. Device `seqused_k` with different valid lengths per batch.
-5. No-split and split-KV paths for every compiled bucket, including the
-   D<=64 split specialization, rounded accumulator dimensions, and the
-   required LSE reset.
+5. No-split for every supported logical dimension; split-KV for every
+   8-aligned D=40..128 and D=232..256; verified no-split fallback and explicit
+   manual-workspace rejection for unsafe partial split tiles; rounded
+   accumulator dimensions and the required LSE reset.
 6. CUDA Graph capture and replay with a device length update.
 7. `torch.compile(fullgraph=True)` tracing through the registered fake op.
 8. Explicit errors for unsupported dtype/head-dimension/path combinations.

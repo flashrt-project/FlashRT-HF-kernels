@@ -13,7 +13,9 @@ from ._ops import add_op_namespace_prefix, ops
 
 SUPPORTED_HEAD_DIMS = tuple(range(8, 257, 8))
 COMPILED_HEAD_DIM_BUCKETS = (64, 96, 128, 256)
-SPLIT_HEAD_DIMS = SUPPORTED_HEAD_DIMS
+# Vendored FA2 split-KV partial-head tiles are valid only in these logical
+# ranges. Other supported dimensions use the correct no-split kernel.
+SPLIT_HEAD_DIMS = tuple(range(40, 129, 8)) + tuple(range(232, 257, 8))
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ def recommended_num_splits(
         raise ValueError("all shape values and num_sms must be positive")
     if int(head_dim) not in SUPPORTED_HEAD_DIMS:
         raise ValueError("head_dim must be a positive multiple of 8 at most 256")
+    if int(head_dim) not in SPLIT_HEAD_DIMS:
+        return 1
     block_n = 256 if head_dim <= 64 else (128 if head_dim <= 128 else 64)
     n_blocks = _ceildiv(seqlen_k, block_n)
     m_blocks = _ceildiv(seqlen_q, 64)
@@ -85,6 +89,8 @@ def allocate_workspace(
         raise ValueError("q and k must have shape (B, S, H, D)")
     if q.shape[-1] not in SUPPORTED_HEAD_DIMS:
         raise ValueError("head_dim must be a positive multiple of 8 at most 256")
+    if q.shape[-1] not in SPLIT_HEAD_DIMS:
+        return None
     if num_sms is None:
         num_sms = torch.cuda.get_device_properties(q.device).multi_processor_count
     splits = recommended_num_splits(

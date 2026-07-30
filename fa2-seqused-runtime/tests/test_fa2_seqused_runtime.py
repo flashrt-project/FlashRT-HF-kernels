@@ -7,7 +7,9 @@ import torch
 import torch.nn.functional as F
 
 from fa2_seqused_runtime import (
+    FA2Workspace,
     SUPPORTED_HEAD_DIMS,
+    SPLIT_HEAD_DIMS,
     allocate_outputs,
     allocate_workspace,
     forward,
@@ -124,7 +126,7 @@ def test_device_seqused_per_batch():
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
-@pytest.mark.parametrize("head_dim", [48, 64, 72, 96, 128, 256])
+@pytest.mark.parametrize("head_dim", SPLIT_HEAD_DIMS)
 def test_split_kv_noncausal(dtype, head_dim):
     q = torch.randn(1, 1, 8, head_dim, device="cuda", dtype=dtype) * 0.5
     k = torch.randn(1, 4096, 2, head_dim, device="cuda", dtype=dtype) * 0.5
@@ -137,9 +139,10 @@ def test_split_kv_noncausal(dtype, head_dim):
     _assert_close(out, _reference(q, k, v))
 
 
-def test_split_kv_seqused():
-    q = torch.randn(1, 1, 8, 128, device="cuda", dtype=torch.bfloat16) * 0.5
-    k = torch.randn(1, 4096, 2, 128, device="cuda", dtype=torch.bfloat16) * 0.5
+@pytest.mark.parametrize("head_dim", SPLIT_HEAD_DIMS)
+def test_split_kv_seqused(head_dim):
+    q = torch.randn(1, 1, 8, head_dim, device="cuda", dtype=torch.bfloat16) * 0.5
+    k = torch.randn(1, 4096, 2, head_dim, device="cuda", dtype=torch.bfloat16) * 0.5
     v = torch.randn_like(k)
     workspace = allocate_workspace(q, k)
     assert workspace is not None and workspace.num_splits > 1
@@ -149,6 +152,34 @@ def test_split_kv_seqused():
         q, k, v, used, out=out, softmax_lse=lse, workspace=workspace
     )
     _assert_close(out, _reference(q, k[:, :3073], v[:, :3073]))
+
+
+@pytest.mark.parametrize(
+    "head_dim",
+    tuple(dim for dim in SUPPORTED_HEAD_DIMS if dim not in SPLIT_HEAD_DIMS),
+)
+def test_unsafe_split_dimensions_fall_back_to_no_split(head_dim):
+    q = torch.randn(1, 1, 8, head_dim, device="cuda", dtype=torch.bfloat16) * 0.5
+    k = torch.randn(1, 1024, 2, head_dim, device="cuda", dtype=torch.bfloat16) * 0.5
+    v = torch.randn_like(k)
+    assert allocate_workspace(q, k) is None
+    _assert_close(forward(q, k, v, use_split_kv=True), _reference(q, k, v))
+
+
+def test_rejects_manual_unsafe_split_workspace():
+    head_dim = 32
+    q = torch.randn(1, 1, 8, head_dim, device="cuda", dtype=torch.bfloat16)
+    k = torch.randn(1, 1024, 2, head_dim, device="cuda", dtype=torch.bfloat16)
+    v = torch.randn_like(k)
+    out, lse = allocate_outputs(q)
+    workspace = FA2Workspace(
+        torch.empty((4, 1, 8, 1), device="cuda", dtype=torch.float32),
+        torch.empty((4, 1, 8, 1, 32), device="cuda", dtype=torch.float32),
+        128,
+        4,
+    )
+    with pytest.raises(RuntimeError, match="split-KV does not support"):
+        forward_static(q, k, v, out=out, softmax_lse=lse, workspace=workspace)
 
 
 @pytest.mark.parametrize("head_dim", [128, 256])

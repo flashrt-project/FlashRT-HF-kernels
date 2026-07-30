@@ -52,6 +52,10 @@ Non-causal FP16/BF16 accepts logical head dimensions divisible by 8 through
 example, GROOT DiT D=48 and SigLIP D=72 run directly without external tensor
 padding; the softmax scale continues to use the logical dimension.
 
+Split-KV is enabled for logical D=40..128 and D=232..256 in steps of 8.
+Other supported dimensions automatically use the no-split path because the
+vendored FA2 split templates are not correct for those partial bucket tiles.
+
 Causal calls use FlashAttention's bottom-right-aligned mask when query and KV
 lengths differ. This is the chunked-prefill/verify convention, not PyTorch
 SDPA's top-left `is_causal=True` convention for rectangular inputs.

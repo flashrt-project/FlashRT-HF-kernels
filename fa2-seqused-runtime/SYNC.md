@@ -21,6 +21,9 @@
 - Replaced raw pointer/stream Python bindings with validated Tensor operators.
 - Restored the native logical-head-dimension dispatch contract: 8-aligned
   dimensions through 256 map to compiled 64/96/128/256 buckets.
+- Restricted split-KV to the exhaustively verified logical ranges D=40..128
+  and D=232..256. Other supported dimensions select no-split, and the native
+  binding rejects direct injection of an unsafe split workspace.
 - Added explicit unsupported-contract errors before native dispatch.
 - Added explicit vector-alignment checks for padded BSHD layouts.
 - Added setup helpers for exact split-KV workspace allocation.
