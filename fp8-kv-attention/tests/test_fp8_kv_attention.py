@@ -97,16 +97,27 @@ class SourceOps:
         scratch = torch.empty(256 << 20, device=device, dtype=torch.uint8)
         return sem, scratch
 
-    def xqa_bf16_fp8kv(self, q, k_cache, v_cache, kv_seq):
-        q_seq = q.shape[0]
-        q_heads, head_dim = q.shape[1:]
-        kv_heads = k_cache.shape[2]
-        pages = k_cache.shape[0]
-        page_table = torch.arange(pages, device=q.device, dtype=torch.int32).view(1, pages)
-        seq_lens = torch.tensor([[kv_seq]], device=q.device, dtype=torch.int32)
-        mask = self.causal_spec_mask(q_seq, q.device)
-        out = torch.empty_like(q)
-        sem, scratch = self.allocate_workspace(q_seq, q_heads, kv_heads, q.device)
+    def xqa_bf16_fp8kv(
+        self,
+        q,
+        k_cache,
+        v_cache,
+        page_table,
+        seq_lens,
+        mask,
+        *,
+        out,
+        semaphores,
+        scratch,
+        max_seq_len,
+        q_scale=1.0,
+        kv_scale=1.0,
+        enable_pdl=True,
+        sm_count=0,
+        k_stride_page=0,
+        k_stride_token=0,
+        k_stride_head=0,
+    ):
         self._ops.xqa_bf16_fp8kv(
             q,
             k_cache,
@@ -115,16 +126,16 @@ class SourceOps:
             seq_lens,
             mask,
             out,
-            sem,
+            semaphores,
             scratch,
-            pages * PAGE,
-            1.0,
-            1.0,
-            True,
-            0,
-            PAGE * kv_heads * head_dim,
-            kv_heads * head_dim,
-            head_dim,
+            int(max_seq_len),
+            float(q_scale),
+            float(kv_scale),
+            bool(enable_pdl),
+            int(sm_count),
+            int(k_stride_page),
+            int(k_stride_token),
+            int(k_stride_head),
         )
         return out
 
@@ -226,10 +237,43 @@ def metrics(got: torch.Tensor, ref: torch.Tensor) -> tuple[float, float, float, 
     )
 
 
+def call_public_xqa(ops, q, k_cache, v_cache, kv_seq):
+    q_seq = q.shape[0]
+    q_heads, head_dim = q.shape[1:]
+    kv_heads = k_cache.shape[2]
+    pages = k_cache.shape[0]
+    page_table = torch.arange(
+        pages, device=q.device, dtype=torch.int32
+    ).view(1, pages)
+    seq_lens = torch.tensor(
+        [[kv_seq]], device=q.device, dtype=torch.int32
+    )
+    mask = SourceOps.causal_spec_mask(q_seq, q.device)
+    out = torch.empty_like(q)
+    semaphores, scratch = SourceOps.allocate_workspace(
+        q_seq, q_heads, kv_heads, q.device
+    )
+    return ops.xqa_bf16_fp8kv(
+        q,
+        k_cache,
+        v_cache,
+        page_table,
+        seq_lens,
+        mask,
+        out=out,
+        semaphores=semaphores,
+        scratch=scratch,
+        max_seq_len=pages * PAGE,
+        k_stride_page=PAGE * kv_heads * head_dim,
+        k_stride_token=kv_heads * head_dim,
+        k_stride_head=head_dim,
+    )
+
+
 def run_shape(ops, name: str, config: str, q_seq: int, kv_seq: int) -> Metrics:
     q_heads, kv_heads, head_dim = CONFIGS[config]
     q, k, v = make_inputs(config, q_seq, kv_seq, seed=1000 + q_seq * 17 + kv_seq)
-    got = ops.xqa_bf16_fp8kv(q, k, v, kv_seq)
+    got = call_public_xqa(ops, q, k, v, kv_seq)
     torch.cuda.synchronize()
     ref = reference(q, k, v, kv_seq)
     max_abs, mean_abs, p99_abs, cos = metrics(got, ref)

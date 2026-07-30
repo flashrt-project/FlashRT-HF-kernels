@@ -154,6 +154,19 @@ class SourceOps:
         return out
 
 
+def alloc_fp4(ops, rows: int, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Allocate buffers through the public SFA sizing contract."""
+
+    return (
+        torch.empty((rows, dim // 2), device="cuda", dtype=torch.uint8),
+        torch.empty(
+            (ops.sfa_size_bytes(rows, dim, False),),
+            device="cuda",
+            dtype=torch.uint8,
+        ),
+    )
+
+
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
     if major >= 12:
@@ -431,8 +444,8 @@ def run_case(ops: SourceOps, name: str, rows: int, dim: int) -> list[CaseResult]
     x = make_fp16((rows, dim), seed=2000 + rows + dim)
     residual_v1 = residual.clone()
     residual_v2 = residual.clone()
-    packed_v1, sfa_v1 = ops.alloc(rows, dim)
-    packed_v2, sfa_v2 = ops.alloc(rows, dim)
+    packed_v1, sfa_v1 = alloc_fp4(ops, rows, dim)
+    packed_v2, sfa_v2 = alloc_fp4(ops, rows, dim)
     if dim <= 2048:
         ops.residual_add_rms_norm_fp4_sfa_fp16(residual_v1, x, packed_v1, sfa_v1)
     ops.residual_add_rms_norm_fp4_sfa_v2_fp16(residual_v2, x, packed_v2, sfa_v2)
@@ -465,8 +478,8 @@ def run_case(ops: SourceOps, name: str, rows: int, dim: int) -> list[CaseResult]
     )
 
     merged = make_fp16((rows, dim * 2), seed=3000 + rows + dim)
-    packed_v1, sfa_v1 = ops.alloc(rows, dim)
-    packed_v2, sfa_v2 = ops.alloc(rows, dim)
+    packed_v1, sfa_v1 = alloc_fp4(ops, rows, dim)
+    packed_v2, sfa_v2 = alloc_fp4(ops, rows, dim)
     ops.silu_mul_fp4_sfa_fp16(merged, packed_v1, sfa_v1)
     ops.silu_mul_fp4_sfa_v2_fp16(merged, packed_v2, sfa_v2)
     torch.cuda.synchronize()
@@ -499,7 +512,7 @@ def run_case(ops: SourceOps, name: str, rows: int, dim: int) -> list[CaseResult]
 
     inv_s = (torch.rand((dim,), device="cuda") * 0.25 + 0.875).to(torch.float16).contiguous()
     residual_awq = residual.clone()
-    packed_awq, sfa_awq = ops.alloc(rows, dim)
+    packed_awq, sfa_awq = alloc_fp4(ops, rows, dim)
     if dim <= 2048:
         ops.residual_add_rms_norm_mul_fp4_sfa_fp16(residual_awq, x, inv_s, packed_awq, sfa_awq)
         torch.cuda.synchronize()
@@ -534,7 +547,7 @@ def run_case(ops: SourceOps, name: str, rows: int, dim: int) -> list[CaseResult]
         )
     )
 
-    packed_awq, sfa_awq = ops.alloc(rows, dim)
+    packed_awq, sfa_awq = alloc_fp4(ops, rows, dim)
     ops.silu_mul_mul_fp4_sfa_v2_fp16(merged, inv_s, packed_awq, sfa_awq)
     torch.cuda.synchronize()
     results.append(
@@ -554,9 +567,9 @@ def run_case(ops: SourceOps, name: str, rows: int, dim: int) -> list[CaseResult]
         )
     )
 
-    gate_packed, gate_sfa = ops.alloc(rows, dim)
-    up_packed, up_sfa = ops.alloc(rows, dim)
-    out_packed, out_sfa = ops.alloc(rows, dim)
+    gate_packed, gate_sfa = alloc_fp4(ops, rows, dim)
+    up_packed, up_sfa = alloc_fp4(ops, rows, dim)
+    out_packed, out_sfa = alloc_fp4(ops, rows, dim)
     ops.silu_mul_fp4_sfa_v2_fp16(make_fp16((rows, dim * 2), seed=4000 + rows + dim), gate_packed, gate_sfa)
     ops.silu_mul_fp4_sfa_v2_fp16(make_fp16((rows, dim * 2), seed=5000 + rows + dim), up_packed, up_sfa)
     ops.silu_mul_two_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, out_packed, out_sfa)
@@ -578,7 +591,7 @@ def run_case(ops: SourceOps, name: str, rows: int, dim: int) -> list[CaseResult]
         )
     )
 
-    out_mul_packed, out_mul_sfa = ops.alloc(rows, dim)
+    out_mul_packed, out_mul_sfa = alloc_fp4(ops, rows, dim)
     ops.silu_mul_two_mul_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_mul_packed, out_mul_sfa)
     torch.cuda.synchronize()
     results.append(
