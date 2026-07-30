@@ -275,6 +275,88 @@ void decode_k_norm_rope_kvwrite_devpos_bf16(
 #endif
 }
 
+void qkv_split_per_head_norm_rope_bf16(
+    torch::Tensor const& packed_qkv,
+    torch::Tensor const& q_norm_weight,
+    torch::Tensor const& k_norm_weight,
+    torch::Tensor const& cos,
+    torch::Tensor const& sin,
+    int64_t q_heads64,
+    int64_t kv_heads64,
+    double eps,
+    torch::Tensor& q_out,
+    torch::Tensor& k_out,
+    torch::Tensor& v_out) {
+  check_bf16(packed_qkv, "packed_qkv");
+  check_bf16(q_norm_weight, "q_norm_weight");
+  check_bf16(k_norm_weight, "k_norm_weight");
+  check_bf16(cos, "cos");
+  check_bf16(sin, "sin");
+  check_bf16(q_out, "q_out");
+  check_bf16(k_out, "k_out");
+  check_bf16(v_out, "v_out");
+  TORCH_CHECK(packed_qkv.dim() == 3,
+              "packed_qkv must have shape "
+              "(batch, seq_len, (q_heads + 2 * kv_heads) * 128)");
+  const int64_t batch = packed_qkv.size(0);
+  const int64_t seq_len = packed_qkv.size(1);
+  const int q_heads = checked_int(q_heads64, "q_heads");
+  const int kv_heads = checked_int(kv_heads64, "kv_heads");
+  constexpr int64_t head_dim = 128;
+  const int64_t q_dim = q_heads64 * head_dim;
+  const int64_t kv_dim = kv_heads64 * head_dim;
+  TORCH_CHECK(batch > 0 && seq_len > 0,
+              "batch and seq_len must be positive");
+  TORCH_CHECK(packed_qkv.size(2) == q_dim + 2 * kv_dim,
+              "packed_qkv.shape[2] must be "
+              "(q_heads + 2 * kv_heads) * 128");
+  TORCH_CHECK(q_norm_weight.sizes() == torch::IntArrayRef({head_dim}) &&
+              k_norm_weight.sizes() == torch::IntArrayRef({head_dim}),
+              "Q/K norm weights must have shape (128,)");
+  TORCH_CHECK(cos.sizes() ==
+                  torch::IntArrayRef({batch, seq_len, head_dim}) &&
+              sin.sizes() == cos.sizes(),
+              "cos and sin must have shape (batch, seq_len, 128)");
+  TORCH_CHECK(q_out.sizes() ==
+                  torch::IntArrayRef({batch, seq_len, q_heads64, head_dim}),
+              "q_out must have shape (batch, seq_len, q_heads, 128)");
+  TORCH_CHECK(k_out.sizes() ==
+                  torch::IntArrayRef({batch, seq_len, kv_heads64, head_dim}) &&
+              v_out.sizes() == k_out.sizes(),
+              "k_out and v_out must have shape "
+              "(batch, seq_len, kv_heads, 128)");
+  check_same_device(
+      packed_qkv, q_norm_weight, "packed_qkv", "q_norm_weight");
+  check_same_device(
+      packed_qkv, k_norm_weight, "packed_qkv", "k_norm_weight");
+  check_same_device(packed_qkv, cos, "packed_qkv", "cos");
+  check_same_device(packed_qkv, sin, "packed_qkv", "sin");
+  check_same_device(packed_qkv, q_out, "packed_qkv", "q_out");
+  check_same_device(packed_qkv, k_out, "packed_qkv", "k_out");
+  check_same_device(packed_qkv, v_out, "packed_qkv", "v_out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(packed_qkv.device());
+  auto stream = at::cuda::getCurrentCUDAStream(
+      packed_qkv.get_device()).stream();
+  flash_rt::qkv_cache_rope::qkv_split_per_head_norm_rope_bf16(
+      packed_qkv.data_ptr(),
+      q_norm_weight.data_ptr(),
+      k_norm_weight.data_ptr(),
+      cos.data_ptr(),
+      sin.data_ptr(),
+      q_out.data_ptr(),
+      k_out.data_ptr(),
+      v_out.data_ptr(),
+      checked_int(batch * seq_len, "rows"),
+      q_heads,
+      kv_heads,
+      static_cast<float>(eps),
+      stream);
+#else
+  TORCH_CHECK(false, "flashrt-qkv-cache-rope was not built with CUDA support");
+#endif
+}
+
 void qkv_split_rope_kvcache_bf16(
     torch::Tensor const& packed_qkv,
     torch::Tensor const& rope,
@@ -727,6 +809,10 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("decode_k_norm_rope_kvwrite_devpos_bf16("
           "Tensor k_pre, Tensor v_pre, Tensor k_norm_weight, Tensor cos, Tensor sin, "
           "Tensor cur_pos, float eps, Tensor! k_cache, Tensor! v_cache) -> ()");
+  ops.def("qkv_split_per_head_norm_rope_bf16("
+          "Tensor packed_qkv, Tensor q_norm_weight, Tensor k_norm_weight, "
+          "Tensor cos, Tensor sin, int q_heads, int kv_heads, float eps, "
+          "Tensor! q_out, Tensor! k_out, Tensor! v_out) -> ()");
   ops.def("qkv_split_rope_kvcache_bf16("
           "Tensor packed_qkv, Tensor rope, int q_heads, int kv_heads, int head_dim, "
           "int cache_offset, Tensor! q_out, Tensor! k_cache, Tensor! v_cache) -> ()");
@@ -761,6 +847,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("decode_k_norm_rope_kvwrite_devpos_bf16",
            torch::kCUDA,
            &decode_k_norm_rope_kvwrite_devpos_bf16);
+  ops.impl("qkv_split_per_head_norm_rope_bf16",
+           torch::kCUDA,
+           &qkv_split_per_head_norm_rope_bf16);
   ops.impl("qkv_split_rope_kvcache_bf16",
            torch::kCUDA,
            &qkv_split_rope_kvcache_bf16);

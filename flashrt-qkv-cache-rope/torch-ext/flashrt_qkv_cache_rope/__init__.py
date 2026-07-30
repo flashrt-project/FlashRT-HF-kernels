@@ -78,6 +78,43 @@ def _decode_k_norm_rope_kvwrite_devpos_bf16_fake(
     return None
 
 
+@torch.library.register_fake(
+    add_op_namespace_prefix("qkv_split_per_head_norm_rope_bf16")
+)
+def _qkv_split_per_head_norm_rope_bf16_fake(
+    packed_qkv: torch.Tensor,
+    q_norm_weight: torch.Tensor,
+    k_norm_weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    eps: float,
+    q_out: torch.Tensor,
+    k_out: torch.Tensor,
+    v_out: torch.Tensor,
+) -> None:
+    del eps
+    batch, seq_len, _ = packed_qkv.shape
+    if packed_qkv.shape[2] != (q_heads + 2 * kv_heads) * 128:
+        raise RuntimeError("packed_qkv has an invalid GQA width")
+    if q_norm_weight.shape != (128,) or k_norm_weight.shape != (128,):
+        raise RuntimeError("Q/K norm weights must have shape (128,)")
+    if cos.shape != (batch, seq_len, 128) or sin.shape != cos.shape:
+        raise RuntimeError("cos and sin must have shape (batch, seq_len, 128)")
+    if q_out.shape != (batch, seq_len, q_heads, 128):
+        raise RuntimeError(
+            "q_out must have shape (batch, seq_len, q_heads, 128)"
+        )
+    if k_out.shape != (batch, seq_len, kv_heads, 128):
+        raise RuntimeError(
+            "k_out must have shape (batch, seq_len, kv_heads, 128)"
+        )
+    if v_out.shape != k_out.shape:
+        raise RuntimeError("v_out must have the same shape as k_out")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("qkv_split_rope_kvcache_bf16"))
 def _qkv_split_rope_kvcache_bf16_fake(
     packed_qkv: torch.Tensor,
@@ -399,6 +436,52 @@ def qkv_split_rope_kvcache_bf16(
     return q_out, k_cache, v_cache
 
 
+def qkv_split_per_head_norm_rope_bf16(
+    packed_qkv: torch.Tensor,
+    q_norm_weight: torch.Tensor,
+    k_norm_weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    eps: float = 1e-6,
+    q_out: torch.Tensor | None = None,
+    k_out: torch.Tensor | None = None,
+    v_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split GQA QKV, apply per-head Q/K RMSNorm and half-rotation RoPE."""
+
+    batch, seq_len, _ = packed_qkv.shape
+    if q_out is None:
+        q_out = torch.empty(
+            (batch, seq_len, q_heads, 128),
+            device=packed_qkv.device,
+            dtype=torch.bfloat16,
+        )
+    if k_out is None:
+        k_out = torch.empty(
+            (batch, seq_len, kv_heads, 128),
+            device=packed_qkv.device,
+            dtype=torch.bfloat16,
+        )
+    if v_out is None:
+        v_out = torch.empty_like(k_out)
+    ops.qkv_split_per_head_norm_rope_bf16(
+        packed_qkv,
+        q_norm_weight,
+        k_norm_weight,
+        cos,
+        sin,
+        int(q_heads),
+        int(kv_heads),
+        float(eps),
+        q_out,
+        k_out,
+        v_out,
+    )
+    return q_out, k_out, v_out
+
+
 def qkv_split_bf16(
     packed_qkv: torch.Tensor,
     heads: int,
@@ -627,6 +710,7 @@ __all__ = [
     "decode_q_norm_rope_stage_bf16",
     "decode_k_norm_rope_kvwrite_bf16",
     "decode_k_norm_rope_kvwrite_devpos_bf16",
+    "qkv_split_per_head_norm_rope_bf16",
     "qkv_split_bf16",
     "qkv_split_rope_kvcache_bf16",
     "qkv_split_norm_rope_bf16",

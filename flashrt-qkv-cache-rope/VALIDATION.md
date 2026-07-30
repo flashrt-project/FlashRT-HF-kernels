@@ -12,6 +12,8 @@ Required before publishing this package:
    `qkv_split_rope_kvcache_bf16` with a PI0.5 decoder-shaped row
    `(B=1, S=10, q_heads=8, kv_heads=1, head_dim=256)`, a batched GQA row,
    cache prefix/suffix preservation checks, and invalid shape/bounds rejection.
+   It also covers the per-head GQA norm/RoPE/staging API with a small row and
+   an N1.7-shaped row `(B=1, S=277, q_heads=16, kv_heads=8, head_dim=128)`.
 
 2. Source-extension benchmark:
 
@@ -53,6 +55,19 @@ Required before publishing this package:
    pass on that machine.
 
 ## Local validation log
+
+2026-07-30:
+
+- Source correctness passed for the expanded API, including the N1.7-shaped
+  per-head GQA row. Q/K p99 absolute error was `0.015625`, cosine was at least
+  `0.99999619`, and V staging was exact.
+- At `(B=1, S=277, q_heads=16, kv_heads=8, head_dim=128)`, the fused
+  per-head GQA boundary measured `6.154 us` versus `35.798 us` for a
+  `torch.compile(fullgraph=True)` split, per-head norm, rotate-half RoPE, and
+  Q/K/V staging chain: `5.82x` faster on RTX 5090.
+- `kernel-builder-docker check-config .` passed for the repository. Artifact
+  rebuild was blocked by external Nix/Cachix fetch timeouts; source compilation
+  and execution passed.
 
 2026-06-09:
 

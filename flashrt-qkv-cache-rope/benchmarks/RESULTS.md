@@ -11,3 +11,13 @@
 | decode_q_stage_h24 | 1,1,24,128 | 3.478 | 82.906 | 23.83x | 0.007812 | 0.000000 | 0.99999648 | 1.00000000 | PASS |
 | decode_kvwrite_h8 | 1,1,8,128 | 3.603 | 89.581 | 24.86x | 0.000000 | 0.007812 | 1.00000000 | 0.99999666 | PASS |
 | decode_kvwrite_devpos_h8 | 1,1,8,128 | 3.594 | 92.224 | 25.66x | 0.000000 | 0.007812 | 1.00000000 | 0.99999642 | PASS |
+
+## Per-head GQA compiled baseline
+
+This row includes packed Q/K/V slicing and copies, per-head Q/K RMSNorm,
+rotate-half RoPE, and Q/K/V workspace writes in both paths. The baseline uses
+`torch.compile(fullgraph=True)`.
+
+| Shape | B,S,QH,KVH,HD | FlashRT us | Compiled us | vs compiled | Q cosine | K cosine | V exact | Status |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| per_head_gqa_n17 | 1,277,16,8,128 | 6.154 | 35.798 | 5.82x | 0.99999470 | 0.99999452 | yes | PASS |

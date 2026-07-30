@@ -42,6 +42,21 @@ void decode_k_norm_rope_kvwrite_devpos_bf16(
     float eps,
     cudaStream_t stream);
 
+void qkv_split_per_head_norm_rope_bf16(
+    const void* packed_qkv,
+    const void* q_norm_w,
+    const void* k_norm_w,
+    const void* cos,
+    const void* sin,
+    void* q_out,
+    void* k_out,
+    void* v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    float eps,
+    cudaStream_t stream);
+
 void qkv_split_rope_kvcache_bf16(
     const void* packed_qkv,
     const void* rope,

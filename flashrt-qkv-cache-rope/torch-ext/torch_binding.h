@@ -3,6 +3,19 @@
 
 #include <torch/all.h>
 
+void qkv_split_per_head_norm_rope_bf16(
+    torch::Tensor const& packed_qkv,
+    torch::Tensor const& q_norm_weight,
+    torch::Tensor const& k_norm_weight,
+    torch::Tensor const& cos,
+    torch::Tensor const& sin,
+    int64_t q_heads,
+    int64_t kv_heads,
+    double eps,
+    torch::Tensor& q_out,
+    torch::Tensor& k_out,
+    torch::Tensor& v_out);
+
 void qkv_split_rope_kvcache_bf16(
     torch::Tensor const& packed_qkv,
     torch::Tensor const& rope,

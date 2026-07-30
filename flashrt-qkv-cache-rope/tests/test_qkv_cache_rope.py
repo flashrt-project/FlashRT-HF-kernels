@@ -103,6 +103,50 @@ class SourceOps:
         )
         return q_out, k_cache, v_cache
 
+    def qkv_split_per_head_norm_rope_bf16(
+        self,
+        packed_qkv,
+        q_norm_weight,
+        k_norm_weight,
+        cos,
+        sin,
+        q_heads,
+        kv_heads,
+        eps=1e-6,
+        q_out=None,
+        k_out=None,
+        v_out=None,
+    ):
+        batch, seq_len, _ = packed_qkv.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, 128),
+                device=packed_qkv.device,
+                dtype=torch.bfloat16,
+            )
+        if k_out is None:
+            k_out = torch.empty(
+                (batch, seq_len, kv_heads, 128),
+                device=packed_qkv.device,
+                dtype=torch.bfloat16,
+            )
+        if v_out is None:
+            v_out = torch.empty_like(k_out)
+        self._ops.qkv_split_per_head_norm_rope_bf16(
+            packed_qkv,
+            q_norm_weight,
+            k_norm_weight,
+            cos,
+            sin,
+            int(q_heads),
+            int(kv_heads),
+            float(eps),
+            q_out,
+            k_out,
+            v_out,
+        )
+        return q_out, k_out, v_out
+
     def qkv_split_bf16(
         self,
         packed_qkv,
@@ -488,6 +532,30 @@ def ref_decode_norm_rope(x: torch.Tensor, weight: torch.Tensor, cos: torch.Tenso
     return apply_rotate_half_rope_128(normed, cos, sin)
 
 
+def ref_per_head_gqa(packed, q_weight, k_weight, cos, sin, q_heads, kv_heads, eps):
+    batch, seq_len, _ = packed.shape
+    q_dim = q_heads * 128
+    kv_dim = kv_heads * 128
+    q = packed[:, :, :q_dim].view(batch, seq_len, q_heads, 128)
+    k = packed[:, :, q_dim : q_dim + kv_dim].view(
+        batch, seq_len, kv_heads, 128
+    )
+    v = packed[:, :, q_dim + kv_dim :].view(
+        batch, seq_len, kv_heads, 128
+    )
+
+    def norm_rope(value, weight):
+        normed = rms_norm(value, weight, eps).to(torch.bfloat16).float()
+        half = 64
+        rotated = torch.cat((-normed[..., half:], normed[..., :half]), -1)
+        return (
+            normed * cos.unsqueeze(2).float()
+            + rotated * sin.unsqueeze(2).float()
+        ).to(torch.bfloat16)
+
+    return norm_rope(q, q_weight), norm_rope(k, k_weight), v
+
+
 def ref_qkv_split_rope_kvcache(packed_qkv, rope, q_heads, kv_heads, head_dim):
     batch, seq_len, _ = packed_qkv.shape
     q_dim = q_heads * head_dim
@@ -733,6 +801,48 @@ def run_kvcache_shape(
         raise AssertionError(f"{label}/kvcache_v_suffix failed: suffix modified")
 
 
+def run_per_head_gqa_shape(
+    ops,
+    label: str,
+    batch: int,
+    seq_len: int,
+    q_heads: int,
+    kv_heads: int,
+    eps: float,
+) -> None:
+    width = (q_heads + 2 * kv_heads) * 128
+    packed = torch.randn(
+        (batch, seq_len, width), device="cuda", dtype=torch.bfloat16
+    )
+    q_weight = torch.randn(
+        (128,), device="cuda", dtype=torch.bfloat16
+    ).contiguous()
+    k_weight = torch.randn(
+        (128,), device="cuda", dtype=torch.bfloat16
+    ).contiguous()
+    angle = torch.randn(
+        (batch, seq_len, 128), device="cuda", dtype=torch.bfloat16
+    )
+    cos, sin = angle.cos().contiguous(), angle.sin().contiguous()
+    got = ops.qkv_split_per_head_norm_rope_bf16(
+        packed,
+        q_weight,
+        k_weight,
+        cos,
+        sin,
+        q_heads,
+        kv_heads,
+        eps,
+    )
+    expected = ref_per_head_gqa(
+        packed, q_weight, k_weight, cos, sin, q_heads, kv_heads, eps
+    )
+    for suffix, actual, reference in zip(("q", "k", "v"), got, expected):
+        assert_close_distribution(
+            f"{label}/per_head_gqa_{suffix}", actual, reference
+        )
+
+
 def run_rejection_tests(ops) -> None:
     packed, q_w, k_w, freqs_re, freqs_im = make_case(1, 4, 4, 128)
     expect_runtime_error(
@@ -782,6 +892,40 @@ def run_rejection_tests(ops) -> None:
             torch.empty((1, 4, 4, 128), device="cuda", dtype=torch.bfloat16),
         ),
     )
+    packed_per_head = torch.randn(
+        (1, 7, (4 + 2 * 2) * 128), device="cuda", dtype=torch.bfloat16
+    )
+    per_head_weight = torch.ones(
+        (128,), device="cuda", dtype=torch.bfloat16
+    )
+    per_head_cos = torch.ones(
+        (1, 7, 128), device="cuda", dtype=torch.bfloat16
+    )
+    per_head_sin = torch.zeros_like(per_head_cos)
+    expect_runtime_error(
+        "reject per-head GQA packed cols",
+        lambda: ops.qkv_split_per_head_norm_rope_bf16(
+            packed_per_head[:, :, :-1].contiguous(),
+            per_head_weight,
+            per_head_weight,
+            per_head_cos,
+            per_head_sin,
+            4,
+            2,
+        ),
+    )
+    expect_runtime_error(
+        "reject per-head GQA norm weight",
+        lambda: ops.qkv_split_per_head_norm_rope_bf16(
+            packed_per_head,
+            per_head_weight[:-1].contiguous(),
+            per_head_weight,
+            per_head_cos,
+            per_head_sin,
+            4,
+            2,
+        ),
+    )
 
 
 def run(args) -> None:
@@ -803,9 +947,15 @@ def run(args) -> None:
         run_bias_and_cat_shape(ops, label, shape, args.eps)
     run_plain_split_shape(ops, "siglip_plain", (2, 256, 16, 72))
     run_decode_shape(ops, "decode_small", 4, args.eps)
+    run_per_head_gqa_shape(
+        ops, "per_head_gqa_small", 1, 17, 4, 2, args.eps
+    )
     run_kvcache_shape(ops, "pi05_decoder_gqa", 1, 10, 8, 1, 256)
     if args.mode == "full":
         run_decode_shape(ops, "decode_vla", 24, args.eps)
+        run_per_head_gqa_shape(
+            ops, "per_head_gqa_n17", 1, 277, 16, 8, args.eps
+        )
         run_kvcache_shape(ops, "gqa_batch2", 2, 16, 8, 2, 128)
     run_joint3_shape(ops, "small", 4, 128, args.eps)
     if args.mode == "full":

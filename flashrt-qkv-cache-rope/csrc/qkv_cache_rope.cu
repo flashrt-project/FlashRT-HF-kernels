@@ -176,6 +176,70 @@ __global__ void decode_k_norm_rope_kvwrite_devpos_bf16_kernel(
       v_pre[head * DECODE_HEAD_DIM + tid];
 }
 
+__global__ void qkv_split_per_head_norm_rope_bf16_kernel(
+    const __nv_bfloat16* __restrict__ packed_qkv,
+    const __nv_bfloat16* __restrict__ q_norm_w,
+    const __nv_bfloat16* __restrict__ k_norm_w,
+    const __nv_bfloat16* __restrict__ cos,
+    const __nv_bfloat16* __restrict__ sin,
+    __nv_bfloat16* __restrict__ q_out,
+    __nv_bfloat16* __restrict__ k_out,
+    __nv_bfloat16* __restrict__ v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    float eps) {
+  const int heads_total = q_heads + kv_heads;
+  const int row = blockIdx.x / heads_total;
+  const int inner = blockIdx.x - row * heads_total;
+  if (row >= rows) return;
+  const bool is_q = inner < q_heads;
+  const int head = is_q ? inner : inner - q_heads;
+  const int tid = threadIdx.x;
+  const int q_dim = q_heads * DECODE_HEAD_DIM;
+  const int kv_dim = kv_heads * DECODE_HEAD_DIM;
+  const int packed_stride = q_dim + 2 * kv_dim;
+  const int source_offset =
+      row * packed_stride
+      + (is_q ? head * DECODE_HEAD_DIM
+              : q_dim + head * DECODE_HEAD_DIM);
+
+  __shared__ float s_normed[DECODE_HEAD_DIM];
+  __shared__ float s_smem4[DECODE_WARPS];
+
+  const float value = __bfloat162float(packed_qkv[source_offset + tid]);
+  const float weight = __bfloat162float(
+      (is_q ? q_norm_w : k_norm_w)[tid]);
+  const float sum_sq = block_sum_4warp(value * value, s_smem4);
+  const float rstd = rsqrtf(
+      sum_sq / static_cast<float>(DECODE_HEAD_DIM) + eps);
+  const float normed = value * rstd * weight;
+  s_normed[tid] = normed;
+  __syncthreads();
+
+  const int partner_idx =
+      tid < DECODE_HALF ? tid + DECODE_HALF : tid - DECODE_HALF;
+  const float partner = s_normed[partner_idx];
+  const int freq_offset = row * DECODE_HEAD_DIM + tid;
+  const float c = __bfloat162float(cos[freq_offset]);
+  const float s = __bfloat162float(sin[freq_offset]);
+  const float rotated = tid < DECODE_HALF
+      ? normed * c - partner * s
+      : normed * c + partner * s;
+
+  if (is_q) {
+    q_out[(row * q_heads + head) * DECODE_HEAD_DIM + tid] =
+        __float2bfloat16(rotated);
+  } else {
+    const int output_offset =
+        (row * kv_heads + head) * DECODE_HEAD_DIM + tid;
+    k_out[output_offset] = __float2bfloat16(rotated);
+    v_out[output_offset] = packed_qkv[
+        row * packed_stride + q_dim + kv_dim
+        + head * DECODE_HEAD_DIM + tid];
+  }
+}
+
 __global__ void qkv_split_rope_kvcache_bf16_kernel(
     const __nv_bfloat16* __restrict__ packed_qkv,
     const __nv_bfloat16* __restrict__ rope,
@@ -1004,6 +1068,37 @@ void decode_k_norm_rope_kvwrite_devpos_bf16(
       reinterpret_cast<const int*>(cur_pos),
       row_elems,
       n_kv_heads,
+      eps);
+}
+
+void qkv_split_per_head_norm_rope_bf16(
+    const void* packed_qkv,
+    const void* q_norm_w,
+    const void* k_norm_w,
+    const void* cos,
+    const void* sin,
+    void* q_out,
+    void* k_out,
+    void* v_out,
+    int rows,
+    int q_heads,
+    int kv_heads,
+    float eps,
+    cudaStream_t stream) {
+  const int blocks = rows * (q_heads + kv_heads);
+  qkv_split_per_head_norm_rope_bf16_kernel<<<
+      blocks, DECODE_THREADS, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(packed_qkv),
+      reinterpret_cast<const __nv_bfloat16*>(q_norm_w),
+      reinterpret_cast<const __nv_bfloat16*>(k_norm_w),
+      reinterpret_cast<const __nv_bfloat16*>(cos),
+      reinterpret_cast<const __nv_bfloat16*>(sin),
+      reinterpret_cast<__nv_bfloat16*>(q_out),
+      reinterpret_cast<__nv_bfloat16*>(k_out),
+      reinterpret_cast<__nv_bfloat16*>(v_out),
+      rows,
+      q_heads,
+      kv_heads,
       eps);
 }
 
