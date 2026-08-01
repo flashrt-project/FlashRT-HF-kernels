@@ -76,6 +76,25 @@ class SourceOps:
         self.ops.nexn2_router_topk_bf16(logits, idx, val, int(k))
         return idx, val
 
+    def router_topk_bf16(self, logits, k=8):
+        idx = torch.empty((k,), device=logits.device, dtype=torch.int32)
+        val = torch.empty((k,), device=logits.device, dtype=torch.float32)
+        self.ops.router_topk_bf16(logits, idx, val, int(k))
+        return idx, val
+
+    def moe_weighted_sum_bf16_to_fp32(
+        self, expert_output, row_indices, router_weight, hidden=None, out=None
+    ):
+        hidden = expert_output.shape[1] if hidden is None else int(hidden)
+        if out is None:
+            out = torch.empty(
+                (row_indices.shape[0], hidden),
+                device=expert_output.device,
+                dtype=torch.float32,
+            )
+        self.ops.moe_weighted_sum_bf16_to_fp32(expert_output, row_indices, router_weight, out)
+        return out
+
     def relu2_quantize_fp8_static_bf16(self, x, scale):
         out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
         self.ops.relu2_quantize_fp8_static_bf16(x, scale, out)
@@ -101,6 +120,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "kernels" / "qwen36_misc.cu"),
             str(PACKAGE / "csrc" / "kernels" / "nexn2_misc.cu"),
             str(PACKAGE / "csrc" / "kernels" / "nexn2_router_topk.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "moe_weighted_sum_sm120.cu"),
             str(PACKAGE / "csrc" / "kernels" / "relu2_quantize_fp8.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
@@ -210,6 +230,26 @@ def run(ops, mode: str) -> int:
     if not torch.equal(idx.cpu(), ref_idx.to(torch.int32).cpu()) or not torch.allclose(val.cpu(), ref_val.cpu()):
         raise AssertionError("router topk mismatch")
     count += 1
+
+    generic_idx, generic_val = ops.router_topk_bf16(router, 8)
+    if not torch.equal(generic_idx, idx) or not torch.equal(generic_val, val):
+        raise AssertionError("generic router alias mismatch")
+    count += 1
+
+    for tokens, topk, hidden, stride in [(1, 1, 128, 128), (3, 4, 320, 384), (17, 8, 2048, 2112)]:
+        routed_rows = tokens * topk + 5
+        expert_output = torch.randn((routed_rows, stride), device="cuda", dtype=torch.bfloat16)
+        row_indices = torch.randint(0, routed_rows, (tokens, topk), device="cuda", dtype=torch.int32)
+        router_weight = torch.softmax(torch.randn((tokens, topk), device="cuda"), dim=-1)
+        got = ops.moe_weighted_sum_bf16_to_fp32(
+            expert_output, row_indices, router_weight, hidden=hidden
+        )
+        ref = (
+            expert_output[row_indices.long(), :hidden].float()
+            * router_weight[..., None]
+        ).sum(dim=1)
+        assert_close(f"moe_weighted_sum_{tokens}_{topk}_{hidden}", got, ref, 1e-5)
+        count += 1
 
     for shape in [(1, 128), (51, 1536), (277, 2048), (1024, 4096)]:
         x = (torch.randn(shape, device="cuda") * 0.5).to(torch.bfloat16)

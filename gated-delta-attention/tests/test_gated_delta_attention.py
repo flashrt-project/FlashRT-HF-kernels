@@ -33,6 +33,16 @@ SHAPES = {
     "f32state_h4": ("f32state", 1, 1, 4),
     "chunk_s4_h4": ("chunk", 1, 4, 4),
     "chunk_smem_s4_h4": ("chunk_smem", 1, 4, 4),
+    "sequence_s1_h4": ("sequence", 1, 1, 4),
+    "sequence_s17_h4": ("sequence", 1, 17, 4),
+    "sequence_s63_h4": ("sequence", 1, 63, 4),
+    "sequence_s64_h4": ("sequence", 1, 64, 4),
+    "sequence_s65_h48": ("sequence", 1, 65, 48),
+    "sequence_s127_h4": ("sequence", 1, 127, 4),
+    "sequence_s128_h48": ("sequence", 1, 128, 48),
+    "sequence_s129_h4": ("sequence", 1, 129, 4),
+    "sequence_s256_h4": ("sequence", 1, 256, 4),
+    "sequence_s512_h4": ("sequence", 1, 512, 4),
     "recurrent_h48": ("recurrent", 1, 1, 48),
     "split_s4": ("split", 1, 4, 48),
     "gating_s4": ("gating", 1, 4, 48),
@@ -90,6 +100,14 @@ class SourceOps:
             self._ops.gated_delta_chunk_smem_bf16(q, k, v, g, beta, state, out, use_qk_l2norm)
         else:
             self._ops.gated_delta_chunk_bf16(q, k, v, g, beta, state, out, use_qk_l2norm)
+        return out
+
+    def sequence(self, q, k, v, g, beta, state, use_qk_l2norm=True, out=None):
+        if out is None:
+            out = torch.empty_like(q)
+        self._ops.gated_delta_recurrent_sequence_bf16(
+            q, k, v, g, beta, state, out, use_qk_l2norm
+        )
         return out
 
     def split_broadcast(self, conv_out):
@@ -209,6 +227,11 @@ class InstalledOps:
             q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm
         )
 
+    def sequence(self, q, k, v, g, beta, state, use_qk_l2norm=True, out=None):
+        return self._mod.gated_delta_recurrent_sequence_bf16(
+            q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm, out=out
+        )
+
     def split_broadcast(self, conv_out):
         return self._mod.lin_split_qkv_broadcast_bf16(conv_out)
 
@@ -274,6 +297,7 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "gated_delta_attention.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "gdn_recurrent_seq_sm120.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_recompute_wu_mma_fla.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_bf16_mma_fla.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_output_o_mma_fla.cu"),
@@ -349,6 +373,25 @@ def ref_chunk(q, k, v, g, beta, state, *, use_qk_l2norm=True):
     return torch.stack(outs, dim=0), st.squeeze(0)
 
 
+def ref_sequence_f32state(q, k, v, g, beta, state, *, use_qk_l2norm=True):
+    """Reference the sequence kernel's FP32-internal-state contract."""
+    st = state.float().unsqueeze(0)
+    outs = []
+    for i in range(q.shape[0]):
+        out, st = ref_recurrent(
+            q[i : i + 1],
+            k[i : i + 1],
+            v[i : i + 1],
+            g[i : i + 1],
+            beta[i : i + 1],
+            st,
+            use_qk_l2norm=use_qk_l2norm,
+            f32_state=True,
+        )
+        outs.append(out.squeeze(0))
+    return torch.stack(outs, dim=0), st.squeeze(0).to(torch.bfloat16)
+
+
 def make_conv_inputs(S: int, seed: int):
     gen = torch.Generator(device="cuda")
     gen.manual_seed(seed)
@@ -398,6 +441,29 @@ def metrics(got: torch.Tensor, ref: torch.Tensor) -> tuple[float, float, float, 
     )
 
 
+def run_sequence_graph(ops) -> None:
+    S, H = 65, 4
+    gen = torch.Generator(device="cuda").manual_seed(424242)
+    q = (torch.randn((S, H, D), device="cuda", generator=gen) * 0.05).bfloat16()
+    k = (torch.randn((S, H, D), device="cuda", generator=gen) * 0.05).bfloat16()
+    v = (torch.randn((S, H, D), device="cuda", generator=gen) * 0.05).bfloat16()
+    g = (torch.randn((S, H), device="cuda", generator=gen) * 0.02).bfloat16()
+    beta = torch.sigmoid(torch.randn((S, H), device="cuda", generator=gen)).bfloat16()
+    state_initial = torch.zeros((H, D, D), device="cuda", dtype=torch.bfloat16)
+    state = state_initial.clone()
+    out = torch.empty_like(q)
+    expected = ops.sequence(q, k, v, g, beta, state, out=out).clone()
+    state_expected = state.clone()
+    state.copy_(state_initial)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.sequence(q, k, v, g, beta, state, out=out)
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    torch.testing.assert_close(state, state_expected, rtol=0, atol=0)
+
+
 def run_case(ops, name: str) -> Row:
     kind, B, S, H = SHAPES[name]
     if kind in {"recurrent", "inout", "f32state"}:
@@ -417,7 +483,7 @@ def run_case(ops, name: str) -> Row:
         state_max, _, _, _ = metrics(state_work, ref_state)
         if state_max > (0.00390625 if kind != "f32state" else 0.0005):
             raise AssertionError(f"{name} state mismatch: {state_max}")
-    elif kind in {"chunk", "chunk_smem"}:
+    elif kind in {"chunk", "chunk_smem", "sequence"}:
         gen = torch.Generator(device="cuda")
         gen.manual_seed(9000 + S + H)
         q = (torch.randn((S, H, D), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
@@ -427,11 +493,18 @@ def run_case(ops, name: str) -> Row:
         beta = torch.sigmoid(torch.randn((S, H), device="cuda", generator=gen) * 0.1).to(torch.bfloat16)
         state = (torch.randn((H, D, D), device="cuda", generator=gen) * 0.02).to(torch.bfloat16)
         state_work = state.clone()
-        got = ops.chunk(q, k, v, g, beta, state_work, smem=(kind == "chunk_smem"))
-        ref, ref_state = ref_chunk(q, k, v, g, beta, state)
+        if kind == "sequence":
+            got = ops.sequence(q, k, v, g, beta, state_work)
+            ref, ref_state = ref_sequence_f32state(q, k, v, g, beta, state)
+        else:
+            got = ops.chunk(
+                q, k, v, g, beta, state_work, smem=(kind == "chunk_smem")
+            )
+            ref, ref_state = ref_chunk(q, k, v, g, beta, state)
         torch.cuda.synchronize()
         state_max, _, _, _ = metrics(state_work, ref_state)
-        if state_max > 0.00390625:
+        state_tolerance = 0.0009765625 if kind == "sequence" else 0.00390625
+        if state_max > state_tolerance:
             raise AssertionError(f"{name} state mismatch: {state_max}")
     if kind == "split":
         conv_out, a, b, neg, dt, state = make_conv_inputs(S, 10000 + S)
@@ -496,7 +569,14 @@ def run_case(ops, name: str) -> Row:
         if state_max > state_tol:
             raise AssertionError(f"{name} state mismatch: {state_max}")
     max_abs, mean_abs, p99_abs, cos = metrics(got, ref)
-    if kind == "wy_mma_fla":
+    if kind == "sequence":
+        passed = (
+            max_abs <= 0.0001220703125
+            and mean_abs <= 1e-6
+            and p99_abs <= 0.000030517578125
+            and cos >= 0.99999
+        )
+    elif kind == "wy_mma_fla":
         passed = max_abs <= 0.001 and mean_abs <= 0.0001 and p99_abs <= 0.0005 and cos >= 0.9999
     else:
         passed = max_abs <= 0.015625 and mean_abs <= 0.0015 and cos >= 0.999
@@ -526,7 +606,10 @@ def main() -> int:
         Path(args.json_out).write_text(json.dumps([asdict(r) for r in rows], indent=2) + "\n")
     if not all(r.passed for r in rows):
         raise AssertionError("gated-delta-attention correctness failed")
-    print(f"PASS gated-delta-attention {args.backend} mode={args.mode}: {len(rows)} checks")
+    if args.mode == "full":
+        run_sequence_graph(ops)
+    print(f"PASS gated-delta-attention {args.backend} mode={args.mode}: "
+          f"{len(rows)} checks" + (" + sequence CUDA Graph" if args.mode == "full" else ""))
     return 0
 
 

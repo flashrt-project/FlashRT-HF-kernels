@@ -36,3 +36,14 @@ cuda-flags = [
   "-U__CUDA_NO_BFLOAT16_OPERATORS__",
   "-U__CUDA_NO_BFLOAT162_OPERATORS__",
 ]
+
+[kernel.gdn_recurrent_sequence_sm120]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0"]
+src = [
+  "csrc/kernels/gdn_recurrent_seq_sm120.cu",
+  "csrc/kernels/gdn_recurrent_seq_sm120.cuh",
+]

@@ -1,0 +1,33 @@
+[general]
+name = "fused-mlp-megakernels-blackwell"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "13.0"
+maxver = "13.0"
+
+[general.hub]
+repo-id = "flashrt/fused-mlp-megakernels-blackwell"
+
+[torch]
+include = ["csrc/mega"]
+src = ["torch-ext/torch_binding.cpp", "torch-ext/torch_binding.h"]
+
+[kernel.fused_mlp_megakernels_blackwell]
+backend = "cuda"
+depends = ["torch", "cutlass_4_0"]
+include = ["csrc/mega"]
+cuda-minver = "13.0"
+cuda-capabilities = ["10.0a", "10.3a", "11.0a"]
+cuda-flags = ["--expt-relaxed-constexpr", "-O3", "--use_fast_math"]
+src = [
+  "csrc/mega/flashrt_megakernel_geglu.cu",
+  "csrc/mega/flashrt_megakernel_geglu_kernel.hpp",
+  "csrc/mega/sm100_smem_aux_visitor.hpp",
+  "csrc/mega/cutlass/pipeline/sm100_pipeline.hpp",
+  "csrc/mega/cutlass/epilogue/collective/collective_epilogue.hpp",
+  "csrc/mega/cutlass/epilogue/collective/sm100_epilogue_tma_warpspecialized.hpp",
+  "csrc/mega/cutlass/gemm/collective/sm100_mma_warpspecialized.hpp",
+]

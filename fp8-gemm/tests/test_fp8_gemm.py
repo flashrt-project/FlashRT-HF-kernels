@@ -98,12 +98,29 @@ class SourceOps:
         )
         return out
 
+    def fp8_blockwise_swiglu_quantize_fp8(
+        self, x, gate_up_weight, input_scale, gate_up_weight_scale,
+        output=None, output_scale=None,
+    ):
+        n = gate_up_weight.shape[0] // 2
+        if output is None:
+            output = torch.empty(
+                (x.shape[0], n), device=x.device, dtype=torch.float8_e4m3fn
+            )
+        if output_scale is None:
+            output_scale = torch.empty(
+                (x.shape[0], n // 128), device=x.device, dtype=torch.float32
+            )
+        self._ops.fp8_blockwise_swiglu_quantize_fp8(
+            x, gate_up_weight, input_scale, gate_up_weight_scale,
+            output, output_scale,
+        )
+        return output, output_scale
+
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
-    if major >= 12:
-        return "12.0a"
-    return f"{major}.{minor}"
+    return "12.0a" if (major, minor) == (12, 0) else f"{major}.{minor}"
 
 
 def load_source_ops() -> SourceOps:
@@ -129,23 +146,34 @@ def load_source_ops() -> SourceOps:
         raise RuntimeError(
             "CUTLASS 4 include path is required; set CUTLASS_INCLUDE"
         )
-    load(
-        name=namespace,
-        sources=[
-            str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
+    capability = torch.cuda.get_device_capability(0)
+    if capability == (8, 9):
+        cuda_sources = [
+            str(PACKAGE / "csrc" / "fp8_block128_gemm_mma_sm89.cu"),
+            str(PACKAGE / "csrc" / "fp8_gemv_m1_sm89.cu"),
+        ]
+        source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM89_ONLY"
+    else:
+        cuda_sources = [
             str(PACKAGE / "csrc" / "fp8_gemv_m1_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_ldmatrix_sm120.cu"),
             str(PACKAGE / "csrc" / "cutlass_sm120_block128_fp8_gemm.cu"),
-        ],
+        ]
+        source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM120_ONLY"
+    load(
+        name=namespace,
+        sources=[str(PACKAGE / "torch-ext" / "torch_binding.cpp"), *cuda_sources],
         extra_include_paths=[
             str(PACKAGE / "csrc"),
             str(REGISTRATION_INCLUDE),
             str(cutlass_include),
             str(cutlass_include.parent / "tools" / "util" / "include"),
         ],
-        extra_cflags=["-O3", "-DCUDA_KERNEL"],
-        extra_cuda_cflags=["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL"],
+        extra_cflags=["-O3", "-DCUDA_KERNEL", source_define],
+        extra_cuda_cflags=[
+            "-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL", source_define
+        ],
         verbose=False,
     )
     return SourceOps(namespace)
@@ -334,7 +362,11 @@ def run_blockwise_case(
         K=k,
         N=n,
         variant=0,
-        tile="cutlass_sm120_block128",
+        tile=(
+            "mma_sm89_block128"
+            if torch.cuda.get_device_capability(0) == (8, 9)
+            else "cutlass_sm120_block128"
+        ),
         max_abs=max_abs,
         mean_abs=mean_abs,
         p99_abs=p99_abs,
@@ -379,6 +411,43 @@ def run_blockwise_compile_case(ops) -> None:
     torch.testing.assert_close(compiled, eager, rtol=0.0, atol=0.0)
 
 
+def run_sm89_swiglu_case(ops, m: int, n: int, k: int) -> None:
+    gen = torch.Generator(device="cuda").manual_seed(8900 + m + n + k)
+    x = (torch.randn((m, k), device="cuda", generator=gen) * 0.3).to(
+        torch.float8_e4m3fn
+    )
+    weight = (
+        torch.randn((2 * n, k), device="cuda", generator=gen) * 0.3
+    ).to(torch.float8_e4m3fn)
+    input_scale = torch.rand(
+        (m, k // 128), device="cuda", generator=gen
+    ).mul_(0.02).add_(0.005)
+    weight_scale = torch.rand(
+        (2 * n // 128, k // 128), device="cuda", generator=gen
+    ).mul_(0.02).add_(0.005)
+    output, output_scale = ops.fp8_blockwise_swiglu_quantize_fp8(
+        x, weight, input_scale, weight_scale
+    )
+    expanded_x_scale = input_scale.repeat_interleave(128, dim=1)
+    expanded_w_scale = weight_scale.repeat_interleave(128, dim=0).repeat_interleave(128, dim=1)
+    x_f32 = x.float() * expanded_x_scale
+    weight_f32 = weight.float() * expanded_w_scale
+    gate, up = (x_f32 @ weight_f32.t()).split(n, dim=1)
+    expected = (
+        torch.nn.functional.silu(gate).bfloat16() * up.bfloat16()
+    ).bfloat16()
+    actual = (
+        output.float() * output_scale.repeat_interleave(128, dim=1)
+    ).bfloat16()
+    maximum, mean, p99, cosine = compare(actual, expected)
+    assert output.dtype == torch.float8_e4m3fn
+    assert output_scale.dtype == torch.float32
+    assert torch.isfinite(output_scale).all() and (output_scale > 0).all()
+    assert cosine >= 0.999 and mean <= 0.01 and p99 <= 0.05, (
+        m, n, k, maximum, mean, p99, cosine
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -389,13 +458,18 @@ def main() -> None:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
-    major, _minor = torch.cuda.get_device_capability(0)
-    if major < 12:
-        raise SystemExit("fp8-gemm requires Blackwell/SM120 for this package")
+    capability = torch.cuda.get_device_capability(0)
+    if capability not in {(8, 9), (12, 0)}:
+        raise SystemExit(
+            "fp8-gemm source tests require SM89 or SM120; "
+            f"got SM{capability[0]}{capability[1]}"
+        )
 
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
-    rows = [run_case(ops, name, SHAPES[name]) for name in MODES[args.mode]]
-    rows.append(run_residual_case(ops))
+    rows = []
+    if capability == (12, 0):
+        rows.extend(run_case(ops, name, SHAPES[name]) for name in MODES[args.mode])
+        rows.append(run_residual_case(ops))
     blockwise_shapes = [
         ("blockwise_decode", (1, 1024, 1024)),
         ("blockwise_action", (51, 1536, 1536)),
@@ -412,6 +486,23 @@ def main() -> None:
         for name, shape in blockwise_shapes
     )
     run_blockwise_compile_case(ops)
+    if capability == (8, 9):
+        for m, n, k in [
+            (1, 128, 128), (16, 512, 1024), (31, 1536, 1536),
+            (32, 2048, 4096), (51, 4096, 4096), (128, 4096, 4096),
+            (256, 4096, 4096),
+        ]:
+            run_sm89_swiglu_case(ops, m, n, k)
+        try:
+            x = torch.zeros((257, 128), device="cuda", dtype=torch.float8_e4m3fn)
+            w = torch.zeros((256, 128), device="cuda", dtype=torch.float8_e4m3fn)
+            xs = torch.ones((257, 1), device="cuda", dtype=torch.float32)
+            ws = torch.ones((2, 1), device="cuda", dtype=torch.float32)
+            ops.fp8_blockwise_swiglu_quantize_fp8(x, w, xs, ws)
+        except RuntimeError as error:
+            assert "M <= 256" in str(error)
+        else:
+            raise AssertionError("M=257 must be rejected")
 
     failed = [row for row in rows if not row.passed]
     payload = {"passed": len(rows) - len(failed), "failed": len(failed), "rows": [asdict(row) for row in rows]}

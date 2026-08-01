@@ -2,6 +2,7 @@
 
 - Upstream FlashRT source: `../official/FlashRT`
 - Initial package date: June 20, 2026
+- SM89 source revision: `70b8eac4b05e9193bd99631cf872c5a971b59f5d`
 
 Copied source files:
 
@@ -13,17 +14,25 @@ Copied source files:
 - `csrc/gemm/fp8_smallM_handtuned_ldmatrix_sm120.cuh`
 - `csrc/gemm/cutlass_sm120_block128_fp8_gemm.cu`
 - `csrc/gemm/cutlass_sm120_block128_fp8_gemm.cuh`
+- `csrc/gemm/fp8_block128_gemm_mma_sm89.cu`
+- `csrc/gemm/fp8_block128_gemm_mma_sm89.cuh`
+- `csrc/gemm/fp8_bs_gemm_device.cuh`
+- `csrc/gemm/fp8_gemv_m1_sm89.cu`
+- `csrc/gemm/fp8_gemv_m1_sm89.cuh`
 
 Local packaging edits:
 
 - Added Tensor-facing PyTorch custom ops in `torch-ext/torch_binding.cpp`.
 - Added Python wrappers and fake registrations in `torch-ext/fp8_gemm`.
 - Kept public APIs model-agnostic; no raw pointer or stream arguments.
+- Bound the upstream measured `32x128-w4-s1` fused SwiGLU producer without
+  changing its CUDA tile or arithmetic.
 
 Architecture assumptions:
 
 - CUDA 12.8+
-- NVIDIA Blackwell SM120a local validation target. The FP8 MMA path uses
+- NVIDIA Ada SM89 for block-128 scaled GEMM/GEMV.
+- NVIDIA Blackwell SM120a for all public APIs. The per-tensor FP8 MMA path uses
   `.kind::f8f6f4` instructions and must be compiled for `sm_120a`, not plain
   `sm_120`.
 

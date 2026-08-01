@@ -98,6 +98,18 @@ def _chunk_smem_fake(q, k, v, g, beta, state, out, use_qk_l2norm: bool = True) -
     return None
 
 
+@torch.library.register_fake(
+    add_op_namespace_prefix("gated_delta_recurrent_sequence_bf16")
+)
+def _recurrent_sequence_fake(
+    q, k, v, g, beta, state, out, use_qk_l2norm: bool = True
+) -> None:
+    _check_chunk(q, k, v, g, beta, out)
+    if state.shape != (q.shape[1], 128, 128):
+        raise RuntimeError("state must have shape (H,128,128)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("lin_split_qkv_broadcast_bf16"))
 def _split_broadcast_fake(conv_out, q48, k48, v48) -> None:
     _check_conv_out(conv_out)
@@ -385,6 +397,29 @@ def gated_delta_chunk_smem_bf16(
     if out is None:
         out = torch.empty_like(q)
     ops.gated_delta_chunk_smem_bf16(q, k, v, g, beta, state, out, bool(use_qk_l2norm))
+    return out
+
+
+def gated_delta_recurrent_sequence_bf16(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    g: torch.Tensor,
+    beta: torch.Tensor,
+    state: torch.Tensor,
+    *,
+    use_qk_l2norm: bool = True,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Scan a complete BF16 sequence in one SM120 kernel launch.
+
+    ``state`` is updated in place with the final recurrent state.
+    """
+    if out is None:
+        out = torch.empty_like(q)
+    ops.gated_delta_recurrent_sequence_bf16(
+        q, k, v, g, beta, state, out, bool(use_qk_l2norm)
+    )
     return out
 
 
@@ -693,6 +728,7 @@ __all__ = [
     "gated_delta_recurrent_f32state_bf16io",
     "gated_delta_chunk_bf16",
     "gated_delta_chunk_smem_bf16",
+    "gated_delta_recurrent_sequence_bf16",
     "lin_split_qkv_broadcast_bf16",
     "lin_split_qkv_gqa_bf16",
     "split_q_gate_bf16",

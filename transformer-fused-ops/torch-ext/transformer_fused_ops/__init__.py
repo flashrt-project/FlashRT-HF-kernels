@@ -108,6 +108,29 @@ def _nexn2_router_topk_fake(logits: torch.Tensor, out_idx: torch.Tensor, out_val
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("router_topk_bf16"))
+def _router_topk_fake(logits: torch.Tensor, out_idx: torch.Tensor, out_val: torch.Tensor, k: int) -> None:
+    if logits.dim() != 1 or out_idx.shape != (k,) or out_val.shape != (k,):
+        raise RuntimeError("expected logits (n_experts,), out_idx/out_val (k,)")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("moe_weighted_sum_bf16_to_fp32"))
+def _moe_weighted_sum_fake(
+    expert_output: torch.Tensor,
+    row_indices: torch.Tensor,
+    router_weight: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    if expert_output.dim() != 2 or row_indices.dim() != 2:
+        raise RuntimeError("expected expert_output (routed_rows,stride) and row_indices (tokens,topk)")
+    if router_weight.shape != row_indices.shape or out.shape[0] != row_indices.shape[0]:
+        raise RuntimeError("router_weight or output shape mismatch")
+    if out.dim() != 2 or expert_output.shape[1] < out.shape[1]:
+        raise RuntimeError("expert output stride must cover output hidden size")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("relu2_quantize_fp8_static_bf16"))
 def _relu2_quantize_fp8_static_fake(
     input: torch.Tensor,
@@ -202,6 +225,38 @@ def nexn2_router_topk_bf16(logits, k: int = 8, *, out_idx=None, out_val=None):
     return out_idx, out_val
 
 
+def router_topk_bf16(logits, k: int = 8, *, out_idx=None, out_val=None):
+    """Return exact top-k expert logits and indices for one routing row."""
+    if out_idx is None:
+        out_idx = torch.empty((k,), device=logits.device, dtype=torch.int32)
+    if out_val is None:
+        out_val = torch.empty((k,), device=logits.device, dtype=torch.float32)
+    ops.router_topk_bf16(logits, out_idx, out_val, int(k))
+    return out_idx, out_val
+
+
+def moe_weighted_sum_bf16_to_fp32(
+    expert_output,
+    row_indices,
+    router_weight,
+    *,
+    hidden: Optional[int] = None,
+    out: Optional[torch.Tensor] = None,
+):
+    """Gather routed BF16 expert rows and reduce them in FP32 token order."""
+    hidden = expert_output.shape[1] if hidden is None else int(hidden)
+    if out is None:
+        out = torch.empty(
+            (row_indices.shape[0], hidden),
+            device=expert_output.device,
+            dtype=torch.float32,
+        )
+    ops.moe_weighted_sum_bf16_to_fp32(
+        expert_output, row_indices, router_weight, out
+    )
+    return out
+
+
 def relu2_quantize_fp8_static_bf16(
     input: torch.Tensor,
     scale: torch.Tensor,
@@ -228,4 +283,6 @@ __all__ = [
     "silu_mul_bf16",
     "spec_accept_greedy_bf16",
     "relu2_quantize_fp8_static_bf16",
+    "router_topk_bf16",
+    "moe_weighted_sum_bf16_to_fp32",
 ]

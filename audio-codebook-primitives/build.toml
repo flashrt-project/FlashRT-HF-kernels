@@ -1,0 +1,27 @@
+[general]
+name = "audio-codebook-primitives"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "13.0"
+maxver = "13.0"
+
+[general.hub]
+repo-id = "flashrt/audio-codebook-primitives"
+
+[torch]
+include = ["csrc"]
+src = ["torch-ext/torch_binding.cpp", "torch-ext/torch_binding.h"]
+
+[kernel.audio_codebook_primitives]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "13.0"
+cuda-capabilities = ["8.0", "8.6", "8.9", "9.0", "10.0", "10.3", "11.0", "12.0", "12.1"]
+src = [
+  "csrc/delayed_codebook_kernels.cu",
+  "csrc/delayed_codebook_kernels.cuh",
+]

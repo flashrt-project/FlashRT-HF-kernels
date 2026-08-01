@@ -91,3 +91,14 @@ Installed-artifact correctness through `get_kernel("flashrt/fp8-gemm")`
 should be rerun in a torch211 or torch212 CUDA environment. The local
 development environment used for the source tests is PyTorch 2.9.1+cu128,
 which intentionally does not match the uploaded torch211/torch212 variants.
+
+## SM89 Increment
+
+The source now also exposes block-128 scaled FP8 GEMM/GEMV and
+`fp8_blockwise_swiglu_quantize_fp8` on SM89. The fused producer performs the
+gate/up GEMMs, SiLU product, and block-128 FP8 requantization in one launch.
+It requires `1<=M<=256`, `N%128==0`, and `K%128==0` and uses the upstream
+measured `32x128-w4-s1` tile. SM120 source regression remains 14/14. SM89
+installed correctness, tile parity, and performance claims remain gated on an
+SM89 release artifact run; source presence alone is not recorded as runtime
+validation.

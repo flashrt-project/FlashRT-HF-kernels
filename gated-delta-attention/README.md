@@ -19,6 +19,7 @@ The first public profile targets Qwen3.6-style dimensions:
 - `gated_delta_recurrent_f32state_bf16io(q, k, v, g, beta, state_f32, use_qk_l2norm=True, out=None)`
 - `gated_delta_chunk_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`
 - `gated_delta_chunk_smem_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`
+- `gated_delta_recurrent_sequence_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`
 - `lin_split_qkv_broadcast_bf16(conv_out, q48=None, k48=None, v48=None)`
 - `lin_split_qkv_gqa_bf16(conv_out, q16=None, k16=None, v48=None)`
 - `split_q_gate_bf16(q_proj, q_pre=None, gate=None)`
@@ -39,6 +40,11 @@ The first public profile targets Qwen3.6-style dimensions:
 
 The v3 API covers both decode recurrence and Qwen3.6-style prefill/WY
 building blocks. It does not package generic FlashAttention.
+
+`gated_delta_recurrent_sequence_bf16` scans `(S,H,128)` in one SM120
+launch. Its recurrent state remains FP32 inside the scan and is converted to
+the caller's BF16 `state` tensor only once at the end. This differs from the
+legacy chunk contract, which rounds state to BF16 after each token.
 
 The v3 FLA-style MMA path requires NVIDIA `sm_80+` because it uses BF16
 `mma.sync` instructions. The package build targets Ampere, Ada, Hopper, and

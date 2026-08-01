@@ -23,3 +23,11 @@ void fp8_blockwise_linear_bf16(
     torch::Tensor const& input_scale,
     torch::Tensor const& weight_scale,
     torch::Tensor& out);
+
+void fp8_blockwise_swiglu_quantize_fp8(
+    torch::Tensor const& input,
+    torch::Tensor const& gate_up_weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& gate_up_weight_scale,
+    torch::Tensor& output,
+    torch::Tensor& output_scale);

@@ -12,10 +12,16 @@
 #include <c10/cuda/CUDAGuard.h>
 #endif
 
+#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
 #include "fp8_gemv_m1_sm120.cuh"
 #include "fp8_smallM_handtuned_ldmatrix_sm120.cuh"
 #include "fp8_smallM_handtuned_sm120.cuh"
 #include "cutlass_sm120_block128_fp8_gemm.cuh"
+#endif
+#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#include "fp8_block128_gemm_mma_sm89.cuh"
+#include "fp8_gemv_m1_sm89.cuh"
+#endif
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -124,7 +130,7 @@ std::string tile_name_for_shape(int M, int N, int K, int variant) {
 }
 
 KernelFn kernel_for_tile(std::string const& tile, bool residual) {
-#if defined(CUDA_KERNEL)
+#if defined(CUDA_KERNEL) && !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
   namespace gemv = flash_rt::gemm::gemv_m1;
   namespace hand = flash_rt::gemm::smallM_hand;
   namespace ld = flash_rt::gemm::smallM_ld;
@@ -175,6 +181,14 @@ void launch(
   const std::string tile = tile_name_for_shape(M, N, K, variant);
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
+  auto* props = at::cuda::getDeviceProperties(input.get_device());
+  TORCH_CHECK(props->major == 12 && props->minor == 0,
+              "fp8_linear_bf16 and fp8_linear_residual_bf16 require SM120; "
+              "use fp8_blockwise_linear_bf16 on SM89; got SM",
+              props->major, props->minor);
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
+  TORCH_CHECK(false, "per-tensor FP8 APIs are not present in the SM89 source-test build");
+#else
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
   KernelFn fn = kernel_for_tile(tile, residual);
   const int rc = fn(
@@ -187,6 +201,7 @@ void launch(
       static_cast<float>(alpha),
       stream);
   TORCH_CHECK(rc == 0, tile, " failed with rc=", rc);
+#endif
 #else
   TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
 #endif
@@ -246,19 +261,120 @@ void fp8_blockwise_linear_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto* props = at::cuda::getDeviceProperties(input.get_device());
-  TORCH_CHECK(props->major == 12 && props->minor == 0,
-              "fp8_blockwise_linear_bf16 currently requires SM120");
+  TORCH_CHECK((props->major == 8 && props->minor == 9) ||
+                  (props->major == 12 && props->minor == 0),
+              "fp8_blockwise_linear_bf16 requires SM89 or SM120; got SM",
+              props->major, props->minor);
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  flash_rt::gemm::fp8_block128_gemm_cutlass_sm120_bf16out(
-      input.data_ptr(),
-      weight.data_ptr(),
-      out.data_ptr(),
-      checked_positive_int(M, "M"),
-      checked_positive_int(N, "N"),
-      checked_positive_int(K, "K"),
-      input_scale.data_ptr<float>(),
-      weight_scale.data_ptr<float>(),
-      stream);
+  if (props->major == 8) {
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+    TORCH_CHECK(false, "SM89 blockwise kernels are not present in this source-test build");
+#else
+    int rc;
+    if (M == 1) {
+      namespace gemv89 = flash_rt::gemm::gemv_m1_sm89;
+      if (N <= 2048) {
+        rc = gemv89::gemv_fp8_block128_m1_w4(
+            input.data_ptr(), weight.data_ptr(), out.data_ptr(), 1,
+            checked_positive_int(N, "N"), checked_positive_int(K, "K"),
+            input_scale.data_ptr<float>(), weight_scale.data_ptr<float>(),
+            1.0f, stream);
+      } else if (N <= 8192) {
+        rc = gemv89::gemv_fp8_block128_m1_w8(
+            input.data_ptr(), weight.data_ptr(), out.data_ptr(), 1,
+            checked_positive_int(N, "N"), checked_positive_int(K, "K"),
+            input_scale.data_ptr<float>(), weight_scale.data_ptr<float>(),
+            1.0f, stream);
+      } else {
+        rc = gemv89::gemv_fp8_block128_m1_w16(
+            input.data_ptr(), weight.data_ptr(), out.data_ptr(), 1,
+            checked_positive_int(N, "N"), checked_positive_int(K, "K"),
+            input_scale.data_ptr<float>(), weight_scale.data_ptr<float>(),
+            1.0f, stream);
+      }
+    } else {
+      rc = flash_rt::gemm::block128_sm89::
+          fp8_block128_gemm_blockscaled_sm89_bf16out(
+              input.data_ptr(), weight.data_ptr(), out.data_ptr(),
+              checked_positive_int(M, "M"), checked_positive_int(N, "N"),
+              checked_positive_int(K, "K"), input_scale.data_ptr<float>(),
+              weight_scale.data_ptr<float>(), stream);
+    }
+    TORCH_CHECK(rc == 0, "SM89 blockwise FP8 linear failed with rc=", rc);
+#endif
+  } else {
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
+    TORCH_CHECK(false, "SM120 blockwise kernel is not present in this source-test build");
+#else
+    flash_rt::gemm::fp8_block128_gemm_cutlass_sm120_bf16out(
+        input.data_ptr(), weight.data_ptr(), out.data_ptr(),
+        checked_positive_int(M, "M"), checked_positive_int(N, "N"),
+        checked_positive_int(K, "K"), input_scale.data_ptr<float>(),
+        weight_scale.data_ptr<float>(), stream);
+#endif
+  }
+#else
+  TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
+#endif
+}
+
+void fp8_blockwise_swiglu_quantize_fp8(
+    torch::Tensor const& input,
+    torch::Tensor const& gate_up_weight,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& gate_up_weight_scale,
+    torch::Tensor& output,
+    torch::Tensor& output_scale) {
+  check_fp8_matrix(input, "input");
+  check_fp8_matrix(gate_up_weight, "gate_up_weight");
+  check_fp32_matrix(input_scale, "input_scale");
+  check_fp32_matrix(gate_up_weight_scale, "gate_up_weight_scale");
+  check_fp8_matrix(output, "output");
+  check_fp32_matrix(output_scale, "output_scale");
+  const int64_t M = input.size(0);
+  const int64_t K = input.size(1);
+  TORCH_CHECK(gate_up_weight.size(0) % 2 == 0 &&
+                  gate_up_weight.size(1) == K,
+              "gate_up_weight must have shape (2*N, K)");
+  const int64_t N = gate_up_weight.size(0) / 2;
+  TORCH_CHECK(M > 0 && M <= 256,
+              "SM89 fused SwiGLU producer supports 1 <= M <= 256");
+  TORCH_CHECK(N % 128 == 0 && K % 128 == 0,
+              "N and K must be divisible by 128");
+  TORCH_CHECK(input_scale.sizes() == torch::IntArrayRef({M, K / 128}),
+              "input_scale must have shape (M, K / 128)");
+  TORCH_CHECK(gate_up_weight_scale.sizes() ==
+                  torch::IntArrayRef({2 * N / 128, K / 128}),
+              "gate_up_weight_scale must have shape (2*N/128, K/128)");
+  TORCH_CHECK(output.sizes() == torch::IntArrayRef({M, N}),
+              "output must have shape (M, N)");
+  TORCH_CHECK(output_scale.sizes() == torch::IntArrayRef({M, N / 128}),
+              "output_scale must have shape (M, N/128)");
+  TORCH_CHECK(input.get_device() == gate_up_weight.get_device() &&
+                  input.get_device() == input_scale.get_device() &&
+                  input.get_device() == gate_up_weight_scale.get_device() &&
+                  input.get_device() == output.get_device() &&
+                  input.get_device() == output_scale.get_device(),
+              "all tensors must be on the same CUDA device");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(input.device());
+  auto* props = at::cuda::getDeviceProperties(input.get_device());
+  TORCH_CHECK(props->major == 8 && props->minor == 9,
+              "fp8_blockwise_swiglu_quantize_fp8 requires SM89; got SM",
+              props->major, props->minor);
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+  TORCH_CHECK(false, "SM89 fused producer is not present in this source-test build");
+#else
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  int rc = flash_rt::gemm::block128_sm89::
+      fp8_bs_geglu_silu_fold_sm89_32x128_w4_s1(
+          input.data_ptr(), gate_up_weight.data_ptr(),
+          checked_positive_int(M, "M"), checked_positive_int(N, "N"),
+          checked_positive_int(K, "K"), input_scale.data_ptr<float>(),
+          gate_up_weight_scale.data_ptr<float>(), output.data_ptr(),
+          output_scale.data_ptr<float>(), stream);
+  TORCH_CHECK(rc == 0, "SM89 fused SwiGLU FP8 producer failed with rc=", rc);
+#endif
 #else
   TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
 #endif
@@ -270,12 +386,18 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("fp8_blockwise_linear_bf16("
           "Tensor input, Tensor weight, Tensor input_scale, "
           "Tensor weight_scale, Tensor! out) -> ()");
+  ops.def("fp8_blockwise_swiglu_quantize_fp8("
+          "Tensor input, Tensor gate_up_weight, Tensor input_scale, "
+          "Tensor gate_up_weight_scale, Tensor! output, Tensor! output_scale) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("fp8_linear_bf16", torch::kCUDA, &fp8_linear_bf16);
   ops.impl("fp8_linear_residual_bf16", torch::kCUDA, &fp8_linear_residual_bf16);
   ops.impl("fp8_blockwise_linear_bf16",
            torch::kCUDA,
            &fp8_blockwise_linear_bf16);
+  ops.impl("fp8_blockwise_swiglu_quantize_fp8",
+           torch::kCUDA,
+           &fp8_blockwise_swiglu_quantize_fp8);
 #endif
 }
 

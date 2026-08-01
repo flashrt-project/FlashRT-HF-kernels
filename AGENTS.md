@@ -21,8 +21,9 @@ source needed by one package.
   upload artifacts.
 - Keep dependency declarations in `build.toml`; do not depend on FlashRT local
   `third_party/` paths.
-- If CUTLASS is required, use a `kernel-builder` dependency such as
-  `cutlass_4_0` and include only package-local headers.
+- If CUTLASS is required, use a dependency accepted by the package's pinned
+  upstream builder revision (for example `cutlass_4_0` or `cutlass_4_5`) and
+  include only package-local overrides.
 - Keep public package docs clean. Put local planning notes in `internal-docs/`
   and FlashRT-dependent tests in `internal-tests/`.
 
@@ -52,24 +53,27 @@ Before pushing a package change that should rebuild Hub artifacts:
 3. Run representative benchmarks for changed performance-sensitive APIs and
    record shape, dtype, tolerance, and hardware in package docs or internal
    notes.
-4. Run `kernel-builder-docker check-config .` from each changed package
-   directory.
+4. Run `check-config` from each changed package directory using the exact
+   upstream builder revision in that package's `flake.lock`. A stale local
+   builder that rejects a newly supported dependency is not authoritative.
 5. Keep `build/`, `result/`, `dist/`, wheels, `__pycache__/`, and
    `internal-tests/` outputs untracked. `scripts/prebuild_check.py` is expected
    to fail until ignored local build artifacts are removed or the check is run
    in a clean clone.
 6. Use `.github/workflows/build-kernels-hf-jobs.yml` for release packaging and
-   upload. Add any newly changed package to the workflow path filters and
-   matrix before relying on push-triggered builds.
+   upload. Add any newly changed package to the workflow path filters,
+   dispatch options, and normal matrix before relying on push-triggered builds.
+   These lists must match except for packages such as FA2 with a dedicated job.
 7. HF Jobs must run under the `liangsu9988` HF account/namespace. Before
    pushing release-triggering package changes, confirm the repository secret
    `HF_TOKEN` is a valid token for `liangsu9988` or another token with both HF
    Jobs access and `flashrt/<package>` kernel publishing rights. If the token is
    missing, expired, or belongs to the wrong account, the workflow fails before
    compilation with `HTTP 401: {"error":"Invalid username or password."}`.
-8. After HF Jobs uploads artifacts, verify by loading through
-   `get_kernel("flashrt/<package>", version=1, trust_remote_code=True)` in a
-   matching PyTorch/CUDA environment and rerun installed-artifact correctness.
+8. After HF Jobs uploads artifacts, read `general.version` from `build.toml`
+   and verify by loading through `get_kernel("flashrt/<package>", version=N,
+   trust_remote_code=True)` in a matching PyTorch/CUDA environment. Rerun
+   installed-artifact correctness; never assume every package is v1.
 9. Run `.github/workflows/mirror-kernels-legacy-model.yml` for every new or
    rebuilt package, then verify both the Kernel Hub `v1` ref and the legacy
    model-repo `v1` ref. A successful source upload without compiled build

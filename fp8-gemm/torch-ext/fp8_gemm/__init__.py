@@ -60,6 +60,32 @@ def _fp8_blockwise_linear_bf16_fake(
     return None
 
 
+@torch.library.register_fake(
+    add_op_namespace_prefix("fp8_blockwise_swiglu_quantize_fp8")
+)
+def _fp8_blockwise_swiglu_quantize_fp8_fake(
+    input: torch.Tensor,
+    gate_up_weight: torch.Tensor,
+    input_scale: torch.Tensor,
+    gate_up_weight_scale: torch.Tensor,
+    output: torch.Tensor,
+    output_scale: torch.Tensor,
+) -> None:
+    m, k = input.shape
+    if gate_up_weight.dim() != 2 or gate_up_weight.shape[0] % 2:
+        raise RuntimeError("gate_up_weight must have shape (2*N, K)")
+    n = gate_up_weight.shape[0] // 2
+    if gate_up_weight.shape[1] != k or n % 128 or k % 128:
+        raise RuntimeError("gate_up_weight shape is invalid or N/K are not divisible by 128")
+    if input_scale.shape != (m, k // 128):
+        raise RuntimeError("input_scale must have shape (M, K/128)")
+    if gate_up_weight_scale.shape != (2 * n // 128, k // 128):
+        raise RuntimeError("gate_up_weight_scale must have shape (2*N/128, K/128)")
+    if output.shape != (m, n) or output_scale.shape != (m, n // 128):
+        raise RuntimeError("output buffers have invalid shapes")
+    return None
+
+
 def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
     """Return the FlashRT tile selected by the public dispatcher."""
 
@@ -170,3 +196,39 @@ def fp8_blockwise_linear_bf16(
         input, weight, input_scale, weight_scale, out
     )
     return out
+
+
+def fp8_blockwise_swiglu_quantize_fp8(
+    input: torch.Tensor,
+    gate_up_weight: torch.Tensor,
+    input_scale: torch.Tensor,
+    gate_up_weight_scale: torch.Tensor,
+    *,
+    output: torch.Tensor | None = None,
+    output_scale: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """SM89 block-128 FP8 gate/up GEMM + SiLU + FP8 requant producer."""
+
+    n = gate_up_weight.shape[0] // 2
+    if output is None:
+        output = torch.empty(
+            (input.shape[0], n), device=input.device, dtype=torch.float8_e4m3fn
+        )
+    if output_scale is None:
+        output_scale = torch.empty(
+            (input.shape[0], n // 128), device=input.device, dtype=torch.float32
+        )
+    ops.fp8_blockwise_swiglu_quantize_fp8(
+        input, gate_up_weight, input_scale, gate_up_weight_scale,
+        output, output_scale
+    )
+    return output, output_scale
+
+
+__all__ = [
+    "fp8_linear_bf16",
+    "fp8_linear_residual_bf16",
+    "fp8_blockwise_linear_bf16",
+    "fp8_blockwise_swiglu_quantize_fp8",
+    "select_fp8_linear_tile",
+]

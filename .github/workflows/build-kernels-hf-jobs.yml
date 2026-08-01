@@ -53,6 +53,9 @@ on:
       - "smallm-ffn-megakernels-blackwell/**"
       - "blockwise-fp8-producers/**"
       - "padded-fp8-producers/**"
+      - "audio-codebook-primitives/**"
+      - "fp8-cross-attention-blackwell/**"
+      - "fused-mlp-megakernels-blackwell/**"
   workflow_dispatch:
     inputs:
       package:
@@ -110,6 +113,9 @@ on:
           - smallm-ffn-megakernels-blackwell
           - blockwise-fp8-producers
           - padded-fp8-producers
+          - audio-codebook-primitives
+          - fp8-cross-attention-blackwell
+          - fused-mlp-megakernels-blackwell
 
 permissions:
   contents: read
@@ -173,6 +179,9 @@ jobs:
           - smallm-ffn-megakernels-blackwell
           - blockwise-fp8-producers
           - padded-fp8-producers
+          - audio-codebook-primitives
+          - fp8-cross-attention-blackwell
+          - fused-mlp-megakernels-blackwell
 
     steps:
       - uses: actions/checkout@v4

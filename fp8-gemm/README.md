@@ -1,7 +1,7 @@
 # fp8-gemm
 
 FlashRT native CUDA FP8 GEMV/GEMM kernels for low-latency transformer and
-diffuser linear layers on Blackwell-class GPUs.
+diffuser linear layers on NVIDIA Ada SM89 and Blackwell SM120 GPUs.
 
 This package exposes the hand-tuned FP8 E4M3 decode and small-M kernels as
 Tensor APIs for Hugging Face Kernel Hub. It is intended for model runtimes that
@@ -13,6 +13,7 @@ linear path.
 - `fp8_linear_bf16(input, weight, alpha=1.0, out=None, variant=0)`
 - `fp8_linear_residual_bf16(input, weight, residual, alpha=1.0, variant=0)`
 - `fp8_blockwise_linear_bf16(input, weight, input_scale, weight_scale, out=None)`
+- `fp8_blockwise_swiglu_quantize_fp8(input, gate_up_weight, input_scale, gate_up_weight_scale, output=None, output_scale=None)`
 - `select_fp8_linear_tile(m, n, k, variant=0)`
 
 Tensor contract:
@@ -24,8 +25,8 @@ Tensor contract:
   the `M=1` decode GEMV path.
 - `K % 32 == 0`.
 - `M == 1` uses dedicated GEMV. `2 <= M <= 64` uses small-M GEMM tiles.
-- Build target is `sm_120a`; these kernels use Blackwell FP8 MMA instructions
-  that are not valid for plain `sm_120` compilation.
+- The per-tensor `fp8_linear_*` APIs target `sm_120a`; these kernels use
+  Blackwell FP8 MMA instructions that are not valid for SM89.
 - `alpha` is a host float. For per-tensor FP8 quantization, pass
   `float(input_scale * weight_scale)` from your static calibration metadata.
 
@@ -37,9 +38,16 @@ The blockwise API uses a separate contract:
 - `weight_scale`: FP32 `(N / 128, K / 128)`.
 - `N` and `K` must be divisible by 128; `M` is unrestricted.
 - Output is BF16 `(M, N)`.
-- The current blockwise implementation is the production FlashRT CUTLASS
-  SM120 kernel. Other architectures are rejected rather than silently using a
-  different numerical contract.
+- On SM89, the blockwise API dispatches to the production FlashRT native
+  `mma.sync.aligned.m16n8k32` GEMM/GEMV implementation.
+- On SM120, it dispatches to the production FlashRT CUTLASS block-scaled
+  implementation.
+- Other architectures are rejected explicitly.
+
+The fused SM89 producer accepts FP8 `(M,K)` input, FP8 `(2*N,K)` gate/up
+weight, block-128 FP32 scales, and returns FP8 `(M,N)` plus FP32 `(M,N/128)`
+output scales. Its public range is `1 <= M <= 256` with `N` and `K` divisible
+by 128. It is rejected explicitly on non-SM89 GPUs.
 
 ## Minimal Usage
 

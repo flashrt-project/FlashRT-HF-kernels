@@ -12,6 +12,7 @@
 
 #include "kernels/nexn2_misc.cuh"
 #include "kernels/nexn2_router_topk.cuh"
+#include "kernels/moe_weighted_sum_sm120.cuh"
 #include "kernels/qwen36_misc.cuh"
 #include "kernels/relu2_quantize_fp8.cuh"
 #include "kernels/rms_norm_gated_silu_qwen36.cuh"
@@ -275,6 +276,41 @@ void nexn2_router_topk_bf16(torch::Tensor const& logits, torch::Tensor& out_idx,
 #endif
 }
 
+void moe_weighted_sum_bf16_to_fp32(
+    torch::Tensor const& expert_output,
+    torch::Tensor const& row_indices,
+    torch::Tensor const& router_weight,
+    torch::Tensor& out) {
+  check_bf16(expert_output, "expert_output");
+  check_i32(row_indices, "row_indices");
+  check_f32(router_weight, "router_weight");
+  check_f32(out, "out");
+  TORCH_CHECK(expert_output.dim() == 2,
+              "expert_output must have shape (routed_rows, stride)");
+  TORCH_CHECK(row_indices.dim() == 2 && router_weight.sizes() == row_indices.sizes(),
+              "row_indices and router_weight must have shape (tokens, topk)");
+  TORCH_CHECK(out.dim() == 2 && out.size(0) == row_indices.size(0),
+              "out must have shape (tokens, hidden)");
+  TORCH_CHECK(expert_output.size(1) >= out.size(1),
+              "expert_output stride must cover out hidden size");
+  same_device(expert_output, row_indices, "expert_output", "row_indices");
+  same_device(expert_output, router_weight, "expert_output", "router_weight");
+  same_device(expert_output, out, "expert_output", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(expert_output.device());
+  auto stream = at::cuda::getCurrentCUDAStream(expert_output.get_device()).stream();
+  const int rc = flash_rt::kernels::moe_weighted_sum_sm120_bf16(
+      expert_output.data_ptr(), row_indices.data_ptr(), router_weight.data_ptr(),
+      out.data_ptr(), checked_int(row_indices.size(0), "tokens"),
+      checked_int(row_indices.size(1), "topk"),
+      checked_int(out.size(1), "hidden"),
+      checked_int(expert_output.size(1), "expert_output stride"), stream);
+  TORCH_CHECK(rc == 0, "moe_weighted_sum_bf16_to_fp32 failed with rc=", rc);
+#else
+  TORCH_CHECK(false, "transformer-fused-ops was not built with CUDA support");
+#endif
+}
+
 void relu2_quantize_fp8_static_bf16(
     torch::Tensor const& input,
     torch::Tensor const& scale,
@@ -316,6 +352,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nexn2_lin_split_qkv_broadcast_bf16(Tensor conv_out, Tensor! q32, Tensor! k32, Tensor! v32) -> ()");
   ops.def("nexn2_split_q_gate_bf16(Tensor q_proj, Tensor! q_pre, Tensor! gate) -> ()");
   ops.def("nexn2_router_topk_bf16(Tensor logits, Tensor! out_idx, Tensor! out_val, int k) -> ()");
+  ops.def("router_topk_bf16(Tensor logits, Tensor! out_idx, Tensor! out_val, int k) -> ()");
+  ops.def("moe_weighted_sum_bf16_to_fp32(Tensor expert_output, Tensor row_indices, Tensor router_weight, Tensor! out) -> ()");
   ops.def("relu2_quantize_fp8_static_bf16(Tensor input, Tensor scale, Tensor! output) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("rms_norm_gated_silu_bf16", torch::kCUDA, &rms_norm_gated_silu_bf16);
@@ -328,6 +366,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("nexn2_lin_split_qkv_broadcast_bf16", torch::kCUDA, &nexn2_lin_split_qkv_broadcast_bf16);
   ops.impl("nexn2_split_q_gate_bf16", torch::kCUDA, &nexn2_split_q_gate_bf16);
   ops.impl("nexn2_router_topk_bf16", torch::kCUDA, &nexn2_router_topk_bf16);
+  ops.impl("router_topk_bf16", torch::kCUDA, &nexn2_router_topk_bf16);
+  ops.impl("moe_weighted_sum_bf16_to_fp32", torch::kCUDA,
+           &moe_weighted_sum_bf16_to_fp32);
   ops.impl("relu2_quantize_fp8_static_bf16", torch::kCUDA, &relu2_quantize_fp8_static_bf16);
 #endif
 }

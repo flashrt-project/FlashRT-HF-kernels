@@ -1,0 +1,29 @@
+[general]
+name = "fp8-cross-attention-blackwell"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "13.0"
+maxver = "13.0"
+
+[general.hub]
+repo-id = "flashrt/fp8-cross-attention-blackwell"
+
+[torch]
+include = ["csrc"]
+src = ["torch-ext/torch_binding.cpp", "torch-ext/torch_binding.h"]
+
+[kernel.fp8_cross_attention_blackwell]
+backend = "cuda"
+depends = ["torch", "cutlass_4_5"]
+include = ["csrc/fmha77", "csrc"]
+cuda-minver = "13.0"
+cuda-capabilities = ["10.0a", "10.3a", "11.0a"]
+cuda-flags = [
+  "--expt-relaxed-constexpr",
+  "-O3",
+  "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+]
+src = ["csrc/cutlass_fp8_gqa_cross_attention_sm100.cu"]

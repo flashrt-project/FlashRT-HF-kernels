@@ -3,7 +3,8 @@
 FlashRT native CUDA FP8 GEMV/GEMM kernels for low-latency transformer and
 diffuser linear layers.
 
-This package targets Blackwell `sm_120a` FP8 MMA.
+The block-128 scaled API supports Ada `sm_89` and Blackwell `sm_120a`.
+Per-tensor decode and small-M APIs target Blackwell `sm_120a`.
 
 ## Functions
 

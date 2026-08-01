@@ -18,6 +18,12 @@ accumulation and BF16 state/output casts. Split/gating helpers are checked
 against exact PyTorch tensor formulas. `gdn_chunk_from_conv_smem_bf16` and the
 WY pipeline are checked end-to-end against the same recurrent reference.
 
+`gated_delta_recurrent_sequence_bf16` keeps recurrent state in FP32 for the
+entire sequence and casts state to BF16 only once on exit. Its independent
+reference therefore does the same; comparing it to the legacy per-token BF16
+state-rounding loop is not an equivalent numerical contract. Sequence rows
+cover `S={1,17,63,64,65,127,128,129,256,512}` and `H={4,48}`.
+
 ## RTX 5090 Source Results
 
 Command:
