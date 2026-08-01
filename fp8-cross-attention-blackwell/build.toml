@@ -26,4 +26,16 @@ cuda-flags = [
   "-O3",
   "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
 ]
-src = ["csrc/cutlass_fp8_gqa_cross_attention_sm100.cu"]
+src = [
+  "csrc/cutlass_fp8_gqa_cross_attention_sm100.cu",
+  "csrc/fmha77/collective/fmha_common.hpp",
+  "csrc/fmha77/collective/fmha_fusion.hpp",
+  "csrc/fmha77/collective/sm100_fmha_fwd_epilogue_tma_warpspecialized.hpp",
+  "csrc/fmha77/collective/sm100_fmha_fwd_mainloop_tma_warpspecialized.hpp",
+  "csrc/fmha77/collective/sm100_fmha_load_tma_warpspecialized.hpp",
+  "csrc/fmha77/device/fmha.hpp",
+  "csrc/fmha77/kernel/fmha_causal_tile_scheduler.hpp",
+  "csrc/fmha77/kernel/fmha_options.hpp",
+  "csrc/fmha77/kernel/fmha_tile_scheduler.hpp",
+  "csrc/fmha77/kernel/sm100_fmha_fwd_kernel_tma_warpspecialized.hpp",
+]
