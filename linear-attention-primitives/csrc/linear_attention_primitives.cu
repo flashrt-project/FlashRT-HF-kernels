@@ -430,11 +430,22 @@ void bf16_smallm_matmul(
     int k,
     cudaStream_t stream) {
   if (n == 96 && k == 5120) {
-    constexpr int kMTile = 4;
-    dim3 grid((96 + (kWarpsPerBlock * 2) - 1) / (kWarpsPerBlock * 2),
-              (m + kMTile - 1) / kMTile);
-    bf16_ab96_mtile_pair_kernel<kMTile>
-        <<<grid, kThreads, kMTile * 5120 * sizeof(__nv_bfloat16), stream>>>(x, w, out, m);
+    // M=4 needs enough independent CTAs to fill Thor's 14 SMs. A four-row
+    // tile launches only six CTAs for N=96; two-row tiles double that
+    // parallelism while preserving the weight-pair reuse within each CTA.
+    if (m == 4) {
+      constexpr int kMTile = 2;
+      dim3 grid((96 + (kWarpsPerBlock * 2) - 1) / (kWarpsPerBlock * 2),
+                (m + kMTile - 1) / kMTile);
+      bf16_ab96_mtile_pair_kernel<kMTile>
+          <<<grid, kThreads, kMTile * 5120 * sizeof(__nv_bfloat16), stream>>>(x, w, out, m);
+    } else {
+      constexpr int kMTile = 4;
+      dim3 grid((96 + (kWarpsPerBlock * 2) - 1) / (kWarpsPerBlock * 2),
+                (m + kMTile - 1) / kMTile);
+      bf16_ab96_mtile_pair_kernel<kMTile>
+          <<<grid, kThreads, kMTile * 5120 * sizeof(__nv_bfloat16), stream>>>(x, w, out, m);
+    }
     return;
   }
   dim3 grid((n + kWarpsPerBlock - 1) / kWarpsPerBlock, m);
