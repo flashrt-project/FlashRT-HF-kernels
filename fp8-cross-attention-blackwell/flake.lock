@@ -41,9 +41,9 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1785581957,
-        "narHash": "sha256-+Q7u3xsqhSmtKbQ+d+2IGFCdQ6f1m0eGbMnBBIYIS9I=",
-        "rev": "fb59f9322bd36c4deaaeb5f33d7506b83a396cfa",
+        "lastModified": 1785583825,
+        "narHash": "sha256-bK6AXiZSJYaCYK2iTT6Xy+24bab6k0IURV80PB1LmZI=",
+        "rev": "f33b6e0396618311e348cf38ddeaf556f7d2fde8",
         "owner": "flashrt-project",
         "repo": "kernels",
         "type": "github"
@@ -51,7 +51,7 @@
       "original": {
         "owner": "flashrt-project",
         "repo": "kernels",
-        "rev": "fb59f9322bd36c4deaaeb5f33d7506b83a396cfa",
+        "rev": "f33b6e0396618311e348cf38ddeaf556f7d2fde8",
         "type": "github"
       }
     },

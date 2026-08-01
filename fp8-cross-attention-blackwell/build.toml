@@ -17,7 +17,7 @@ src = ["torch-ext/torch_binding.cpp", "torch-ext/torch_binding.h"]
 
 [kernel.fp8_cross_attention_blackwell]
 backend = "cuda"
-depends = ["torch", "cutlass_4_5"]
+depends = ["torch", "cutlass_4_4"]
 include = ["csrc/fmha77", "csrc"]
 cuda-minver = "13.0"
 cuda-capabilities = ["10.0a", "10.3a", "11.0a"]
