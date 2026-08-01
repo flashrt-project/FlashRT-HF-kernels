@@ -1229,7 +1229,9 @@ void qkv_split_bias_rope_bf16(
     int head_dim,
     int rope_stride,
     cudaStream_t stream) {
-  const int threads = head_dim < 256 ? head_dim : 256;
+  const int threads = head_dim == 72
+      ? 32
+      : (head_dim == 80 ? 64 : (head_dim < 256 ? head_dim : 256));
   qkv_split_bias_rope_bf16_kernel<<<
       dim3(q_heads + 2 * kv_heads, rows), threads, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(packed_qkv),
@@ -1260,7 +1262,9 @@ void qkv_split_bias_rope_fp16(
     int head_dim,
     int rope_stride,
     cudaStream_t stream) {
-  const int threads = head_dim < 256 ? head_dim : 256;
+  const int threads = head_dim == 72
+      ? 32
+      : (head_dim == 80 ? 64 : (head_dim < 256 ? head_dim : 256));
   qkv_split_bias_rope_fp16_kernel<<<
       dim3(q_heads + 2 * kv_heads, rows), threads, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(packed_qkv),

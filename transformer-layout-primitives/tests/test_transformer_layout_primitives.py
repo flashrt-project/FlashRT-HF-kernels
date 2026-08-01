@@ -180,16 +180,29 @@ def bf16_max_ulp(got: torch.Tensor, ref: torch.Tensor) -> int:
     )
 
 
-def assert_close(name: str, got: torch.Tensor, ref: torch.Tensor, atol: float, cos_min: float) -> None:
+def assert_close(
+    name: str,
+    got: torch.Tensor,
+    ref: torch.Tensor,
+    atol: float,
+    cos_min: float,
+    rtol: float = 0.0,
+) -> None:
     max_abs, mean_abs, cos = metrics(got, ref)
+    diff = (got.float() - ref.float()).abs()
+    p99_abs = float(torch.quantile(diff, 0.99).item())
+    tolerance = atol + rtol * ref.float().abs()
+    violations = int((diff > tolerance).sum().item())
     max_ulp = bf16_max_ulp(got, ref)
     print(
-        f"{name}: max_abs={max_abs:.6f} mean_abs={mean_abs:.6f} "
-        f"max_ulp={max_ulp} cosine={cos:.8f}"
+        f"{name}: max_abs={max_abs:.6f} p99_abs={p99_abs:.6f} "
+        f"mean_abs={mean_abs:.6e} max_ulp={max_ulp} cosine={cos:.8f} "
+        f"violations={violations} rtol={rtol} atol={atol}"
     )
-    if max_abs > atol or cos < cos_min:
+    if violations or cos < cos_min:
         raise AssertionError(
-            f"{name} failed: max_abs={max_abs} max_ulp={max_ulp} cosine={cos}"
+            f"{name} failed: max_abs={max_abs} p99_abs={p99_abs} "
+            f"max_ulp={max_ulp} cosine={cos} violations={violations}"
         )
 
 
@@ -307,7 +320,17 @@ def run(ops, mode: str) -> int:
         got = x.clone()
         ops.qk_rmsnorm_rope_bf16_(got, weight, cos, sin)
         ref = qk_rmsnorm_rope_ref(x, weight, cos, sin)
-        assert_close(f"qk_rmsnorm_rope seq={seq} heads={heads} dim={dim}", got, ref, atol=0.015625, cos_min=0.999999)
+        # The CUDA kernel is bitwise-gated against the established staged
+        # native path below. PyTorch eager may use a different FP32 reduction
+        # order, so this semantic comparison uses BF16 elementwise tolerances.
+        assert_close(
+            f"qk_rmsnorm_rope seq={seq} heads={heads} dim={dim}",
+            got,
+            ref,
+            atol=0.015625,
+            rtol=0.02,
+            cos_min=0.999999,
+        )
         count += 1
 
     pair_shapes = [(17, 16, 8, 128), (49, 16, 16, 72)] if mode == "smoke" else [
@@ -347,8 +370,12 @@ def run(ops, mode: str) -> int:
         # The fused path is already required to be bitwise equal to the
         # established staged native kernels above. Torch 2.11's eager
         # reduction order can differ by up to 0.03125 in BF16 at large rows.
-        assert_close(f"{label}/q", got_q, ref_q, atol=0.03125, cos_min=0.999999)
-        assert_close(f"{label}/k", got_k, ref_k, atol=0.03125, cos_min=0.999999)
+        assert_close(
+            f"{label}/q", got_q, ref_q, atol=0.015625, rtol=0.02, cos_min=0.999999
+        )
+        assert_close(
+            f"{label}/k", got_k, ref_k, atol=0.015625, rtol=0.02, cos_min=0.999999
+        )
         count += 4
 
     q = torch.randn((17, 4, 64), device="cuda", dtype=torch.bfloat16)

@@ -306,9 +306,12 @@ def main() -> int:
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
-    major, _ = torch.cuda.get_device_capability(0)
-    if major < 12:
-        raise RuntimeError("fp8-kv-attention v1 requires Blackwell-class CUDA capability")
+    capability = torch.cuda.get_device_capability(0)
+    if capability not in {(10, 0), (10, 3), (11, 0), (12, 0), (12, 1)}:
+        raise RuntimeError(
+            "fp8-kv-attention v1 requires a supported Blackwell capability "
+            f"(SM100, SM103, SM110, SM120, or SM121); got SM{capability[0]}{capability[1]}"
+        )
 
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     rows = []
