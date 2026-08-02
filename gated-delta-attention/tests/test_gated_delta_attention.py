@@ -33,6 +33,8 @@ SHAPES = {
     "inout_gf32_h4": ("inout_gf32", 1, 1, 4),
     "inout_gf32_h32": ("inout_gf32", 1, 1, 32),
     "inout_gf32_h48": ("inout_gf32", 1, 1, 48),
+    "inout_gf32_sf32_h32": ("inout_gf32_sf32", 1, 1, 32),
+    "inout_gf32_sf32_h48": ("inout_gf32_sf32", 1, 1, 48),
     "f32state_h4": ("f32state", 1, 1, 4),
     "chunk_s4_h4": ("chunk", 1, 4, 4),
     "chunk_smem_s4_h4": ("chunk_smem", 1, 4, 4),
@@ -96,6 +98,12 @@ class SourceOps:
         out = torch.empty_like(q)
         state_out = torch.empty_like(state)
         self._ops.gated_delta_recurrent_inout_gf32_bf16(q, k, v, g, beta, state, state_out, out, use_qk_l2norm)
+        return out, state_out
+
+    def inout_gf32_sf32(self, q, k, v, g, beta, state, use_qk_l2norm=True):
+        out = torch.empty_like(q)
+        state_out = torch.empty_like(state)
+        self._ops.gated_delta_recurrent_inout_gf32_sf32_bf16(q, k, v, g, beta, state, state_out, out, use_qk_l2norm)
         return out, state_out
 
     def f32state(self, q, k, v, g, beta, state, use_qk_l2norm=True):
@@ -224,6 +232,11 @@ class InstalledOps:
 
     def inout_gf32(self, q, k, v, g, beta, state, use_qk_l2norm=True):
         return self._mod.gated_delta_recurrent_inout_gf32_bf16(
+            q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm
+        )
+
+    def inout_gf32_sf32(self, q, k, v, g, beta, state, use_qk_l2norm=True):
+        return self._mod.gated_delta_recurrent_inout_gf32_sf32_bf16(
             q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm
         )
 
@@ -480,10 +493,12 @@ def run_sequence_graph(ops) -> None:
 
 def run_case(ops, name: str) -> Row:
     kind, B, S, H = SHAPES[name]
-    if kind in {"recurrent", "inout", "inout_gf32", "f32state"}:
+    if kind in {"recurrent", "inout", "inout_gf32", "inout_gf32_sf32", "f32state"}:
         q, k, v, g, beta, state = make_step_inputs(B, H, 7000 + H, f32_state=(kind == "f32state"))
-        if kind == "inout_gf32":
+        if kind in {"inout_gf32", "inout_gf32_sf32"}:
             g = (torch.randn_like(g.float()) * 0.02)  # host-form fp32 log-decay
+        if kind == "inout_gf32_sf32":
+            state = state.float()                     # host-form fp32 state
         if kind == "recurrent":
             state_work = state.clone()
             got = ops.recurrent(q, k, v, g, beta, state_work)
@@ -494,6 +509,9 @@ def run_case(ops, name: str) -> Row:
         elif kind == "inout_gf32":
             got, state_work = ops.inout_gf32(q, k, v, g, beta, state)
             ref, ref_state = ref_recurrent(q, k, v, g, beta, state)
+        elif kind == "inout_gf32_sf32":
+            got, state_work = ops.inout_gf32_sf32(q, k, v, g, beta, state)
+            ref, ref_state = ref_recurrent(q, k, v, g, beta, state, f32_state=True)
         else:
             state_work = state.clone()
             got = ops.f32state(q, k, v, g, beta, state_work)

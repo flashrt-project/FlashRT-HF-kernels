@@ -88,6 +88,20 @@ void gated_deltanet_recurrent_inout_qwen36_gf32(
     bool use_qk_l2norm,
     cudaStream_t stream);
 
+// FP32-g + FP32-state in/out (the transformers fallback's own numerics).
+void gated_deltanet_recurrent_inout_gf32_sf32(
+    const void* q,
+    const void* k,
+    const void* v,
+    const void* g,
+    const void* beta,
+    const void* state_in,
+    void*       state_out,
+    void*       out,
+    int B, int num_v_heads, int head_k_dim, int head_v_dim,
+    bool use_qk_l2norm,
+    cudaStream_t stream);
+
 // FP32-state variant: identical math to the BF16-state path, but the
 // persistent recurrent state is stored as fp32. q/k/v/g/beta and the
 // per-step ``out`` stay bf16. Used by the Thor K-row to avoid the
