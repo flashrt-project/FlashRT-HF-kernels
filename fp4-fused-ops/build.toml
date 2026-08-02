@@ -22,7 +22,8 @@ backend = "cuda"
 depends = ["torch", "cutlass_4_0"]
 include = ["csrc", "csrc/quantize"]
 cuda-minver = "12.8"
-cuda-capabilities = ["12.0a"]
+cuda-capabilities = ["11.0a", "12.0a"]
+cuda-flags = ["--expt-relaxed-constexpr", "-O3", "--use_fast_math"]
 src = [
   "csrc/fused_fp4/norm_silu_fp4_sfa.cu",
   "csrc/fused_fp4/norm_silu_fp4_sfa.cuh",

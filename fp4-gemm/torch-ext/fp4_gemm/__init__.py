@@ -31,7 +31,7 @@ def _linear_fake(
     sfb: torch.Tensor,
     out: torch.Tensor,
     alpha: float = 1.0,
-    variant: int = 0,
+    variant: int = -1,
 ) -> None:
     return None
 
@@ -44,7 +44,7 @@ def _legacy_linear_fake(
     sfb: torch.Tensor,
     out: torch.Tensor,
     alpha: float = 1.0,
-    variant: int = 0,
+    variant: int = -1,
 ) -> None:
     return None
 
@@ -117,7 +117,7 @@ def nvfp4_gemm_bf16(
     sfb: torch.Tensor,
     alpha: float = 1.0,
     out: torch.Tensor | None = None,
-    variant: int = 0,
+    variant: int = -1,
 ) -> torch.Tensor:
     if out is None:
         out = torch.empty((a_packed.shape[0], b_packed.shape[0]), device=a_packed.device, dtype=torch.bfloat16)
@@ -132,7 +132,7 @@ def fp4_w4a16_linear_bf16(
     sfb: torch.Tensor,
     alpha: float = 1.0,
     out: torch.Tensor | None = None,
-    variant: int = 0,
+    variant: int = -1,
 ) -> torch.Tensor:
     """Compatibility alias for :func:`nvfp4_gemm_bf16`."""
     return nvfp4_gemm_bf16(

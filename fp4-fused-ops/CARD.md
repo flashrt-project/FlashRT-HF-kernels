@@ -21,7 +21,8 @@ low-bit paths.
 - `bf16_rms_norm_ncdhw`
 - `bf16_rms_silu_ncdhw`
 
-This package targets Blackwell `sm_120a` and uses CUTLASS/CUTE SFA layouts.
+This package targets Blackwell `sm_110a` and `sm_120a` and uses CUTLASS/CUTE
+SFA layouts. SM110 artifacts require CUDA 13+.
 
 ## Example
 

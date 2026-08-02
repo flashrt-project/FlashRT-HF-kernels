@@ -17,7 +17,35 @@ src = [
   "torch-ext/torch_binding.h",
 ]
 
-[kernel.fp4_gemm]
+[kernel.fp4_gemm_sm110]
+backend = "cuda"
+depends = ["torch", "cutlass_4_5"]
+include = ["csrc"]
+cuda-minver = "13"
+cuda-capabilities = ["11.0a"]
+cuda-flags = ["--expt-relaxed-constexpr", "-O3", "--use_fast_math"]
+src = [
+  "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cu",
+  "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cuh",
+  "csrc/gemm/fp4/sm110_dispatch.cu",
+  "csrc/gemm/fp4/sm110_dispatch.cuh",
+]
+
+[kernel.fp4_gemm_common]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["11.0a", "12.0a"]
+cuda-flags = ["--expt-relaxed-constexpr", "-O3", "--use_fast_math"]
+src = [
+  "csrc/quantize/quantize_fp4_sfa.cu",
+  "csrc/quantize/quantize_fp4_sfa.cuh",
+  "csrc/dequantize_fp4_sfa.cu",
+  "csrc/dequantize_fp4_sfa.cuh",
+]
+
+[kernel.fp4_gemm_sm120]
 backend = "cuda"
 depends = ["torch", "cutlass_4_0"]
 include = ["csrc"]
@@ -32,8 +60,4 @@ src = [
   "csrc/gemm/fp4/cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.cuh",
   "csrc/gemm/fp4/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cu",
   "csrc/gemm/fp4/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cuh",
-  "csrc/quantize/quantize_fp4_sfa.cu",
-  "csrc/quantize/quantize_fp4_sfa.cuh",
-  "csrc/dequantize_fp4_sfa.cu",
-  "csrc/dequantize_fp4_sfa.cuh",
 ]

@@ -12,7 +12,7 @@ paths.
 - `sfa_size_bytes(rows, dim)`
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
-- `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=0)`
+- `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
 - `nvfp4_gemm_residual_bf16(a_packed, b_packed, sfa, sfb, residual, alpha=1.0, out=None)`
 - `nvfp4_gemm_bias_gelu_bf16(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out=None)`
 - `nvfp4_gemm_bias_gelu_nvfp4(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out_packed=None, out_sfa=None)`
@@ -28,13 +28,21 @@ paths.
 - `sfb`: `torch.uint8`, CUTLASS SFB layout for `(N, K)`.
 - output: `torch.bfloat16`, shape `(M, N)`.
 - `K` must be divisible by 16.
-- Target: Blackwell `sm_120a`, CUDA 12.8+.
+- Targets: Blackwell `sm_110a` (Jetson AGX Thor, CUDA 13+) and `sm_120a`
+  (RTX Blackwell, CUDA 12.8+).
 
 `variant` selects the CUTLASS schedule:
 
+- `-1`: architecture-aware auto-dispatch (public default).
 - `0`: default `<128,128,256>` cooperative schedule.
 - `1`: widen `<128,256,128>` schedule, intended for very large `N`.
 - `2`: pingpong schedule for A/B testing shape-specific wins.
+
+The canonical linear API and FP4/SFA quantize/dequantize helpers are available
+on both SM110 and SM120. The residual, bias/GELU, FP4-output and Stream-K
+epilogues are currently SM120-only. SM110 runtimes compose the linear API with
+the production producers in `flashrt/fp4-fused-ops`; requesting an SM120-only
+epilogue on SM110 raises an explicit architecture error.
 
 ## Minimal Usage
 
@@ -70,6 +78,11 @@ python fp4-gemm/tests/test_fp4_gemm.py --backend installed --mode full \
   --artifact fp4-gemm/build/torch211-cxx11-cu128-x86_64-linux
 python fp4-gemm/benchmarks/benchmark.py --backend installed --mode headline \
   --artifact fp4-gemm/build/torch211-cxx11-cu128-x86_64-linux
+
+# Thor model-shape gate
+python fp4-gemm/tests/test_fp4_gemm.py --backend installed \
+  --mode thor-models \
+  --artifact fp4-gemm/build/torch211-cxx11-cu130-aarch64-linux
 ```
 
 The correctness reference dequantizes the same FP4/SFA and FP4/SFB inputs used

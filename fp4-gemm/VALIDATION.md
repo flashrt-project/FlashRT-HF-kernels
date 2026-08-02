@@ -1,6 +1,7 @@
 # Validation
 
-Local source validation on NVIDIA GeForce RTX 5090:
+Local source validation covers NVIDIA GeForce RTX 5090 (SM120) and NVIDIA
+Jetson AGX Thor (SM110).
 
 ```bash
 python fp4-gemm/tests/test_fp4_gemm.py \
@@ -11,8 +12,11 @@ python fp4-gemm/tests/test_fp4_gemm.py \
 
 Result:
 
-- `9/9` checks passed.
+- SM120 full gate: `24/24` checks passed, including all fused epilogues.
+- SM110 model-shape gate: `24/24` checks passed across PI0.5, GROOT, Cosmos
+  Edge, and LingBot VLA projection shapes.
 - Variants `0`, `1`, and `2` were checked.
+- SM110 additionally checks production auto-dispatch (`variant=-1`).
 - `nvfp4_gemm_bf16` is the canonical public API.
 - Correctness reference dequantizes the same FP4/SFA and FP4/SFB inputs used
   by the kernel, then computes PyTorch GEMM on those dequantized values.
@@ -44,7 +48,15 @@ shape/variant correctness rows were exact against the staged reference, and
 the public `nvfp4_gemm_bf16` wrapper was exact under
 `torch.compile(fullgraph=True)`.
 
-The release flake pins upstream kernel-builder commit
-`19aaa6421e674e9fecc352bbae6eab81d19a6bf4`, adding the eligible Torch 2.13
-cu130/cu132 variants. HF Jobs and a cold Hub load must pass before the rebuilt
+The SM110 release flake pins kernel-builder commit
+`d720fa90fb9cd92d1bc60a9dc5c55bef2aafabb8`, which includes CUTLASS 4.5
+support and the corrected CUTLASS 4.5.2 fixed-output hash. HF Jobs, the
+SM110 aarch64 artifact build, and cold Hub loads must pass before the rebuilt
 Hub release is considered complete.
+
+## Thor Native Parity
+
+The Tensor wrapper was compared against the same native FlashRT launchers on
+Thor with 20 warmup and 100 measured iterations. For production auto-dispatch
+across the six model shapes, wrapper/native latency ratio had median `1.019`
+and maximum `1.086`. Correctness was exact (`max_abs=mean_abs=p99_abs=0`).

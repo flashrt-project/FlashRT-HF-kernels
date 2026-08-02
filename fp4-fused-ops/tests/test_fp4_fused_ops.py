@@ -43,9 +43,19 @@ SHAPES = {
     "prefill_rows128_dim4096": (128, 4096),
 }
 
+THOR_MODEL_SHAPES = {
+    "pi05_action_rows51_dim2048": (51, 2048),
+    "pi05_action_rows51_dim8192": (51, 8192),
+    "groot_dit_rows51_dim1536": (51, 1536),
+    "groot_backbone_rows277_dim2048": (277, 2048),
+    "cosmos_edge_rows64_dim2048": (64, 2048),
+    "lingbot_action_rows105_dim2048": (105, 2048),
+}
+
 MODES = {
     "smoke": ["tiny_rows1_dim1024", "decode_rows10_dim2048"],
     "full": list(SHAPES),
+    "thor-models": list(THOR_MODEL_SHAPES),
 }
 
 
@@ -169,6 +179,8 @@ def alloc_fp4(ops, rows: int, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if (major, minor) == (11, 0):
+        return "11.0a"
     if major >= 12:
         return "12.0a"
     return f"{major}.{minor}"
@@ -206,6 +218,7 @@ def load_source_ops() -> SourceOps:
             "-O3",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
+            "--use_fast_math",
             "-DCUDA_KERNEL",
         ],
         verbose=False,
@@ -866,8 +879,9 @@ def main() -> int:
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
 
     results: list[CaseResult] = []
+    selected_shapes = THOR_MODEL_SHAPES if args.mode == "thor-models" else SHAPES
     for name in MODES[args.mode]:
-        rows, dim = SHAPES[name]
+        rows, dim = selected_shapes[name]
         results.extend(run_case(ops, name, rows, dim))
     results.extend(run_linear_nvfp4_checks(ops))
     results.extend(run_ncdhw_bf16_checks(ops))

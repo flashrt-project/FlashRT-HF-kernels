@@ -3,6 +3,11 @@
 FlashRT fused FP16-to-NVFP4 producer kernels for keeping low-bit transformer
 and diffuser paths continuous.
 
+The source kernels use the CUTLASS SM100-family block-scale layout shared by
+SM110 and SM120. Published artifacts are architecture-specific: RTX variants
+are built by HF Jobs, while the Thor `torch211-cxx11-cu130-aarch64-linux`
+variant is built and validated on Jetson AGX Thor before incremental upload.
+
 These kernels turn FP16 residual/norm/gated activations directly into NVFP4
 packed tensors plus CUTLASS-compatible SFA scale-factor buffers. They are meant
 to feed adjacent FP4 GEMM kernels without returning to PyTorch elementwise
@@ -67,6 +72,11 @@ packed_video, linear_scales = ops.rms_silu_nvfp4_ndhwc_bf16(video, gamma)
 ```bash
 python fp4-fused-ops/tests/test_fp4_fused_ops.py --backend source --mode full
 python fp4-fused-ops/benchmarks/benchmark.py --mode headline
+
+# Thor production-model rows
+python fp4-fused-ops/tests/test_fp4_fused_ops.py --backend installed \
+  --mode thor-models \
+  --artifact fp4-fused-ops/build/torch211-cxx11-cu130-aarch64-linux
 ```
 
 Validation checks:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -79,7 +80,8 @@ def bench_case(helpers, ops, native, name: str, shape: tuple[int, int, int], war
     torch_compile_us = measure(compiled_ref, warmup, iters)
     stream = torch.cuda.current_stream().cuda_stream
     results: list[BenchResult] = []
-    for variant in (0, 1, 2):
+    variants = (-1, 0, 1, 2) if torch.cuda.get_device_capability(0) == (11, 0) else (0, 1, 2)
+    for variant in variants:
         out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
         ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant)
         torch.cuda.synchronize()
@@ -89,11 +91,14 @@ def bench_case(helpers, ops, native, name: str, shape: tuple[int, int, int], war
             warmup,
             iters,
         )
+        native_variant = variant
+        if native_variant < 0:
+            native_variant = helpers.select_sm110_variant(shape)
         native_function = (
             native.fp4_w4a16_gemm_sm120_bf16out
-            if variant == 0
+            if native_variant == 0
             else native.fp4_w4a16_gemm_sm120_bf16out_widen
-            if variant == 1
+            if native_variant == 1
             else native.fp4_w4a16_gemm_sm120_bf16out_pingpong
         )
         native_us = measure(
@@ -140,14 +145,19 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
     parser.add_argument("--artifact", default=None)
-    parser.add_argument("--mode", choices=["smoke", "headline"], default="headline")
+    parser.add_argument(
+        "--mode", choices=["smoke", "headline", "thor-models"], default="headline"
+    )
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args()
 
     helpers = load_helpers()
-    sys.path.insert(0, str(ROOT.parent / "official" / "FlashRT"))
+    native_root = Path(
+        os.environ.get("FLASHRT_NATIVE_ROOT", str(ROOT.parent / "official" / "FlashRT"))
+    )
+    sys.path.insert(0, str(native_root))
     try:
         import flash_rt.flash_rt_kernels as native
     finally:
@@ -168,6 +178,8 @@ def main() -> int:
     }
     if args.mode == "smoke":
         shapes = {"small_m16_n128_k128": shapes["small_m16_n128_k128"]}
+    elif args.mode == "thor-models":
+        shapes = dict(helpers.SM110_SHAPES)
     results: list[BenchResult] = []
     for name, shape in shapes.items():
         results.extend(

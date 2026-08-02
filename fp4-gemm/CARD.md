@@ -34,7 +34,10 @@ y = ops.nvfp4_gemm_bf16(a, b, sfa, sfb)
 
 ## Notes
 
-- Blackwell `sm_120a`, CUDA 12.8+.
+- Blackwell `sm_110a` with CUDA 13+ and `sm_120a` with CUDA 12.8+.
 - Inputs are packed FP4 E2M1 plus CUTLASS Sm1xx SFA/SFB scale buffers.
 - Output is BF16.
-- `variant=0/1/2` exposes the default, widen, and pingpong schedules.
+- `variant=-1` is the architecture-aware production auto-dispatch;
+  `variant=0/1/2` expose diagnostic default, widen, and pingpong schedules.
+- The canonical BF16-output GEMM and FP4 pack/unpack helpers support SM110 and
+  SM120. Fused GEMM epilogues remain SM120-only and reject explicitly on SM110.

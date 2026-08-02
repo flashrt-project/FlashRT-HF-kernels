@@ -1,6 +1,8 @@
 # Source Sync
 
 - Upstream FlashRT source: `../official/FlashRT`
+- SM110 validation source commit:
+  `132049d7c3a3534fb7d35676cd726f39408b1af6`
 - Initial package date: June 20, 2026
 
 Copied source files:
@@ -21,11 +23,14 @@ Local packaging edits:
 - Public APIs accept CUDA tensors only; no raw pointers or stream arguments.
 - CUTLASS SM100/SM120 block-scaled layout support is treated as package scope,
   not as a test-only compiler define.
+- The package compile flags mirror the native FlashRT target, including
+  `--use_fast_math`. This is required for native performance parity in the
+  gated activation producers.
 
 Architecture and dependency assumptions:
 
-- CUDA 12.8+
-- NVIDIA Blackwell `sm_120a`
+- CUDA 12.8+ for SM120; CUDA 13+ for SM110
+- NVIDIA Blackwell `sm_110a` and `sm_120a`
 - `cutlass_4_0` from `kernel-builder` for CUTE/CUTLASS SFA layout helpers.
 
 Runtime constraints:

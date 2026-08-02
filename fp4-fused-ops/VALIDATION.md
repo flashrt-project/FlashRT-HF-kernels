@@ -19,6 +19,9 @@ Result:
 - Linear NVFP4 pack/scale bytes use a bit-level reference.
 - NCDHW RMSNorm, RMSNorm-SiLU and causal-cache outputs are checked against
   PyTorch and raw native launchers; fullgraph compile parity is covered.
+- RTX 5090 SM120 full gate: `46/46` checks passed.
+- Jetson AGX Thor SM110 model-shape gate: `58/58` checks passed across PI0.5,
+  GROOT, Cosmos Edge, and LingBot VLA rows.
 
 Representative correctness envelope from the full run:
 
@@ -50,7 +53,13 @@ Jobs workflow.
   - `torch212-cxx11-cu130-x86_64-linux`
   - `torch212-cxx11-cu132-x86_64-linux`
 
-Installed-artifact correctness through `get_kernel("flashrt/fp4-fused-ops")`
-should be rerun in a torch211 or torch212 CUDA environment. The local
-development environment used for the source tests is PyTorch 2.9.1+cu128,
-which intentionally does not match the uploaded torch211/torch212 variants.
+The SM110 `torch211-cxx11-cu130-aarch64-linux` artifact and cold Hub load are
+required release gates before claiming published Thor support.
+
+## Thor Native Parity
+
+The package compile flags match the native FlashRT target, including
+`--use_fast_math`. Without that flag, gated producers regress materially even
+though correctness passes. With the release flags, CUDA Graph wrapper/native
+latency over 30 production-model rows had median `1.001`, p95 `1.052`, and
+maximum `1.082` on Thor.

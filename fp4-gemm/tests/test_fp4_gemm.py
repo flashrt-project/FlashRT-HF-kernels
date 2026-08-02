@@ -39,6 +39,15 @@ SHAPES = {
     "mlp_tile_m64_n512_k512": (64, 512, 512),
 }
 
+SM110_SHAPES = {
+    "pi05_action_gate_up": (51, 16384, 2048),
+    "pi05_action_down": (51, 2048, 8192),
+    "groot_dit_qkv": (51, 4608, 1536),
+    "groot_backbone_gate_up": (277, 16384, 2048),
+    "cosmos_edge_action": (64, 9216, 2048),
+    "lingbot_action_gate_up": (105, 16384, 2048),
+}
+
 EPILOGUE_SHAPES = {
     "epilogue_tile": (64, 512, 512),
     "motus_up": (360, 14336, 3072),
@@ -48,6 +57,7 @@ EPILOGUE_SHAPES = {
 MODES = {
     "smoke": ["small_m16_n128_k128"],
     "full": list(SHAPES),
+    "thor-models": list(SM110_SHAPES),
 }
 
 
@@ -193,6 +203,8 @@ class InstalledOps:
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if (major, minor) == (11, 0):
+        return "11.0a"
     if major >= 12:
         return "12.0a"
     return f"{major}.{minor}"
@@ -208,14 +220,26 @@ def load_source_ops() -> SourceOps:
         raise RuntimeError(f"missing CUTLASS include path: {cutlass_include}")
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _current_arch_list())
     namespace = "fp4_gemm_source_test"
-    load(
-        name=namespace,
-        sources=[
-            str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
+    capability = torch.cuda.get_device_capability(0)
+    if capability == (11, 0):
+        gemm_sources = [
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_w4a16_gemm_sm100.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "sm110_dispatch.cu"),
+        ]
+        source_define = "-DFLASHRT_FP4_GEMM_SOURCE_SM110_ONLY"
+    else:
+        gemm_sources = [
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_w4a16_gemm_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cu"),
+        ]
+        source_define = None
+    load(
+        name=namespace,
+        sources=[
+            str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
+            *gemm_sources,
             str(PACKAGE / "csrc" / "quantize" / "quantize_fp4_sfa.cu"),
             str(PACKAGE / "csrc" / "dequantize_fp4_sfa.cu"),
         ],
@@ -224,12 +248,13 @@ def load_source_ops() -> SourceOps:
             str(cutlass_include),
             str(REGISTRATION_INCLUDE),
         ],
-        extra_cflags=["-O3", "-DCUDA_KERNEL"],
+        extra_cflags=[flag for flag in ["-O3", "-DCUDA_KERNEL", source_define] if flag],
         extra_cuda_cflags=[
             "-O3",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "-DCUDA_KERNEL",
+            *([source_define] if source_define else []),
         ],
         verbose=False,
     )
@@ -268,6 +293,15 @@ def check_bf16_threshold(max_abs: float, mean_abs: float, p99_abs: float, cosine
     return max_abs <= 0.125 and mean_abs <= 0.005 and p99_abs <= 0.03125 and cosine >= 0.999
 
 
+def select_sm110_variant(shape: tuple[int, int, int]) -> int:
+    _m, n, k = shape
+    if n >= 4 * k:
+        return 1
+    if n == 3 * k:
+        return 2
+    return 0
+
+
 def prepare_quantized(ops: SourceOps, m: int, n: int, k: int):
     a_fp16, b_fp16 = make_inputs(m, n, k, seed=7000 + m + n + k)
     a_packed, sfa = ops.alloc_fp4(m, k)
@@ -300,7 +334,8 @@ def run_case(ops: SourceOps, name: str, shape: tuple[int, int, int]) -> list[Met
     m, n, k = shape
     a_packed, b_packed, sfa, sfb, expected = prepare_quantized(ops, m, n, k)
     results: list[Metrics] = []
-    for variant in (0, 1, 2):
+    variants = (-1, 0, 1, 2) if torch.cuda.get_device_capability(0) == (11, 0) else (0, 1, 2)
+    for variant in variants:
         out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
         ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, 1.0, variant)
         torch.cuda.synchronize()
@@ -444,9 +479,11 @@ def main() -> int:
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
 
     results: list[Metrics] = []
+    selected_shapes = SM110_SHAPES if args.mode == "thor-models" else SHAPES
     for name in MODES[args.mode]:
-        results.extend(run_case(ops, name, SHAPES[name]))
-    if args.mode == "full":
+        results.extend(run_case(ops, name, selected_shapes[name]))
+    capability = torch.cuda.get_device_capability(0)
+    if args.mode == "full" and capability != (11, 0):
         for name, shape in EPILOGUE_SHAPES.items():
             results.extend(run_epilogue_case(ops, name, shape))
     compile_check = None
