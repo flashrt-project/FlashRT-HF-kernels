@@ -77,6 +77,9 @@ python fp4-fused-ops/benchmarks/benchmark.py --mode headline
 python fp4-fused-ops/tests/test_fp4_fused_ops.py --backend installed \
   --mode thor-models \
   --artifact fp4-fused-ops/build/torch211-cxx11-cu130-aarch64-linux
+python fp4-fused-ops/benchmarks/benchmark.py --backend installed \
+  --mode thor-models \
+  --artifact fp4-fused-ops/build/torch211-cxx11-cu130-aarch64-linux
 ```
 
 Validation checks:

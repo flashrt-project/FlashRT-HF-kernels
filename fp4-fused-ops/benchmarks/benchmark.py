@@ -316,6 +316,8 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=["source", "installed"], default="source")
+    parser.add_argument("--artifact", default=None)
     parser.add_argument(
         "--mode", choices=["smoke", "headline", "thor-models"], default="headline"
     )
@@ -327,7 +329,11 @@ def main() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     helpers = load_test_module()
-    ops = helpers.load_source_ops()
+    ops = (
+        helpers.load_source_ops()
+        if args.backend == "source"
+        else helpers.load_installed_ops(args.artifact)
+    )
     native_root = Path(os.environ.get("FLASHRT_NATIVE_ROOT", str(ROOT.parent / "official" / "FlashRT")))
     sys.path.insert(0, str(native_root))
     try:
@@ -344,6 +350,7 @@ def main() -> int:
 
     payload = {
         "mode": args.mode,
+        "backend": args.backend,
         "device": torch.cuda.get_device_name(),
         "torch": torch.__version__,
         "results": [asdict(item) for item in results],
