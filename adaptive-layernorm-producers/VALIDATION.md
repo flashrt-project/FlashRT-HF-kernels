@@ -30,6 +30,8 @@ Covered operators:
 | Operator | Check |
 |---|---|
 | `ada_layer_norm_quant_fp8_bf16` | FP8 reference contract |
+| `ada_layer_norm_quant_fp8_ptok_bf16` | per-token FP8 reference contract |
+| `ada_layer_norm_quant_fp8_ptok_table_bf16` | fused table-add/chunk-select FP8 reference contract |
 | `ada_layer_norm_quant_fp8_modfp8_bf16` | FP8 reference contract |
 | `awq_ada_layer_norm_quant_fp8_bf16` | FP8 reference contract |
 | `layer_norm_no_affine_quant_fp8_static_bf16` | FP8 reference contract |
@@ -57,3 +59,18 @@ python adaptive-layernorm-producers/benchmarks/benchmark.py --backend source --i
 ```
 
 Results are recorded in `benchmarks/RESULTS.md`.
+
+## NVIDIA Thor release gate
+
+The `torch211-cxx11-cu130-aarch64-linux` installed artifact is tested with the
+same full matrix. The two per-token producer entries additionally require:
+
+- direct `(rows, dim)` and table `(rows, chunks, dim)` modulation coverage;
+- bit-exact installed-wrapper versus raw registered-op output;
+- A-B-B-A timing on M51/D1536, M105/D1152, and M2520/D3072;
+- CUDA Graph replay; and
+- successful loading through the current Kernel Hub client and the legacy
+  `kernels<0.13` model mirror.
+
+The SM110 release passed all full-test rows and all six per-token raw/wrapper
+rows. The measured wrapper/raw range was `0.995-1.012`.

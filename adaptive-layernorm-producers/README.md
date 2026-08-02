@@ -25,6 +25,8 @@ The full FlashRT model runtime and serving pipeline live upstream at
 ## Available Functions
 
 - `ada_layer_norm_quant_fp8_bf16(x, scale, shift, act_scale, eps=1e-5, out=None)`
+- `ada_layer_norm_quant_fp8_ptok_bf16(x, scale, shift, act_scale, eps=1e-5, out=None)`
+- `ada_layer_norm_quant_fp8_ptok_table_bf16(x, temb, table, act_scale, shift_idx, scale_idx, eps=1e-5, out=None)`
 - `ada_layer_norm_quant_fp8_modfp8_bf16(x, scale_fp8, shift_fp8, scale_deq, shift_deq, act_scale, eps=1e-5, out=None)`
 - `awq_ada_layer_norm_quant_fp8_bf16(x, scale, shift, inv_s, act_scale, eps=1e-5, out=None)`
 - `ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift, eps=1e-5, packed=None, sf_swizzled=None)`
@@ -36,7 +38,13 @@ The full FlashRT model runtime and serving pipeline live upstream at
 ## Tensor Contract
 
 - `x`: contiguous CUDA `torch.bfloat16`, shape `(rows, dim)`.
-- `scale`, `shift`, `inv_s`: contiguous CUDA `torch.bfloat16`, shape `(dim,)`.
+- Broadcast `scale`, `shift`, and `inv_s`: contiguous CUDA
+  `torch.bfloat16`, shape `(dim,)`.
+- Per-token `scale` and `shift`: contiguous CUDA `torch.bfloat16`, shape
+  `(rows, dim)`.
+- Table form `temb`: contiguous CUDA `torch.bfloat16`, shape
+  `(rows, chunks, dim)`; `table`: contiguous CUDA `torch.float32`, shape
+  `(chunks, dim)`.
 - `scale_fp8`, `shift_fp8`: contiguous CUDA `torch.float8_e4m3fn`, shape `(dim,)`.
 - `scale_deq`, `shift_deq`, `act_scale`: CUDA `torch.float32` scalar tensors.
 - FP8 outputs use `torch.float8_e4m3fn`, shape `(rows, dim)`.
@@ -45,8 +53,9 @@ The full FlashRT model runtime and serving pipeline live upstream at
   layout. Allocate with `swizzled_sf_size(rows, dim)`.
 - `dim` must be even for FP8 outputs and divisible by 16 for NVFP4 outputs.
 - The package targets CUDA 12.8+ and Blackwell-class deployment paths.
-- `adaln_modulation6_bf16` takes FP32 `(6, dim)` parameters plus FP32
-  `(batch, 6 * dim)` modulation and returns six BF16 `(batch, dim)` tensors.
+- `adaln_modulation6_bf16` takes FP32 `(batch, sequence, 6, dim)` parameters
+  plus FP32 `(6, dim)` layer modulation and returns six BF16
+  `(batch, sequence, dim)` tensors.
 
 ## Minimal Usage
 
@@ -65,6 +74,27 @@ act_scale = torch.tensor([0.025], device="cuda", dtype=torch.float32)
 x_fp8 = ops.ada_layer_norm_quant_fp8_bf16(x, scale, shift, act_scale)
 ```
 
+Per-token modulation without materializing a broadcast buffer:
+
+```python
+ptok_scale = torch.zeros_like(x)
+ptok_shift = torch.zeros_like(x)
+x_fp8 = ops.ada_layer_norm_quant_fp8_ptok_bf16(
+    x, ptok_scale, ptok_shift, act_scale
+)
+```
+
+Fused host modulation table add and chunk selection:
+
+```python
+chunks = 6
+temb = torch.zeros((rows, chunks, dim), device="cuda", dtype=torch.bfloat16)
+table = torch.zeros((chunks, dim), device="cuda", dtype=torch.float32)
+x_fp8 = ops.ada_layer_norm_quant_fp8_ptok_table_bf16(
+    x, temb, table, act_scale, shift_idx=0, scale_idx=1
+)
+```
+
 Static-buffer usage for CUDA Graph capture:
 
 ```python
@@ -81,8 +111,8 @@ packed, sf = ops.ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift)
 Six-way DiT modulation:
 
 ```python
-params = torch.randn((6, dim), device="cuda", dtype=torch.float32)
-modulation = torch.randn((rows, 6 * dim), device="cuda", dtype=torch.float32)
+params = torch.randn((1, rows, 6, dim), device="cuda", dtype=torch.float32)
+modulation = torch.randn((6, dim), device="cuda", dtype=torch.float32)
 outputs = ops.adaln_modulation6_bf16(params, modulation)
 ```
 
@@ -101,3 +131,10 @@ against the eager reference.
 
 See `VALIDATION.md` and `benchmarks/RESULTS.md` for the current local RTX 5090
 source-build results.
+
+The NVIDIA Thor release variant
+`torch211-cxx11-cu130-aarch64-linux` was validated from the installed artifact
+over decode, DiT, vision, and 2K/4K video rows. The two per-token entry points
+were also compared directly with their raw registered ops using A-B-B-A
+timing; all six wrapper/raw rows were bit-exact and the measured ratio was
+`0.995-1.012`.
