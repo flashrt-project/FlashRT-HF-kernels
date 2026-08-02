@@ -23,14 +23,16 @@ PyTorch 2.11.0+cu130, CUDA 13.0, static buffers. Full 10-case correctness,
 
 | Region | M | FlashRT us | PyTorch reference us | vs reference |
 |---|---:|---:|---:|---:|
-| gated residual 1024/4096 | 1 | 27.19 | 294.12 | 10.82x |
-| gated residual 1024/4096 | 8 | 27.00 | 389.73 | 14.44x |
-| gated residual 1024/4096 | 21 | 45.47 | 522.26 | 11.49x |
-| gated residual 1024/4096 | 32 | 45.22 | 557.98 | 12.34x |
-| residual 512/2048 | 1 | 22.46 | 131.52 | 5.85x |
-| residual 512/2048 | 51 | 33.78 | 246.47 | 7.30x |
-| residual 512/2048 | 144 | 57.08 | 354.68 | 6.21x |
-| residual 512/2048 | 188 | 72.57 | 382.29 | 5.27x |
+| gated residual 1024/4096 | 1 | 26.76 | 295.65 | 11.05x |
+| gated residual 1024/4096 | 8 | 27.24 | 386.52 | 14.19x |
+| gated residual 1024/4096 | 21 | 45.12 | 520.87 | 11.54x |
+| gated residual 1024/4096 | 32 | 45.23 | 555.81 | 12.29x |
+| residual 512/2048 | 1 | 30.74 | 126.68 | 4.12x |
+| residual 512/2048 | 51 | 39.47 | 243.93 | 6.18x |
+| residual 512/2048 | 144 | 60.02 | 350.84 | 5.84x |
+| residual 512/2048 | 188 | 80.60 | 371.28 | 4.61x |
 
 The PyTorch column is the exact dequantized FP8 operation sequence, not a
 FlashRT-native baseline. Public model claims must use the model pipeline gate.
+The SM110 results use the deterministic synchronized down-projection backend;
+numbers from the earlier racing `cp.async` probe are invalid and superseded.

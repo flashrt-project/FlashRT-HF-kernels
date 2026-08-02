@@ -235,6 +235,9 @@ __device__ __forceinline__ void phase_gemm_up_fused_eup(
                     A0, A1, A2, A3, B0, B1);
             }
         }
+        // All warps must finish reading this stage before the next iteration
+        // reuses it for cp.async prefetch.
+        __syncthreads();
         compute_stage = next_stage;
     }
     asm volatile("cp.async.wait_all;\n" ::);
@@ -372,6 +375,9 @@ __device__ __forceinline__ void phase_gemm_dn_fused_bias(
                     A0, A1, A2, A3, B0, B1);
             }
         }
+        // The next prefetch wraps around the three-stage ring. Prevent it
+        // from racing warps that are still consuming the current stage.
+        __syncthreads();
         stage = (stage + 1) % STAGES;
     }
     asm volatile("cp.async.wait_all;\n" ::);
@@ -487,6 +493,107 @@ kernel_A_und(
     }
 }
 
+// SM110 uses an explicitly synchronized global-to-shared loop for the down
+// projection. The SM120 three-stage cp.async ring relies on scheduling details
+// that do not provide deterministic stage reuse on Thor.
+__device__ __forceinline__ void phase_gemm_dn_fused_bias_sm110(
+    const __nv_fp8_e4m3* __restrict__ up_fp8,
+    const __nv_fp8_e4m3* __restrict__ dn_w_NK,
+    const __nv_bfloat16* __restrict__ dn_bias,
+    const __nv_bfloat16* __restrict__ residual_in,
+    float dn_alpha,
+    __nv_bfloat16* __restrict__ y_out,
+    int M, int N_dn, int K_dn, int m_base, int n_base,
+    uint8_t* A_smem, uint8_t* B_smem)
+{
+    constexpr int BLOCK_K = BLOCK_K_DN;
+    constexpr int SMEM_K_PAD = SMEM_K_PAD_DN;
+    constexpr int N_ATOMS_PW = (BLOCK_N_DN / 8) / NUM_WARPS;
+    constexpr int K_ATOMS = BLOCK_K / 32;
+    const int t = threadIdx.x;
+    const int warp_id = t / 32;
+    const int lane = t % 32;
+    const int l = lane % 4;
+    const int h = lane / 4;
+    float acc[N_ATOMS_PW][4] = {0};
+
+    for (int k_base = 0; k_base < K_dn; k_base += BLOCK_K) {
+        constexpr int A_CHUNKS = M_ROWS_AT * (BLOCK_K / 16);
+        for (int idx = t; idx < A_CHUNKS; idx += THREADS) {
+            int row = idx / (BLOCK_K / 16);
+            int koff = (idx % (BLOCK_K / 16)) * 16;
+            int m_glob = m_base + row;
+            int k_glob = k_base + koff;
+            uint4 value = make_uint4(0, 0, 0, 0);
+            if (m_glob < M && k_glob < K_dn) {
+                value = *reinterpret_cast<const uint4*>(
+                    &up_fp8[m_glob * K_dn + k_glob]);
+            }
+            *reinterpret_cast<uint4*>(&A_smem[row * SMEM_K_PAD + koff]) = value;
+        }
+        constexpr int B_CHUNKS = BLOCK_N_DN * (BLOCK_K / 16);
+        for (int idx = t; idx < B_CHUNKS; idx += THREADS) {
+            int row = idx / (BLOCK_K / 16);
+            int koff = (idx % (BLOCK_K / 16)) * 16;
+            int n_glob = n_base + row;
+            int k_glob = k_base + koff;
+            uint4 value = make_uint4(0, 0, 0, 0);
+            if (n_glob < N_dn && k_glob < K_dn) {
+                value = *reinterpret_cast<const uint4*>(
+                    &dn_w_NK[n_glob * K_dn + k_glob]);
+            }
+            *reinterpret_cast<uint4*>(&B_smem[row * SMEM_K_PAD + koff]) = value;
+        }
+        __syncthreads();
+
+        #pragma unroll
+        for (int k_iter = 0; k_iter < K_ATOMS; ++k_iter) {
+            int kA0 = k_iter * 32 + 4 * l;
+            int kA2 = k_iter * 32 + 4 * l + 16;
+            int rA0 = h, rA1 = h + 8;
+            uint32_t A0 = *reinterpret_cast<const uint32_t*>(
+                &A_smem[rA0 * SMEM_K_PAD + kA0]);
+            uint32_t A1 = *reinterpret_cast<const uint32_t*>(
+                &A_smem[rA1 * SMEM_K_PAD + kA0]);
+            uint32_t A2 = *reinterpret_cast<const uint32_t*>(
+                &A_smem[rA0 * SMEM_K_PAD + kA2]);
+            uint32_t A3 = *reinterpret_cast<const uint32_t*>(
+                &A_smem[rA1 * SMEM_K_PAD + kA2]);
+            #pragma unroll
+            for (int n_atom = 0; n_atom < N_ATOMS_PW; ++n_atom) {
+                int co_n = warp_id * N_ATOMS_PW * 8 + n_atom * 8 + h;
+                uint32_t B0 = *reinterpret_cast<const uint32_t*>(
+                    &B_smem[co_n * SMEM_K_PAD + kA0]);
+                uint32_t B1 = *reinterpret_cast<const uint32_t*>(
+                    &B_smem[co_n * SMEM_K_PAD + kA2]);
+                mma_m16n8k32_e4m3(
+                    acc[n_atom][0], acc[n_atom][1],
+                    acc[n_atom][2], acc[n_atom][3],
+                    A0, A1, A2, A3, B0, B1);
+            }
+        }
+        __syncthreads();
+    }
+
+    #pragma unroll
+    for (int n_atom = 0; n_atom < N_ATOMS_PW; ++n_atom) {
+        int n_pair_base = n_base + warp_id * N_ATOMS_PW * 8 +
+                          n_atom * 8 + 2 * l;
+        int row0 = m_base + h, row1 = m_base + h + 8;
+        #pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            int row = (j < 2) ? row0 : row1;
+            int col = n_pair_base + (j & 1);
+            if (row < M && col < N_dn) {
+                float v = acc[n_atom][j] * dn_alpha;
+                v += __bfloat162float(dn_bias[col]);
+                v += __bfloat162float(residual_in[row * N_dn + col]);
+                y_out[row * N_dn + col] = __float2bfloat16(v);
+            }
+        }
+    }
+}
+
 __global__ void __launch_bounds__(THREADS, V5S_LAUNCH_MIN)
 kernel_B_und(
     const __nv_fp8_e4m3* __restrict__ up_fp8_scr,
@@ -509,7 +616,11 @@ kernel_B_und(
     if (cta < total_tiles) {
         int m_idx = cta / n_tiles_dn;
         int n_idx = cta % n_tiles_dn;
-            phase_gemm_dn_fused_bias(
+#if __CUDA_ARCH__ < 1200
+        phase_gemm_dn_fused_bias_sm110(
+#else
+        phase_gemm_dn_fused_bias(
+#endif
             up_fp8_scr, dn_w_NK, dn_bias, residual_in, dn_alpha,
             y_out,
             M, N_dn, K_dn,

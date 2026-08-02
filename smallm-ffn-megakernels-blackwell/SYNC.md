@@ -12,7 +12,9 @@ backend under a separate `build.toml` target. SM120 retains the original
 `kind::f8f6f4` MMA and fused software-grid-barrier path. SM110 uses the standard
 E4M3 MMA encoding and an ordered quantize, up-projection, and down-projection
 launch sequence because the original 288-CTA global barrier cannot make forward
-progress on Thor's residency envelope. The GEMM epilogues remain fused.
+progress on Thor's residency envelope. Its down projection uses an explicitly
+synchronized global-to-shared tile loop; the SM120 three-stage `cp.async` ring
+is not deterministic on Thor. The GEMM epilogues remain fused.
 
 The SM110 path is limited to the package's documented small-M contracts and is
 selected only on compute capability 11.0. It is not an SM120 binary relabeled as

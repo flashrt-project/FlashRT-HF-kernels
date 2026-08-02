@@ -50,6 +50,20 @@ def run(o, full):
         out = torch.empty_like(r)
         scr = torch.empty(m, 4096, device=dev, dtype=F8)
         got = o.gated(x, uw, ub, dinv, dw, db, g, r, 1.0, 1.0, 1.0, out, scr)
+        if torch.cuda.get_device_capability() == (11, 0):
+            first = got.clone()
+            first_scr = scr.clone()
+            repeated = o.gated(
+                x, uw, ub, dinv, dw, db, g, r,
+                1.0, 1.0, 1.0, out, scr
+            )
+            torch.cuda.synchronize()
+            assert torch.equal(first_scr, scr), (
+                f"gated M={m} intermediate is not deterministic on SM110"
+            )
+            assert torch.equal(first, repeated), (
+                f"gated M={m} output is not deterministic on SM110"
+            )
         h = f8(
             torch.nn.functional.gelu(
                 x.float() @ uw.float().T + ub.float(), approximate="tanh"
@@ -99,6 +113,18 @@ def run(o, full):
         got = o.residual(
             x, uinv, uw, ub, dinv, dw, db, r, 1.0, 1.0, 1.0, 1.0, split, out, xs, hs, b
         )
+        if torch.cuda.get_device_capability() == (11, 0):
+            first = got.clone()
+            first_xs = xs.clone()
+            first_hs = hs.clone()
+            repeated = o.residual(
+                x, uinv, uw, ub, dinv, dw, db, r,
+                1.0, 1.0, 1.0, 1.0, split, out, xs, hs, b
+            )
+            torch.cuda.synchronize()
+            assert torch.equal(first_xs, xs), f"residual M={m} input quant is not deterministic on SM110"
+            assert torch.equal(first_hs, hs), f"residual M={m} up projection is not deterministic on SM110"
+            assert torch.equal(first, repeated), f"residual M={m} down projection is not deterministic on SM110"
         qx = f8(x.float())
         qh = f8(
             torch.nn.functional.gelu(

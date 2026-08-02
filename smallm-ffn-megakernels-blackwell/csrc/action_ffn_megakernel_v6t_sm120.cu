@@ -213,6 +213,7 @@ kernel_A(
                                   A0, A1, A2, A3, B0, B1);
             }
         }
+        __syncthreads();
         stage = (stage + 1) % STAGES_UP;
         issue_stage = (issue_stage + 1) % STAGES_UP;
         k_issue += BLOCK_K_UP;
@@ -340,6 +341,7 @@ kernel_B(
                                   A0, A1, A2, A3, B0, B1);
             }
         }
+        __syncthreads();
         stage = (stage + 1) % STAGES_DN;
         issue_stage = (issue_stage + 1) % STAGES_DN;
         k_issue += BLOCK_K_DN;
