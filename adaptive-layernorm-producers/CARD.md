@@ -55,8 +55,10 @@ x_fp8 = ops.ada_layer_norm_quant_fp8_ptok_table_bf16(
 )
 ```
 
-Validated variants include `torch211-cxx11-cu130-aarch64-linux` for NVIDIA
-Thor (SM110). Runtime variant selection is handled by `get_kernel`.
+The `torch211-cxx11-cu130-aarch64-linux` variant is a native fat binary with
+SM87 (Jetson AGX Orin) and SM110a (Jetson AGX Thor) code objects. The SM110a
+path is runtime-validated on Thor; SM87 runtime validation remains pending on
+Orin hardware. Runtime variant selection is handled by `get_kernel`.
 
 Use `README.md` for tensor contracts and `VALIDATION.md` for correctness and
 benchmark status.

@@ -41,6 +41,8 @@ figures are retained; the direct row is not described as native-equivalent.
 - Runtime: PyTorch 2.11.0 + CUDA 13.0
 - Variant: `torch211-cxx11-cu130-aarch64-linux`
 - Source commit: `9b532b42ad71d0ef6bc79d1372e96910087faad4`
+- Artifact code objects: SM87 and SM110a; measurements below are SM110a
+- Kernel Hub `v1` artifact SHA256: `2b5542ae448332ebd4d1f2ca2f0030f88200061f8d2e64eb8581c314e7d7322c`
 
 The full installed-artifact correctness matrix passed. The two per-token
 producer entries were also measured against their raw registered ops. Outputs
@@ -48,9 +50,12 @@ were bit-exact in every row.
 
 | Op | Shape | Raw us | Wrapper us | Wrapper/raw | Graph wrapper/raw us |
 |---|---|---:|---:|---:|---:|
-| per-token | GROOT DiT M51 D1536 | 6.166 | 6.156 | 0.998 | 6.614 / 6.177 |
-| table per-token | GROOT DiT M51 D1536 | 6.163 | 6.150 | 0.998 | 6.389 / 6.369 |
-| per-token | vision M105 D1152 | 8.211 | 8.202 | 0.999 | 8.200 / 8.203 |
-| table per-token | vision M105 D1152 | 8.206 | 8.303 | 1.012 | 8.201 / 8.201 |
-| per-token | video M2520 D3072 | 229.456 | 228.353 | 0.995 | 215.813 / 215.879 |
-| table per-token | video M2520 D3072 | 216.166 | 216.511 | 1.002 | 216.722 / 216.269 |
+| per-token | GROOT DiT M51 D1536 | 6.154 | 6.148 | 0.999 | 6.211 / 6.224 |
+| table per-token | GROOT DiT M51 D1536 | 6.166 | 6.150 | 0.997 | 7.127 / 6.607 |
+| per-token | vision M105 D1152 | 8.204 | 8.207 | 1.000 | 8.203 / 8.377 |
+| table per-token | vision M105 D1152 | 8.210 | 8.210 | 1.000 | 8.204 / 8.703 |
+| per-token | video M2520 D3072 | 229.922 | 229.936 | 1.000 | 229.984 / 230.797 |
+| table per-token | video M2520 D3072 | 230.174 | 229.929 | 0.999 | 229.719 / 230.431 |
+
+The table reports the uploaded SM87+SM110a fat binary on Thor. SM87 is present
+as native cubin code but is not included in these runtime measurements.

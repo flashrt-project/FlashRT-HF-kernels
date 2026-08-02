@@ -132,9 +132,10 @@ against the eager reference.
 See `VALIDATION.md` and `benchmarks/RESULTS.md` for the current local RTX 5090
 source-build results.
 
-The NVIDIA Thor release variant
-`torch211-cxx11-cu130-aarch64-linux` was validated from the installed artifact
-over decode, DiT, vision, and 2K/4K video rows. The two per-token entry points
-were also compared directly with their raw registered ops using A-B-B-A
-timing; all six wrapper/raw rows were bit-exact and the measured ratio was
-`0.995-1.012`.
+The aarch64 release variant `torch211-cxx11-cu130-aarch64-linux` contains
+native SM87 and SM110a code objects. Its SM110a path was validated on NVIDIA
+Thor from the exact Hub-downloaded artifact over decode, DiT, vision, and
+2K/4K video rows. The two per-token entry points were also compared directly
+with their raw registered ops using A-B-B-A timing; all six wrapper/raw rows
+were bit-exact and the measured ratio was `0.997-1.000`. SM87 runtime
+validation remains pending on Jetson AGX Orin hardware.

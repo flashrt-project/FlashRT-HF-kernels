@@ -60,10 +60,11 @@ python adaptive-layernorm-producers/benchmarks/benchmark.py --backend source --i
 
 Results are recorded in `benchmarks/RESULTS.md`.
 
-## NVIDIA Thor release gate
+## NVIDIA aarch64 release gate
 
-The `torch211-cxx11-cu130-aarch64-linux` installed artifact is tested with the
-same full matrix. The two per-token producer entries additionally require:
+The `torch211-cxx11-cu130-aarch64-linux` artifact contains native SM87 and
+SM110a code objects. Its SM110a path is tested on NVIDIA Thor with the same
+full matrix. The two per-token producer entries additionally require:
 
 - direct `(rows, dim)` and table `(rows, chunks, dim)` modulation coverage;
 - bit-exact installed-wrapper versus raw registered-op output;
@@ -72,5 +73,8 @@ same full matrix. The two per-token producer entries additionally require:
 - successful loading through the current Kernel Hub client and the legacy
   `kernels<0.13` model mirror.
 
-The SM110 release passed all full-test rows and all six per-token raw/wrapper
-rows. The measured wrapper/raw range was `0.995-1.012`.
+The exact artifact downloaded from Kernel Hub `v1` passed all full-test rows
+on SM110a and all six per-token raw/wrapper rows. The measured wrapper/raw
+range was `0.997-1.000`. `cuobjdump --list-elf` confirms native `sm_87` and
+`sm_110a` cubins in the published shared object. An Orin runtime gate is still
+required before claiming SM87 execution or performance validation.
