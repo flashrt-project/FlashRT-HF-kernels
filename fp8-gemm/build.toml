@@ -1,7 +1,8 @@
 [general]
 name = "fp8-gemm"
-license = "Apache-2.0"
 version = 1
+edition = 5
+license = "Apache-2.0"
 backends = ["cuda"]
 
 [general.cuda]
@@ -13,37 +14,60 @@ repo-id = "flashrt/fp8-gemm"
 [torch]
 include = ["csrc"]
 src = [
-  "torch-ext/torch_binding.cpp",
-  "torch-ext/torch_binding.h",
+    "torch-ext/torch_binding.cpp",
+    "torch-ext/torch_binding.h",
 ]
 
-[kernel.fp8_gemm]
+[kernel.fp8_gemm_sm110]
 backend = "cuda"
-depends = ["torch", "cutlass_4_0"]
+cuda-capabilities = ["11.0a"]
+cuda-flags = [
+    "--expt-relaxed-constexpr",
+    "-O3",
+    "--use_fast_math",
+]
+cuda-minver = "13"
+depends = [
+    "torch",
+    "cutlass_4_5",
+]
 include = ["csrc"]
-cuda-minver = "12.8"
-cuda-capabilities = ["12.0a"]
 src = [
-  "csrc/fp8_gemv_m1_sm120.cu",
-  "csrc/fp8_gemv_m1_sm120.cuh",
-  "csrc/fp8_smallM_handtuned_sm120.cu",
-  "csrc/fp8_smallM_handtuned_sm120.cuh",
-  "csrc/fp8_smallM_handtuned_ldmatrix_sm120.cu",
-  "csrc/fp8_smallM_handtuned_ldmatrix_sm120.cuh",
-  "csrc/cutlass_sm120_block128_fp8_gemm.cu",
-  "csrc/cutlass_sm120_block128_fp8_gemm.cuh",
+    "csrc/gemm_types_sm110.h",
+    "csrc/cutlass_sm110_fp8_gemm.cu",
+    "csrc/cutlass_sm110_fp8_gemm.cuh",
 ]
 
 [kernel.fp8_gemm_sm89]
 backend = "cuda"
+cuda-capabilities = ["8.9"]
+cuda-minver = "12.8"
 depends = ["torch"]
 include = ["csrc"]
-cuda-minver = "12.8"
-cuda-capabilities = ["8.9"]
 src = [
-  "csrc/fp8_block128_gemm_mma_sm89.cu",
-  "csrc/fp8_block128_gemm_mma_sm89.cuh",
-  "csrc/fp8_bs_gemm_device.cuh",
-  "csrc/fp8_gemv_m1_sm89.cu",
-  "csrc/fp8_gemv_m1_sm89.cuh",
+    "csrc/fp8_block128_gemm_mma_sm89.cu",
+    "csrc/fp8_block128_gemm_mma_sm89.cuh",
+    "csrc/fp8_bs_gemm_device.cuh",
+    "csrc/fp8_gemv_m1_sm89.cu",
+    "csrc/fp8_gemv_m1_sm89.cuh",
+]
+
+[kernel.fp8_gemm]
+backend = "cuda"
+cuda-capabilities = ["12.0a"]
+cuda-minver = "12.8"
+depends = [
+    "torch",
+    "cutlass_4_0",
+]
+include = ["csrc"]
+src = [
+    "csrc/fp8_gemv_m1_sm120.cu",
+    "csrc/fp8_gemv_m1_sm120.cuh",
+    "csrc/fp8_smallM_handtuned_sm120.cu",
+    "csrc/fp8_smallM_handtuned_sm120.cuh",
+    "csrc/fp8_smallM_handtuned_ldmatrix_sm120.cu",
+    "csrc/fp8_smallM_handtuned_ldmatrix_sm120.cuh",
+    "csrc/cutlass_sm120_block128_fp8_gemm.cu",
+    "csrc/cutlass_sm120_block128_fp8_gemm.cuh",
 ]

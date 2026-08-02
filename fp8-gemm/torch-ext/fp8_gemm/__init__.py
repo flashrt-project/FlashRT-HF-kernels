@@ -97,6 +97,22 @@ def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         raise RuntimeError("m, n, and k must be positive")
     if k % 32 != 0:
         raise RuntimeError("k must be divisible by 32")
+    capability = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
+    if capability == (11, 0):
+        forced = {1: "sm110_sq_bf16", 2: "sm110_t1_bf16", 3: "sm110_wide_bf16"}
+        if variant not in {0, *forced}:
+            raise RuntimeError("SM110 variant must be 0 (auto), 1 (Sq), 2 (T1), or 3 (Wide)")
+        if n % 16 or k % 16:
+            raise RuntimeError("SM110 requires n and k divisible by 16")
+        if variant:
+            return forced[variant]
+        if n >= 8 * k:
+            return "sm110_t1_bf16" if m <= 128 else "sm110_wide_bf16"
+        if n == k and m >= 512:
+            return "sm110_sq_bf16" if k <= 1024 else "sm110_wide_bf16"
+        if n == k and m >= 128:
+            return "sm110_wide_bf16"
+        return "sm110_t1_bf16"
     if m == 1:
         if variant == 4:
             return "gemv_fp8_m1_w4"
@@ -151,7 +167,9 @@ def fp8_linear_bf16(
 
     ``input`` and ``weight`` must be FP8 E4M3 CUDA tensors with shapes
     ``(M, K)`` and ``(N, K)``. ``alpha`` is a host float, normally the product
-    of static per-tensor input and weight scales.
+    of static per-tensor input and weight scales. SM110 uses the production
+    CUTLASS Sq/T1/Wide dispatcher over full model row counts; SM120 uses the
+    hand-tuned M<=64 path.
     """
 
     if out is None:
@@ -184,7 +202,7 @@ def fp8_blockwise_linear_bf16(
     weight_scale: torch.Tensor,
     out: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Block-128 scaled FP8 linear with BF16 output on SM120."""
+    """Block-128 scaled FP8 linear with BF16 output on SM89/SM120."""
 
     if out is None:
         out = torch.empty(

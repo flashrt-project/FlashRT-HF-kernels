@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import os
+import statistics
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -32,11 +33,32 @@ SHAPES = {
     "small_m16_k4096_n4096": (16, 4096, 4096),
     "small_m32_k4096_n8192": (32, 4096, 8192),
     "small_m64_k512_n1024": (64, 512, 1024),
+    "pi05_action_qkv": (51, 2048, 2560),
+    "pi05_action_o": (51, 2048, 2048),
+    "pi05_action_gate_up": (51, 2048, 16384),
+    "pi05_action_down": (51, 8192, 2048),
+    "groot_dit_qkv": (51, 1536, 4608),
+    "groot_n17_llm_o": (277, 2048, 2048),
+    "groot_n17_llm_gate_up": (277, 2048, 16384),
+    "groot_n17_llm_down": (277, 8192, 2048),
+    "groot_n17_vit_o": (1024, 1024, 1024),
+    "cosmos_edge_action": (64, 2048, 9216),
+    "lingbot_vision_o": (1024, 1280, 1280),
+    "lingbot_action_gate_up": (105, 2048, 16384),
 }
 
 MODES = {
     "smoke": ["decode_m1_k4096_n2048", "small_m16_k4096_n4096"],
-    "headline": list(SHAPES),
+    "headline": [
+        "decode_m1_k4096_n2048",
+        "pi05_action_qkv",
+        "pi05_action_gate_up",
+        "pi05_action_down",
+        "groot_n17_llm_o",
+        "cosmos_edge_action",
+        "lingbot_action_gate_up",
+    ],
+    "thor-full": list(SHAPES),
 }
 
 
@@ -49,6 +71,17 @@ class Result:
     variant: int
     tile: str
     flashrt_us: float
+    flashrt_graph_us: float | None
+    package_best_graph_tile: str | None
+    package_best_graph_us: float | None
+    package_tiles_us: dict[str, dict[str, float]] | None
+    native_best_tile: str | None
+    native_best_us: float | None
+    native_best_graph_tile: str | None
+    native_best_graph_us: float | None
+    native_tiles_us: dict[str, dict[str, float]] | None
+    wrapper_vs_native: float | None
+    graph_vs_native: float | None
     torch_eager_us: float
     torch_compile_us: float | None
     speedup_vs_eager: float
@@ -77,6 +110,8 @@ class SourceOps:
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if (major, minor) == (11, 0):
+        return "11.0a"
     if major >= 12:
         return "12.0a"
     return f"{major}.{minor}"
@@ -87,17 +122,40 @@ def load_source_ops() -> SourceOps:
 
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _current_arch_list())
     namespace = "fp8_gemm_source_bench"
-    load(
-        name=namespace,
-        sources=[
-            str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
+    capability = torch.cuda.get_device_capability(0)
+    cutlass_include = Path(os.environ.get("CUTLASS_INCLUDE", ""))
+    if capability == (11, 0):
+        if not (cutlass_include / "cutlass" / "cutlass.h").is_file():
+            raise RuntimeError("set CUTLASS_INCLUDE for the SM110 source benchmark")
+        cuda_sources = [str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu")]
+        source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY"
+        extra_includes = [
+            str(cutlass_include),
+            str(cutlass_include.parent / "tools" / "util" / "include"),
+        ]
+    else:
+        cuda_sources = [
             str(PACKAGE / "csrc" / "fp8_gemv_m1_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_ldmatrix_sm120.cu"),
+        ]
+        source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM120_ONLY"
+        extra_includes = []
+    load(
+        name=namespace,
+        sources=[str(PACKAGE / "torch-ext" / "torch_binding.cpp"), *cuda_sources],
+        extra_include_paths=[
+            str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE), *extra_includes
         ],
-        extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
-        extra_cflags=["-O3", "-DCUDA_KERNEL"],
-        extra_cuda_cflags=["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL"],
+        extra_cflags=["-O3", "-DNDEBUG", "-DCUDA_KERNEL", source_define],
+        extra_cuda_cflags=[
+            "-O3", "-DNDEBUG", "--expt-relaxed-constexpr", "--use_fast_math",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+            "-U__CUDA_NO_HALF2_OPERATORS__",
+            "-DCUDA_KERNEL", source_define
+        ],
         verbose=False,
     )
     return SourceOps(namespace)
@@ -114,6 +172,19 @@ def load_installed_ops(artifact: str | None):
 
 
 def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
+    if torch.cuda.get_device_capability(0) == (11, 0):
+        forced = {1: "sm110_sq_bf16", 2: "sm110_t1_bf16", 3: "sm110_wide_bf16"}
+        if variant not in {0, *forced}:
+            raise RuntimeError("SM110 variant must be in [0, 3]")
+        if variant:
+            return forced[variant]
+        if n >= 8 * k:
+            return "sm110_t1_bf16" if m <= 128 else "sm110_wide_bf16"
+        if n == k and m >= 512:
+            return "sm110_sq_bf16" if k <= 1024 else "sm110_wide_bf16"
+        if n == k and m >= 128:
+            return "sm110_wide_bf16"
+        return "sm110_t1_bf16"
     if m == 1:
         if variant == 4:
             return "gemv_fp8_m1_w4"
@@ -185,6 +256,38 @@ def measure(fn, warmup: int, iters: int) -> float:
     return float(start.elapsed_time(end) * 1000.0 / iters)
 
 
+def measure_median(fn, warmup: int, iters: int, rounds: int = 5) -> float:
+    """Reduce clock/order bias without hiding Python-side launch behavior."""
+    return float(statistics.median(measure(fn, warmup, iters) for _ in range(rounds)))
+
+
+def capture_graph(fn, warmup: int) -> torch.cuda.CUDAGraph:
+    """Capture one static invocation and retain the graph for paired timing."""
+    for _ in range(warmup):
+        fn()
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        fn()
+    torch.cuda.synchronize()
+    return graph
+
+
+def measure_group(functions, warmup: int, iters: int, rounds: int = 7):
+    """Round-robin timing balances clock drift across equivalent entry points."""
+    names = list(functions)
+    samples = {name: [] for name in names}
+    for _ in range(warmup):
+        for fn in functions.values():
+            fn()
+    torch.cuda.synchronize()
+    for round_index in range(rounds):
+        offset = round_index % len(names)
+        for name in names[offset:] + names[:offset]:
+            samples[name].append(measure(functions[name], 0, iters))
+    return {name: float(statistics.median(values)) for name, values in samples.items()}
+
+
 def metrics(got, expected):
     diff = (got.float() - expected.float()).abs().flatten()
     return (
@@ -195,7 +298,18 @@ def metrics(got, expected):
     )
 
 
-def bench_case(ops, name: str, shape: tuple[int, int, int], variant: int, warmup: int, iters: int, compile_ref: bool):
+def load_native_reference():
+    root = os.environ.get("FLASHRT_NATIVE_ROOT")
+    if not root:
+        return None
+    sys.path.insert(0, root)
+    try:
+        return importlib.import_module("flash_rt.flash_rt_kernels")
+    finally:
+        sys.path.remove(root)
+
+
+def bench_case(ops, native, name: str, shape: tuple[int, int, int], variant: int, warmup: int, iters: int, compile_ref: bool):
     m, k, n = shape
     x, w = make_inputs(m, k, n, seed=3000 + m + k + n + variant)
     out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
@@ -205,7 +319,108 @@ def bench_case(ops, name: str, shape: tuple[int, int, int], variant: int, warmup
     max_abs, mean_abs, p99_abs, cos = metrics(got, expected)
     tile = ops.select_fp8_linear_tile(m, n, k, variant)
 
-    flashrt_us = measure(lambda: ops.fp8_linear_bf16(x, w, out=out, variant=variant), warmup, iters)
+    wrapper_invoke = lambda: ops.fp8_linear_bf16(x, w, out=out, variant=variant)
+    eager_functions = {"wrapper": wrapper_invoke}
+    graph_objects = {"wrapper": capture_graph(wrapper_invoke, warmup)}
+    package_forced_tiles = {}
+    if torch.cuda.get_device_capability(0) == (11, 0):
+        for forced_variant, forced_tile in {
+            1: "sm110_sq_bf16",
+            2: "sm110_t1_bf16",
+            3: "sm110_wide_bf16",
+        }.items():
+            invoke = lambda forced_variant=forced_variant: ops.fp8_linear_bf16(
+                x, w, out=out, variant=forced_variant
+            )
+            invoke()
+            torch.cuda.synchronize()
+            fmax, fmean, fp99, fcos = metrics(out, expected)
+            if fmax > 0.5 or fmean > 0.02 or fp99 > 0.25 or fcos < 0.999:
+                raise RuntimeError(
+                    f"package {forced_tile} failed correctness for {name}: "
+                    f"{fmax=}, {fmean=}, {fp99=}, {fcos=}"
+                )
+            key = f"package:{forced_tile}"
+            package_forced_tiles[forced_tile] = invoke
+            eager_functions[key] = invoke
+            graph_objects[key] = capture_graph(invoke, warmup)
+    package_best_graph_tile = None
+    package_best_graph_us = None
+    package_tiles_us = None
+    native_best_tile = None
+    native_best_us = None
+    native_best_graph_tile = None
+    native_best_graph_us = None
+    native_tiles_us = None
+    if native is not None and torch.cuda.get_device_capability(0) == (11, 0):
+        native_out = torch.empty_like(out)
+        candidates = [
+            ("sm110_sq_bf16", native.cutlass_fp8_sq_bf16out),
+            ("sm110_t1_bf16", native.cutlass_fp8_t1_bf16out),
+            ("sm110_wide_bf16", native.cutlass_fp8_wide_bf16out),
+        ]
+        native_invokes = {}
+        for tile_name, fn in candidates:
+            invoke = lambda fn=fn: fn(
+                x.data_ptr(), w.data_ptr(), native_out.data_ptr(),
+                m, n, k, 1.0, 0.0,
+                int(torch.cuda.current_stream().cuda_stream),
+            )
+            rc = invoke()
+            if rc != 0:
+                continue
+            torch.cuda.synchronize()
+            nmax, nmean, np99, ncos = metrics(native_out, expected)
+            if nmax > 0.5 or nmean > 0.02 or np99 > 0.25 or ncos < 0.999:
+                raise RuntimeError(
+                    f"native {tile_name} failed correctness for {name}: "
+                    f"{nmax=}, {nmean=}, {np99=}, {ncos=}"
+                )
+            key = f"native:{tile_name}"
+            native_invokes[tile_name] = invoke
+            eager_functions[key] = invoke
+            graph_objects[key] = capture_graph(invoke, warmup)
+        if native_invokes:
+            eager_times = measure_group(eager_functions, warmup, iters)
+            graph_times = measure_group(
+                {name: graph.replay for name, graph in graph_objects.items()},
+                warmup,
+                iters,
+            )
+            flashrt_us = eager_times["wrapper"]
+            flashrt_graph_us = graph_times["wrapper"]
+            package_tiles_us = {
+                tile_name: {
+                    "eager": eager_times[f"package:{tile_name}"],
+                    "graph": graph_times[f"package:{tile_name}"],
+                }
+                for tile_name in package_forced_tiles
+            } or None
+            if package_tiles_us:
+                package_best_graph_us, package_best_graph_tile = min(
+                    (times["graph"], tile_name)
+                    for tile_name, times in package_tiles_us.items()
+                )
+            native_tiles_us = {
+                tile_name: {
+                    "eager": eager_times[f"native:{tile_name}"],
+                    "graph": graph_times[f"native:{tile_name}"],
+                }
+                for tile_name in native_invokes
+            }
+            native_best_us, native_best_tile = min(
+                (times["eager"], tile_name)
+                for tile_name, times in native_tiles_us.items()
+            )
+            native_best_graph_us, native_best_graph_tile = min(
+                (times["graph"], tile_name)
+                for tile_name, times in native_tiles_us.items()
+            )
+    if native_tiles_us is None:
+        flashrt_us = measure_median(wrapper_invoke, warmup, iters)
+        flashrt_graph_us = measure_median(
+            graph_objects["wrapper"].replay, warmup, iters
+        )
     eager_us = measure(lambda: ref_fn(x, w), warmup, iters)
     compile_us = None
     if compile_ref:
@@ -225,6 +440,18 @@ def bench_case(ops, name: str, shape: tuple[int, int, int], variant: int, warmup
         variant=variant,
         tile=tile,
         flashrt_us=flashrt_us,
+        flashrt_graph_us=flashrt_graph_us,
+        package_best_graph_tile=package_best_graph_tile,
+        package_best_graph_us=package_best_graph_us,
+        package_tiles_us=package_tiles_us,
+        native_best_tile=native_best_tile,
+        native_best_us=native_best_us,
+        native_best_graph_tile=native_best_graph_tile,
+        native_best_graph_us=native_best_graph_us,
+        native_tiles_us=native_tiles_us,
+        wrapper_vs_native=(native_best_us / flashrt_us) if native_best_us else None,
+        graph_vs_native=(native_best_graph_us / flashrt_graph_us)
+        if native_best_graph_us else None,
         torch_eager_us=eager_us,
         torch_compile_us=compile_us,
         speedup_vs_eager=eager_us / flashrt_us,
@@ -250,19 +477,23 @@ def main() -> None:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
-    major, _minor = torch.cuda.get_device_capability(0)
-    if major < 12:
-        raise SystemExit("fp8-gemm requires Blackwell/SM120 for this package")
+    capability = torch.cuda.get_device_capability(0)
+    if capability not in {(11, 0), (12, 0)}:
+        raise SystemExit("fp8-gemm benchmark requires SM110 or SM120")
 
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
+    native = load_native_reference()
     rows: list[Result] = []
     for name in MODES[args.mode]:
         shape = SHAPES[name]
         variants = [0]
-        if shape[0] == 1:
+        if shape[0] == 1 and capability == (12, 0):
             variants = [0, 4, 8, 16]
         for variant in variants:
-            rows.append(bench_case(ops, name, shape, variant, args.warmup, args.iterations, args.compile_ref))
+            rows.append(bench_case(
+                ops, native, name, shape, variant,
+                args.warmup, args.iterations, args.compile_ref,
+            ))
 
     payload = {"rows": [asdict(row) for row in rows]}
     print(json.dumps(payload, indent=2, sort_keys=True))

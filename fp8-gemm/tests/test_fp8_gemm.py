@@ -37,6 +37,24 @@ SHAPES = {
     "small_m64_k512_n1024": (64, 512, 1024),
 }
 
+SM110_SHAPES = {
+    # PI0.5 / PI0 decoder and encoder projection families.
+    "pi05_action_qkv": (51, 2048, 2560),
+    "pi05_action_o": (51, 2048, 2048),
+    "pi05_action_gate_up": (51, 2048, 16384),
+    "pi05_action_down": (51, 8192, 2048),
+    # GROOT N1.6/N1.7 DiT, backbone, and vision rows.
+    "groot_dit_qkv": (51, 1536, 4608),
+    "groot_n17_llm_o": (277, 2048, 2048),
+    "groot_n17_llm_gate_up": (277, 2048, 16384),
+    "groot_n17_llm_down": (277, 8192, 2048),
+    "groot_n17_vit_o": (1024, 1024, 1024),
+    # Cosmos Edge and LingBot projection families.
+    "cosmos_edge_action": (64, 2048, 9216),
+    "lingbot_vision_o": (1024, 1280, 1280),
+    "lingbot_action_gate_up": (105, 2048, 16384),
+}
+
 MODES = {
     "smoke": ["decode_m1_k512_n512", "small_m8_k1024_n2048"],
     "headline": [
@@ -120,6 +138,8 @@ class SourceOps:
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if (major, minor) == (11, 0):
+        return "11.0a"
     return "12.0a" if (major, minor) == (12, 0) else f"{major}.{minor}"
 
 
@@ -153,6 +173,11 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "fp8_gemv_m1_sm89.cu"),
         ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM89_ONLY"
+    elif capability == (11, 0):
+        cuda_sources = [
+            str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu"),
+        ]
+        source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY"
     else:
         cuda_sources = [
             str(PACKAGE / "csrc" / "fp8_gemv_m1_sm120.cu"),
@@ -170,9 +195,14 @@ def load_source_ops() -> SourceOps:
             str(cutlass_include),
             str(cutlass_include.parent / "tools" / "util" / "include"),
         ],
-        extra_cflags=["-O3", "-DCUDA_KERNEL", source_define],
+        extra_cflags=["-O3", "-DNDEBUG", "-DCUDA_KERNEL", source_define],
         extra_cuda_cflags=[
-            "-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL", source_define
+            "-O3", "-DNDEBUG", "--expt-relaxed-constexpr", "--use_fast_math",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+            "-U__CUDA_NO_HALF2_OPERATORS__",
+            "-DCUDA_KERNEL", source_define
         ],
         verbose=False,
     )
@@ -190,6 +220,19 @@ def load_installed_ops(artifact: str | None):
 
 
 def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
+    if torch.cuda.get_device_capability(0) == (11, 0):
+        forced = {1: "sm110_sq_bf16", 2: "sm110_t1_bf16", 3: "sm110_wide_bf16"}
+        if variant not in {0, *forced}:
+            raise RuntimeError("SM110 variant must be in [0, 3]")
+        if variant:
+            return forced[variant]
+        if n >= 8 * k:
+            return "sm110_t1_bf16" if m <= 128 else "sm110_wide_bf16"
+        if n == k and m >= 512:
+            return "sm110_sq_bf16" if k <= 1024 else "sm110_wide_bf16"
+        if n == k and m >= 128:
+            return "sm110_wide_bf16"
+        return "sm110_t1_bf16"
     if m == 1:
         if variant == 4:
             return "gemv_fp8_m1_w4"
@@ -295,7 +338,8 @@ def run_residual_case(ops) -> Metrics:
     residual = torch.randn((1, n), device="cuda", dtype=torch.bfloat16) * 0.1
     expected = (residual.float() + reference(x, w, 1.0).float()).to(torch.bfloat16)
     got = residual.clone()
-    ops.fp8_linear_residual_bf16(x, w, got, alpha=1.0, variant=8)
+    variant = 0 if torch.cuda.get_device_capability(0) == (11, 0) else 8
+    ops.fp8_linear_residual_bf16(x, w, got, alpha=1.0, variant=variant)
     torch.cuda.synchronize()
     max_abs, mean_abs, p99_abs, cos = compare(got, expected)
     passed = check_threshold(max_abs, mean_abs, p99_abs, cos)
@@ -304,8 +348,12 @@ def run_residual_case(ops) -> Metrics:
         M=m,
         K=k,
         N=n,
-        variant=8,
-        tile="gemv_fp8_m1_resadd_w8",
+        variant=variant,
+        tile=(
+            "sm110_t1_bf16_residual"
+            if torch.cuda.get_device_capability(0) == (11, 0)
+            else "gemv_fp8_m1_resadd_w8"
+        ),
         max_abs=max_abs,
         mean_abs=mean_abs,
         p99_abs=p99_abs,
@@ -459,33 +507,47 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
     capability = torch.cuda.get_device_capability(0)
-    if capability not in {(8, 9), (12, 0)}:
+    if capability not in {(8, 9), (11, 0), (12, 0)}:
         raise SystemExit(
-            "fp8-gemm source tests require SM89 or SM120; "
+            "fp8-gemm source tests require SM89, SM110, or SM120; "
             f"got SM{capability[0]}{capability[1]}"
         )
 
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     rows = []
-    if capability == (12, 0):
+    if capability in {(11, 0), (12, 0)}:
         rows.extend(run_case(ops, name, SHAPES[name]) for name in MODES[args.mode])
         rows.append(run_residual_case(ops))
-    blockwise_shapes = [
-        ("blockwise_decode", (1, 1024, 1024)),
-        ("blockwise_action", (51, 1536, 1536)),
-    ]
-    if args.mode == "full":
-        blockwise_shapes += [
-            ("blockwise_groot", (277, 2048, 2048)),
-            ("blockwise_vision", (1024, 1152, 1152)),
-            ("blockwise_video", (2520, 3072, 3072)),
-            ("blockwise_qwen_mlp", (128, 4096, 12288)),
+    if capability == (11, 0) and args.mode == "full":
+        rows.extend(
+            run_case(ops, name, shape) for name, shape in SM110_SHAPES.items()
+        )
+        rows.extend(
+            run_case(
+                ops,
+                f"sm110_forced_variant_{variant}",
+                SM110_SHAPES["pi05_action_gate_up"],
+                variant,
+            )
+            for variant in (1, 2, 3)
+        )
+    if capability in {(8, 9), (12, 0)}:
+        blockwise_shapes = [
+            ("blockwise_decode", (1, 1024, 1024)),
+            ("blockwise_action", (51, 1536, 1536)),
         ]
-    rows.extend(
-        run_blockwise_case(ops, name, shape)
-        for name, shape in blockwise_shapes
-    )
-    run_blockwise_compile_case(ops)
+        if args.mode == "full":
+            blockwise_shapes += [
+                ("blockwise_groot", (277, 2048, 2048)),
+                ("blockwise_vision", (1024, 1152, 1152)),
+                ("blockwise_video", (2520, 3072, 3072)),
+                ("blockwise_qwen_mlp", (128, 4096, 12288)),
+            ]
+        rows.extend(
+            run_blockwise_case(ops, name, shape)
+            for name, shape in blockwise_shapes
+        )
+        run_blockwise_compile_case(ops)
     if capability == (8, 9):
         for m, n, k in [
             (1, 128, 128), (16, 512, 1024), (31, 1536, 1536),

@@ -66,14 +66,50 @@ python fp8-gemm/benchmarks/benchmark.py \
 Result: all public rows passed. Headline rows are recorded in
 `benchmarks/RESULTS.md`.
 
-## Current Scope Boundary
+## Architecture Scope Boundary
 
-Public v1 supports `M=1` and `2 <= M <= 64`.
+On SM120, the public per-tensor path supports `M=1` and `2 <= M <= 64`.
+The blockwise path retains its independent unrestricted-M contract.
 
-M=128 is intentionally not exposed in v1. The correct tile tested locally did
-not meet the performance bar, and an alternate big tile returned non-zero
-status for the tested public row. This remains an internal tuning item rather
-than a public API.
+On SM110, the public per-tensor path uses the production CUTLASS Sq/T1/Wide
+family and supports the validated model-shape matrix. The current full sweep
+covers `M in {1,8,16,32,51,64,105,277,1024}` and representative `K,N` rows
+from PI0.5, GROOT N1.6/N1.7, Cosmos Edge, and LingBot VLA. SM110 blockwise
+scaling is not claimed.
+
+## Thor SM110 Increment
+
+Validated August 2, 2026:
+
+- GPU: NVIDIA Thor, compute capability 11.0;
+- PyTorch: 2.11.0+cu130;
+- CUDA: 13.0;
+- CUTLASS: 4.5.2, matching the current `kernel-builder` `cutlass_4_5`
+  dependency;
+- pinned builder: `e9152aa24e0d99eca255ca9f1beb996de32f9ca4`;
+- source correctness: 23/23;
+- locally installed aarch64 artifact correctness: 23/23;
+- `torch.compile(fullgraph=True)`: exact output parity;
+- CUDA Graph capture/replay: exact output parity;
+- original SM120 source regression on RTX 5090: 14/14.
+
+The 23 Thor rows include 20 production auto-dispatch checks and three forced
+Sq/T1/Wide diagnostics. Ordinary GEMMs were bitwise equal to the FP32
+accumulation reference after BF16 output conversion. The residual row passed
+with `max_abs=0.0625`, `p99_abs=0.0625`, and cosine `0.9999958` under the
+documented BF16 residual contract.
+
+Source-to-installed-artifact A-B-B-A performance parity passed over 17 public
+auto-dispatch shapes: median artifact/source `0.9996`, p95/max `1.0068`.
+Comparisons against the original FlashRT pointer entry are reported separately
+in `benchmarks/RESULTS.md`.
+
+Before the SM110 update was published, the existing Thor pipeline dependency
+set was cold-loaded from Hub using both `kernels==0.16.0` and
+`kernels==0.12.3`: 20/20 package imports passed for each client. The Thor host
+required `HF_ENDPOINT=https://hf-mirror.com`; direct access to
+`huggingface.co` timed out, so official-endpoint cold loading remains a
+post-publication check on a host with direct Hub access.
 
 ## HF Jobs Publish Status
 
@@ -87,10 +123,10 @@ workflow.
   - `torch212-cxx11-cu130-x86_64-linux`
   - `torch212-cxx11-cu132-x86_64-linux`
 
-Installed-artifact correctness through `get_kernel("flashrt/fp8-gemm")`
-should be rerun in a torch211 or torch212 CUDA environment. The local
-development environment used for the source tests is PyTorch 2.9.1+cu128,
-which intentionally does not match the uploaded torch211/torch212 variants.
+The existing SM120 Hub variants remain published. The new
+`torch211-cxx11-cu130-aarch64-linux` SM110 artifact is not included in the
+older Hub revision above; it must be published only after the clean-commit
+artifact rebuild and cold-cache checks.
 
 ## SM89 Increment
 

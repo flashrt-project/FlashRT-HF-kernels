@@ -24,8 +24,8 @@ python fp8-gemm/tests/test_fp8_gemm.py --backend source --mode full
 
 Result: 8/8 rows passed. Metrics recorded: max absolute error, mean absolute
 error, p99 absolute error, cosine similarity, dtype, and tolerance. Public v1
-scope is `M=1` decode and `2 <= M <= 64` small-M rows. M=128 is not exposed in
-v1 because it needs separate performance-positive tile tuning.
+SM120 scope is `M=1` decode and `2 <= M <= 64` small-M rows. SM110 uses a
+separate full-row CUTLASS dispatcher described below.
 
 ## Headline Rows
 
@@ -80,5 +80,41 @@ correctness sweep remains the release gate.
 
 - Source correctness: passed.
 - Source benchmark/tile sweep: passed for v1 public scope.
-- Installed-artifact correctness: pending after HF Jobs build.
-- Hub artifact benchmark: pending after upload.
+- Existing SM120 installed artifacts: published.
+- SM110 local installed artifact: correctness, compile, graph, and parity
+  passed.
+- SM110 Hub artifact: pending clean-commit rebuild and upload.
+
+## NVIDIA Thor SM110 Results
+
+Validated August 2, 2026 on NVIDIA Thor with PyTorch 2.11.0+cu130, CUDA 13.0,
+CUTLASS 4.5.2, and a locally installed
+`torch211-cxx11-cu130-aarch64-linux` artifact. Timings are CUDA Graph replay
+latencies. `Native` is the independently loaded original FlashRT pointer API;
+the ratio is installed artifact / native, so values above 1 are slower.
+
+| Workload `(M,K,N)` | Auto tile | Artifact us | Native us | Artifact/native | Correctness |
+| --- | --- | ---: | ---: | ---: | --- |
+| decode `(1,4096,2048)` | T1 | 16.4 | 16.4 | 1.001 | pass |
+| decode-wide `(1,4096,8192)` | T1 | 49.2 | 49.2 | 1.001 | pass |
+| small-M `(16,4096,4096)` | T1 | 24.0 | 23.8 | 1.011 | pass |
+| small-M `(32,4096,8192)` | T1 | 42.3 | 46.1 | 0.917 | pass |
+| small-M `(64,512,1024)` | T1 | 6.5 | 6.4 | 1.003 | pass |
+| PI0.5 QKV `(51,2048,2560)` | T1 | 12.3 | 12.3 | 1.000 | pass |
+| PI0.5 O `(51,2048,2048)` | T1 | 10.5 | 10.5 | 1.008 | pass |
+| PI0.5 gate/up `(51,2048,16384)` | T1 | 138.6 | 130.9 | 1.059 | pass |
+| PI0.5 down `(51,8192,2048)` | T1 | 22.6 | 22.6 | 0.999 | pass |
+| GROOT DiT QKV `(51,1536,4608)` | T1 | 14.4 | 14.4 | 1.000 | pass |
+| GROOT N1.7 O `(277,2048,2048)` | Wide | 17.4 | 17.3 | 1.003 | pass |
+| GROOT N1.7 gate/up `(277,2048,16384)` | Wide | 171.0 | 171.3 | 0.998 | pass |
+| GROOT N1.7 down `(277,8192,2048)` | T1 | 58.4 | 56.3 | 1.037 | pass |
+| GROOT vision O `(1024,1024,1024)` | Sq | 12.3 | 12.3 | 1.000 | pass |
+| Cosmos Edge action `(64,2048,9216)` | T1 | 24.6 | 24.6 | 1.001 | pass |
+| LingBot vision O `(1024,1280,1280)` | Wide | 16.4 | 16.4 | 1.000 | pass |
+| LingBot action gate/up `(105,2048,16384)` | T1 | 143.4 | 145.4 | 0.986 | pass |
+
+The stable PI0.5 gate/up row is 5.9% slower than the old native extension and
+is retained explicitly rather than averaged away. It remains within the
+internal per-path 10% release blocker, while source-to-artifact packaging
+parity itself passed with p95/max 1.0068. No speedup claim is derived from rows
+where dynamic Thor clocks made the artifact appear faster than native.

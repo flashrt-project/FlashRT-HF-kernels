@@ -4,7 +4,9 @@ FlashRT native CUDA FP8 GEMV/GEMM kernels for low-latency transformer and
 diffuser linear layers.
 
 The block-128 scaled API supports Ada `sm_89` and Blackwell `sm_120a`.
-Per-tensor decode and small-M APIs target Blackwell `sm_120a`.
+The per-tensor API supports Blackwell `sm_110a` (Jetson AGX Thor) and
+`sm_120a`. SM110 uses the production FlashRT Sq/T1/Wide CUTLASS family and has
+been swept across PI0.5, GROOT, Cosmos Edge, and LingBot VLA projection shapes.
 
 ## Functions
 
@@ -12,5 +14,8 @@ Per-tensor decode and small-M APIs target Blackwell `sm_120a`.
 - `fp8_linear_residual_bf16(input, weight, residual, alpha=1.0, variant=0)`
 - `fp8_blockwise_linear_bf16(input, weight, input_scale, weight_scale, out=None)`
 - `select_fp8_linear_tile(m, n, k, variant=0)`
+
+On SM110, keep `variant=0` for the tuned public dispatcher. Variants `1`, `2`,
+and `3` force Sq, T1, and Wide respectively for diagnostics.
 
 See the repository README for shape contracts, validation status, and examples.

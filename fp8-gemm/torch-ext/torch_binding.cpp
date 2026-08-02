@@ -12,15 +12,21 @@
 #include <c10/cuda/CUDAGuard.h>
 #endif
 
-#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
+#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
+    !defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
 #include "fp8_gemv_m1_sm120.cuh"
 #include "fp8_smallM_handtuned_ldmatrix_sm120.cuh"
 #include "fp8_smallM_handtuned_sm120.cuh"
 #include "cutlass_sm120_block128_fp8_gemm.cuh"
 #endif
-#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY) && \
+    !defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
 #include "fp8_block128_gemm_mma_sm89.cuh"
 #include "fp8_gemv_m1_sm89.cuh"
+#endif
+#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
+    !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#include "cutlass_sm110_fp8_gemm.cuh"
 #endif
 #include "registration.h"
 #include "torch_binding.h"
@@ -28,6 +34,8 @@
 namespace {
 
 using KernelFn = int (*)(const void*, const void*, void*, int, int, int, float, cudaStream_t);
+using Sm110KernelFn = int (*)(void*, void*, void*, int, int, int, float, float,
+                              cudaStream_t);
 
 void check_cuda_contiguous(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.is_cuda(), name, " must be a CUDA tensor");
@@ -80,8 +88,6 @@ void check_common(
               "out must have shape (input.shape[0], weight.shape[0])");
   TORCH_CHECK(input.size(1) % 32 == 0,
               "K must be divisible by 32 for FP8 tensor-core/GEMV kernels");
-  TORCH_CHECK(input.size(0) == 1 || input.size(0) <= 64,
-              "only M=1 decode or 2 <= M <= 64 small-M rows are supported");
 }
 
 std::string tile_name_for_shape(int M, int N, int K, int variant) {
@@ -130,7 +136,8 @@ std::string tile_name_for_shape(int M, int N, int K, int variant) {
 }
 
 KernelFn kernel_for_tile(std::string const& tile, bool residual) {
-#if defined(CUDA_KERNEL) && !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
+#if defined(CUDA_KERNEL) && !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
+    !defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
   namespace gemv = flash_rt::gemm::gemv_m1;
   namespace hand = flash_rt::gemm::smallM_hand;
   namespace ld = flash_rt::gemm::smallM_ld;
@@ -163,6 +170,40 @@ KernelFn kernel_for_tile(std::string const& tile, bool residual) {
   TORCH_CHECK(false, "unsupported FP8 GEMM tile: ", tile);
 }
 
+const char* sm110_tile_name_for_shape(int M, int N, int K, int variant) {
+  if (variant == 1) return "sm110_sq_bf16";
+  if (variant == 2) return "sm110_t1_bf16";
+  if (variant == 3) return "sm110_wide_bf16";
+  // Thor sweep envelope (PI0.5/GROOT/Cosmos Edge/LingBot): T1 wins
+  // small/mid-M expansion and projection paths, Wide wins larger-row
+  // expansions and large square projections, and Sq wins smaller square
+  // vision projections. The forced variants remain available for diagnostics.
+  if (N >= 8 * K) return M <= 128 ? "sm110_t1_bf16" : "sm110_wide_bf16";
+  if (N == K && M >= 512) {
+    return K <= 1024 ? "sm110_sq_bf16" : "sm110_wide_bf16";
+  }
+  if (N == K && M >= 128) {
+    return "sm110_wide_bf16";
+  }
+  return "sm110_t1_bf16";
+}
+
+Sm110KernelFn sm110_kernel_for_shape(int M, int N, int K, int variant) {
+#if defined(CUDA_KERNEL) && !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
+    !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+  const char* tile = sm110_tile_name_for_shape(M, N, K, variant);
+  if (std::string(tile) == "sm110_wide_bf16") return &cutlass_fp8_wide_bf16out;
+  if (std::string(tile) == "sm110_t1_bf16") return &cutlass_fp8_t1_bf16out;
+  return &cutlass_fp8_sq_bf16out;
+#else
+  (void)M;
+  (void)N;
+  (void)K;
+  (void)variant;
+  TORCH_CHECK(false, "SM110 FP8 GEMM source is not present in this build");
+#endif
+}
+
 void launch(
     torch::Tensor const& input,
     torch::Tensor const& weight,
@@ -178,30 +219,47 @@ void launch(
   if (residual) {
     TORCH_CHECK(M == 1, "fp8_linear_residual_bf16 supports only M=1");
   }
-  const std::string tile = tile_name_for_shape(M, N, K, variant);
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto* props = at::cuda::getDeviceProperties(input.get_device());
-  TORCH_CHECK(props->major == 12 && props->minor == 0,
-              "fp8_linear_bf16 and fp8_linear_residual_bf16 require SM120; "
-              "use fp8_blockwise_linear_bf16 on SM89; got SM",
+  TORCH_CHECK((props->major == 11 && props->minor == 0) ||
+                  (props->major == 12 && props->minor == 0),
+              "fp8_linear_bf16 requires SM110 or SM120; got SM",
               props->major, props->minor);
-#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
-  TORCH_CHECK(false, "per-tensor FP8 APIs are not present in the SM89 source-test build");
-#else
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  KernelFn fn = kernel_for_tile(tile, residual);
-  const int rc = fn(
-      input.data_ptr(),
-      weight.data_ptr(),
-      out.data_ptr(),
-      M,
-      N,
-      K,
-      static_cast<float>(alpha),
-      stream);
-  TORCH_CHECK(rc == 0, tile, " failed with rc=", rc);
+  if (props->major == 11) {
+    TORCH_CHECK(variant >= 0 && variant <= 3,
+                "SM110 variant must be 0 (auto), 1 (Sq), 2 (T1), or 3 (Wide)");
+    TORCH_CHECK(N % 16 == 0 && K % 16 == 0,
+                "SM110 CUTLASS FP8 GEMM requires N and K divisible by 16");
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
+    defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+    TORCH_CHECK(false, "SM110 FP8 GEMM source is not present in this build");
+#else
+    Sm110KernelFn fn = sm110_kernel_for_shape(M, N, K, variant);
+    const int rc = fn(input.data_ptr(), weight.data_ptr(), out.data_ptr(),
+                      M, N, K, static_cast<float>(alpha),
+                      residual ? 1.0f : 0.0f, stream);
+    TORCH_CHECK(rc == 0, sm110_tile_name_for_shape(M, N, K, variant),
+                " failed with rc=", rc);
 #endif
+  } else {
+    TORCH_CHECK(M <= 64,
+                "SM120 per-tensor FP8 path supports only M <= 64; got M=", M);
+    if (residual) {
+      TORCH_CHECK(M == 1, "SM120 residual path supports only M=1");
+    }
+    const std::string tile = tile_name_for_shape(M, N, K, variant);
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
+    defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
+    TORCH_CHECK(false, "SM120 per-tensor FP8 source is not present in this build");
+#else
+    KernelFn fn = kernel_for_tile(tile, residual);
+    const int rc = fn(input.data_ptr(), weight.data_ptr(), out.data_ptr(),
+                      M, N, K, static_cast<float>(alpha), stream);
+    TORCH_CHECK(rc == 0, tile, " failed with rc=", rc);
+#endif
+  }
 #else
   TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
 #endif
@@ -267,7 +325,8 @@ void fp8_blockwise_linear_bf16(
               props->major, props->minor);
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
   if (props->major == 8) {
-#if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY) || \
+    defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM89 blockwise kernels are not present in this source-test build");
 #else
     int rc;
@@ -303,7 +362,8 @@ void fp8_blockwise_linear_bf16(
     TORCH_CHECK(rc == 0, "SM89 blockwise FP8 linear failed with rc=", rc);
 #endif
   } else {
-#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY)
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
+    defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM120 blockwise kernel is not present in this source-test build");
 #else
     flash_rt::gemm::fp8_block128_gemm_cutlass_sm120_bf16out(
@@ -362,7 +422,8 @@ void fp8_blockwise_swiglu_quantize_fp8(
   TORCH_CHECK(props->major == 8 && props->minor == 9,
               "fp8_blockwise_swiglu_quantize_fp8 requires SM89; got SM",
               props->major, props->minor);
-#if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY) || \
+    defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
   TORCH_CHECK(false, "SM89 fused producer is not present in this source-test build");
 #else
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();

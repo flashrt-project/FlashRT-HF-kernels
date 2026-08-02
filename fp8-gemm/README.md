@@ -1,7 +1,7 @@
 # fp8-gemm
 
 FlashRT native CUDA FP8 GEMV/GEMM kernels for low-latency transformer and
-diffuser linear layers on NVIDIA Ada SM89 and Blackwell SM120 GPUs.
+diffuser linear layers on NVIDIA Ada SM89 and Blackwell SM110/SM120 GPUs.
 
 This package exposes the hand-tuned FP8 E4M3 decode and small-M kernels as
 Tensor APIs for Hugging Face Kernel Hub. It is intended for model runtimes that
@@ -24,9 +24,17 @@ Tensor contract:
 - `residual`: `torch.bfloat16`, shape `(1, N)` or `(N,)`, only supported for
   the `M=1` decode GEMV path.
 - `K % 32 == 0`.
-- `M == 1` uses dedicated GEMV. `2 <= M <= 64` uses small-M GEMM tiles.
-- The per-tensor `fp8_linear_*` APIs target `sm_120a`; these kernels use
-  Blackwell FP8 MMA instructions that are not valid for SM89.
+- On SM120, `M == 1` uses dedicated GEMV and `2 <= M <= 64` uses small-M
+  GEMM tiles.
+- On SM110 (Jetson AGX Thor), the per-tensor API uses the production FlashRT
+  CUTLASS Sq/T1/Wide family and supports the validated model-shape matrix from
+  decode through large vision/backbone rows. `N` and `K` must be divisible by
+  16.
+- SM110 `variant=0` is the production auto dispatcher. Diagnostic variants are
+  `1=Sq`, `2=T1`, and `3=Wide`; they are correctness-tested but should not be
+  pinned by model integrations without a shape-specific benchmark.
+- The per-tensor kernels use Blackwell FP8 MMA instructions and are not valid
+  for SM89. SM89 support is provided by the blockwise API below.
 - `alpha` is a host float. For per-tensor FP8 quantization, pass
   `float(input_scale * weight_scale)` from your static calibration metadata.
 
@@ -42,7 +50,8 @@ The blockwise API uses a separate contract:
   `mma.sync.aligned.m16n8k32` GEMM/GEMV implementation.
 - On SM120, it dispatches to the production FlashRT CUTLASS block-scaled
   implementation.
-- Other architectures are rejected explicitly.
+- SM110 is intentionally not claimed by the blockwise API; use the per-tensor
+  static-scale path there. Other architectures are rejected explicitly.
 
 The fused SM89 producer accepts FP8 `(M,K)` input, FP8 `(2*N,K)` gate/up
 weight, block-128 FP32 scales, and returns FP8 `(M,N)` plus FP32 `(M,N/128)`
@@ -92,6 +101,8 @@ python fp8-gemm/tests/test_fp8_gemm.py --backend source --mode full
 python fp8-gemm/benchmarks/benchmark.py --backend source --mode headline
 ```
 
-Public benchmark tables are only updated after source correctness, installed
-artifact correctness, shape/tile sweeps, `torch.compile(fullgraph=True)`, and
-parity against the original FlashRT native pointer entry pass.
+The SM110 full sweep covers PI0.5, GROOT N1.6/N1.7, Cosmos Edge, and LingBot
+VLA projection families, plus decode and generic small-M cases. Public
+benchmark tables are only updated after source correctness, installed artifact
+correctness, shape/tile sweeps, `torch.compile(fullgraph=True)`, CUDA Graph
+replay, and parity against the original FlashRT native pointer entry pass.
