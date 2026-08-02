@@ -17,7 +17,19 @@ src = [
   "torch-ext/torch_binding.h",
 ]
 
-[kernel.world_model_conv]
+[kernel.world_model_conv_sm110]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "13.0"
+cuda-capabilities = ["11.0a"]
+src = [
+  "csrc/bf16_conv3d_v0_sm110.cu",
+  "csrc/world_model_conv_sm110_stubs.cu",
+  "csrc/world_model_conv.cuh",
+]
+
+[kernel.world_model_conv_sm120]
 backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
@@ -30,5 +42,6 @@ src = [
   "csrc/nvfp4_causal_conv3d_sm120.cu",
   "csrc/nvfp4_causal_conv3d_residual_sm120.cu",
   "csrc/nvfp4_causal_conv3d_residual_k128_sm120.cu",
+  "csrc/world_model_conv_sm120_stubs.cu",
   "csrc/world_model_conv.cuh",
 ]

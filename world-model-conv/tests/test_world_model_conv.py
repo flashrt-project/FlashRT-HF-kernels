@@ -37,6 +37,19 @@ class SourceOps:
         self._ops.fp8_conv3d_v18_ncdhw_res_bf16out(cache_x, new_x, weight, bias, residual, float(alpha), out)
         return out
 
+    def bf16_causal_conv3d_ndhwc_bf16(
+        self, cache_x, new_x, weight, bias, alpha=1.0
+    ):
+        out = torch.empty(
+            (*new_x.shape[:4], weight.shape[0]),
+            device=new_x.device,
+            dtype=torch.bfloat16,
+        )
+        self._ops.bf16_causal_conv3d_ndhwc_bf16(
+            cache_x, new_x, weight, bias, float(alpha), out
+        )
+        return out
+
     def fp8_causal_conv3d_ndhwc_bf16(
         self, cache_x, new_x, weight, bias, alpha=1.0
     ):
@@ -131,18 +144,29 @@ def load_source_ops() -> SourceOps:
     if not REGISTRATION_INCLUDE.is_dir():
         raise RuntimeError(f"missing kernel-builder registration include: {REGISTRATION_INCLUDE}")
     _preload_cublaslt()
-    os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0a"
+    major, minor = torch.cuda.get_device_capability(0)
+    os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}a"
     namespace = "world_model_conv_test"
+    if major == 11:
+        cuda_sources = [
+            "bf16_conv3d_v0_sm110.cu",
+            "world_model_conv_sm110_stubs.cu",
+        ]
+    else:
+        cuda_sources = [
+            "fp8_conv3d_sm120_v18.cu",
+            "fp8_causal_conv3d_sm120.cu",
+            "fp8_conv2d_3x3_sm120.cu",
+            "nvfp4_causal_conv3d_sm120.cu",
+            "nvfp4_causal_conv3d_residual_sm120.cu",
+            "nvfp4_causal_conv3d_residual_k128_sm120.cu",
+            "world_model_conv_sm120_stubs.cu",
+        ]
     load(
         name=namespace,
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
-            str(PACKAGE / "csrc" / "fp8_conv3d_sm120_v18.cu"),
-            str(PACKAGE / "csrc" / "fp8_causal_conv3d_sm120.cu"),
-            str(PACKAGE / "csrc" / "fp8_conv2d_3x3_sm120.cu"),
-            str(PACKAGE / "csrc" / "nvfp4_causal_conv3d_sm120.cu"),
-            str(PACKAGE / "csrc" / "nvfp4_causal_conv3d_residual_sm120.cu"),
-            str(PACKAGE / "csrc" / "nvfp4_causal_conv3d_residual_k128_sm120.cu"),
+            *(str(PACKAGE / "csrc" / source) for source in cuda_sources),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -512,6 +536,61 @@ def run_tests(ops) -> int:
     return count
 
 
+def run_sm110_tests(ops) -> int:
+    count = 0
+    shapes = [
+        (1, 1, 7, 9, 32, 16),
+        (1, 3, 8, 8, 64, 32),
+        (2, 4, 9, 7, 128, 64),
+        (1, 5, 16, 16, 64, 128),
+    ]
+    for n, tn, h, w, ci, co in shapes:
+        cache = (torch.randn((n, 2, h, w, ci), device="cuda") * 0.1).bfloat16()
+        new = (torch.randn((n, tn, h, w, ci), device="cuda") * 0.1).bfloat16()
+        weight = (
+            torch.randn((co, 3, 3, 3, ci), device="cuda") * 0.03
+        ).bfloat16()
+        bias = (torch.randn(co, device="cuda") * 0.01).bfloat16()
+        got = ops.bf16_causal_conv3d_ndhwc_bf16(
+            cache, new, weight, bias, 0.75
+        )
+        ref = ref_causal_conv3d(cache, new, weight, bias, 0.75)
+        diff = (got.float() - ref.float()).abs().flatten()
+        max_err = float(diff.max())
+        p99 = float(torch.quantile(diff, 0.99))
+        mean_err = float(diff.mean())
+        cosine = float(torch.nn.functional.cosine_similarity(
+            got.float().flatten(), ref.float().flatten(), dim=0
+        ))
+        if not (
+            max_err <= 0.015625 and p99 <= 0.00390625 and
+            mean_err <= 0.0001 and cosine >= 0.99999
+        ):
+            raise AssertionError(
+                f"bf16 SM110 shape={(n,tn,h,w,ci,co)} max={max_err} "
+                f"p99={p99} mean={mean_err} cosine={cosine}"
+            )
+        print(
+            f"PASS bf16 SM110 shape={(n,tn,h,w,ci,co)} max={max_err:.7f} "
+            f"p99={p99:.7f} mean={mean_err:.7f} cosine={cosine:.8f}"
+        )
+        count += 1
+
+    cache = torch.randn((1, 2, 8, 8, 32), device="cuda", dtype=torch.bfloat16)
+    new = torch.randn((1, 2, 8, 8, 32), device="cuda", dtype=torch.bfloat16)
+    weight = torch.randn((16, 3, 3, 3, 32), device="cuda", dtype=torch.bfloat16)
+    bias = torch.randn((16,), device="cuda", dtype=torch.bfloat16)
+
+    def fn(c, x, w, b):
+        return ops.bf16_causal_conv3d_ndhwc_bf16(c, x, w, b, 1.0)
+
+    eager = fn(cache, new, weight, bias)
+    compiled = torch.compile(fn, fullgraph=True)(cache, new, weight, bias)
+    torch.testing.assert_close(compiled, eager, rtol=0.0, atol=0.0)
+    print("PASS bf16 SM110 torch.compile fullgraph")
+    return count + 1
+
+
 def run_compile_tests(ops) -> int:
     cache = (torch.randn((1, 2, 8, 8, 32), device="cuda") * 0.1).to(
         torch.float8_e4m3fn
@@ -578,12 +657,15 @@ def main() -> int:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
     major, _ = torch.cuda.get_device_capability(0)
-    if major < 12:
-        raise RuntimeError("world-model-conv source validation requires Blackwell SM120+")
+    if major not in (11, 12):
+        raise RuntimeError("world-model-conv validation requires SM110 or SM120")
     torch.manual_seed(0)
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
-    total = run_tests(ops)
-    total += run_compile_tests(ops)
+    if major == 11:
+        total = run_sm110_tests(ops)
+    else:
+        total = run_tests(ops)
+        total += run_compile_tests(ops)
     torch.cuda.synchronize()
     print(f"world-model-conv correctness passed: {total} checks")
     return 0

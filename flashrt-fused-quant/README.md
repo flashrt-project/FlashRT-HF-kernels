@@ -31,10 +31,10 @@ reference output where available.
 
 ## Validation
 
-The first source slice is synced and has Tensor bindings and package-local
-fake-quant reference tests. It has passed local source-extension compile and
-split/merged byte-parity smoke on RTX 5090. The package remains draft until the
-benchmark grids, bandwidth results, and full HF builder validation are recorded.
+The source slice has Tensor bindings and package-local fake-quant references.
+Split and merged byte parity pass on RTX 5090 (SM120), and the installed
+`torch211-cxx11-cu130-aarch64-linux` artifact passes 5/5 tests on NVIDIA Thor
+(SM110). See `VALIDATION.md` for the full shape grid.
 
 ## Example
 

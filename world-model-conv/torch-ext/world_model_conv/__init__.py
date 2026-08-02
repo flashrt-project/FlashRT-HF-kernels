@@ -9,6 +9,21 @@ import torch
 from ._ops import add_op_namespace_prefix, ops
 
 
+@torch.library.register_fake(
+    add_op_namespace_prefix("bf16_causal_conv3d_ndhwc_bf16")
+)
+def _bf16_causal_conv3d_fake(cache_x, new_x, weight, bias, alpha, out) -> None:
+    n, t, h, w, ci = new_x.shape
+    co = weight.shape[0]
+    if cache_x.shape != (n, 2, h, w, ci):
+        raise RuntimeError("cache_x must have shape (N,2,H,W,Ci)")
+    if weight.shape != (co, 3, 3, 3, ci):
+        raise RuntimeError("weight must have shape (Co,3,3,3,Ci)")
+    if bias.shape != (co,) or out.shape != (n, t, h, w, co):
+        raise RuntimeError("bias/out shape mismatch")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp8_conv3d_v18_ncdhw_res_bf16out"))
 def _fp8_conv3d_fake(
     cache_x: torch.Tensor,
@@ -232,6 +247,33 @@ def fp8_conv3d_v18_ncdhw_res_bf16out(
     return out
 
 
+def bf16_causal_conv3d_ndhwc_bf16(
+    cache_x: torch.Tensor,
+    new_x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    alpha: float = 1.0,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Experimental SM110 BF16 causal Conv3D probe.
+
+    This entry is explicit opt-in. It is not the default world-model Conv3D
+    backend because the current native kernel does not beat cuDNN.
+    """
+    n, t, h, w, _ = new_x.shape
+    if out is None:
+        out = torch.empty(
+            (n, t, h, w, weight.shape[0]),
+            device=new_x.device,
+            dtype=torch.bfloat16,
+        )
+    ops.bf16_causal_conv3d_ndhwc_bf16(
+        cache_x, new_x, weight, bias, float(alpha), out
+    )
+    return out
+
+
 def fp8_causal_conv3d_ndhwc_bf16(
     cache_x: torch.Tensor,
     new_x: torch.Tensor,
@@ -378,6 +420,7 @@ def nvfp4_causal_conv3d_residual_ncdhw_bf16(
 
 
 __all__ = [
+    "bf16_causal_conv3d_ndhwc_bf16",
     "fp8_conv3d_v18_ncdhw_res_bf16out",
     "fp8_causal_conv3d_ndhwc_bf16",
     "fp8_conv2d_3x3_nhwc_bf16",

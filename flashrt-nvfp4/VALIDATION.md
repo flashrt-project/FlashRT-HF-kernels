@@ -29,7 +29,7 @@ Runtime smoke environment:
 - PyTorch: 2.9.1+cu128
 - CUDA runtime reported by PyTorch: 12.8
 - CUDA capability: 12.0
-- Build scope: CUDA 12.8+ and SM120
+- Build scope: CUDA 12.8+, SM110a and SM120a
 
 Builder tooling:
 
@@ -104,8 +104,7 @@ rejection:
 ## Known Gaps
 
 - Official Hub `kernels benchmark` has not been run after upload.
-- Runtime validation is currently RTX 5090 only.
+- NVIDIA Thor installed-artifact validation uses PyTorch 2.11.0+cu130,
+  CUDA 13.0, and `torch211-cxx11-cu130-aarch64-linux`: 18/18 tests pass.
 - Current public API is a data-layout helper. Fused NVFP4 GEMM epilogues are
   not included in this buildable slice yet.
-- The current CUDA implementation is declared CUDA 12.8+ SM120-only in
-  `build.toml`; add a separate source path before making non-SM120 claims.

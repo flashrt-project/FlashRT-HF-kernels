@@ -17,6 +17,7 @@ runtime hot paths.
 
 ## Available Functions
 
+- `bf16_causal_conv3d_ndhwc_bf16` (SM110 experimental, no speedup claim)
 - `fp8_conv3d_v18_ncdhw_res_bf16out`
 - `fp8_causal_conv3d_ndhwc_bf16`
 - `fp8_conv2d_3x3_nhwc_bf16`
@@ -47,4 +48,5 @@ It is intended for static-buffer diffusion/world-model runtimes where avoiding
 ## Hardware
 
 This kernel uses Blackwell architecture-specific FP8 MMA instructions and is
-compiled for `cuda-capabilities = ["12.0a"]`.
+compiled for SM120a. The separate BF16 probe artifact is compiled for SM110a;
+it is exposed for development and parity work but does not replace cuDNN.

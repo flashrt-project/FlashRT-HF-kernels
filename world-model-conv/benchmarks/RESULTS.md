@@ -12,7 +12,7 @@ Environment:
 - GPU: local RTX 5090 validation host
 - Backend: source JIT build
 - Architecture: `TORCH_CUDA_ARCH_LIST=12.0a`
-- Correctness: 3/3 checks passed
+- Correctness: 26/26 checks passed
 - Last refreshed: 2026-06-20
 
 ## Benchmark
@@ -22,3 +22,18 @@ Environment:
 | fp8_conv3d_v18 | N=1,Tc=2,T=4,H=16,W=16,Ci=32,Co=32 | 26.650 | 64.728 | 2.43x |
 | fp8_conv3d_v18 | N=2,Tc=2,T=4,H=16,W=24,Ci=64,Co=32 | 49.142 | 72.953 | 1.48x |
 | fp8_conv3d_v18 | N=1,Tc=2,T=8,H=32,W=32,Ci=64,Co=64 | 52.922 | 112.643 | 2.13x |
+
+## NVIDIA Thor SM110 BF16 probe
+
+Installed `torch211-cxx11-cu130-aarch64-linux` artifact, CUDA 13.0. Correctness
+passes 5/5 checks including fullgraph tracing. The strong baseline is BF16
+cuDNN through `torch.nn.functional.conv3d`.
+
+| Cosmos3-Edge site | FlashRT ms | cuDNN ms | Ratio | Cosine |
+|---|---:|---:|---:|---:|
+| C=160,T=24,H=240,W=416 | 275.22 | 75.44 | 0.27x | 0.9999965 |
+| C=320,T=24,H=120,W=208 | 214.27 | 51.01 | 0.24x | 0.9999962 |
+| C=640,T=12,H=60,W=104 | 88.94 | 20.22 | 0.23x | 0.9999962 |
+
+This backend is therefore experimental and never selected by default. A future
+SM110 Conv backend must beat cuDNN on the full site before promotion.

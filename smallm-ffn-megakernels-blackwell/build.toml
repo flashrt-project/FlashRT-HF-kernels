@@ -10,7 +10,19 @@ repo-id = "flashrt/smallm-ffn-megakernels-blackwell"
 [torch]
 include = ["csrc"]
 src = ["torch-ext/torch_binding.cpp", "torch-ext/torch_binding.h"]
-[kernel.smallm_ffn_megakernels_blackwell]
+[kernel.smallm_ffn_megakernels_blackwell_sm110]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "13.0"
+cuda-capabilities = ["11.0a"]
+src = [
+ "csrc/action_ffn_megakernel_v6t_sm120.cu", "csrc/action_ffn_megakernel_v6t_sm120.cuh",
+ "csrc/und_ffn_megakernel_v5t_sm120.cu", "csrc/und_ffn_megakernel_v5t_sm120.cuh",
+ "csrc/und_ffn_megakernel_v5split_stage3_sm120.cu", "csrc/und_ffn_megakernel_v5split_stage3_sm120.cuh",
+]
+
+[kernel.smallm_ffn_megakernels_blackwell_sm120]
 backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]

@@ -32,7 +32,11 @@ __device__ __forceinline__ void mma_m16n8k32_e4m3(
     uint32_t b0, uint32_t b1)
 {
     asm volatile(
+#if __CUDA_ARCH__ >= 1200
         "mma.sync.aligned.kind::f8f6f4.m16n8k32.row.col.f32.e4m3.e4m3.f32 "
+#else
+        "mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32 "
+#endif
         "{%0, %1, %2, %3}, {%4, %5, %6, %7}, {%8, %9}, {%0, %1, %2, %3};\n"
         : "+f"(d0), "+f"(d1), "+f"(d2), "+f"(d3)
         : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(b0), "r"(b1));
@@ -395,6 +399,54 @@ __device__ __forceinline__ void phase_gemm_dn_fused_bias(
 // Removes the phase-2->phase-3 grid_barrier; CUDA graph manages the
 // inter-kernel dep.
 
+// Thor cannot run the original NUM_CTAS-wide software barrier safely: the
+// launch has more CTAs than can be resident at once on SM110. Keep the SM120
+// path intact and use explicit launch ordering for quant -> up -> down on
+// SM110. The GEMM epilogues remain fused.
+__global__ void quant_input_sm110(
+    const __nv_bfloat16* __restrict__ x_in,
+    const __nv_bfloat16* __restrict__ up_inv_s,
+    __nv_fp8_e4m3* __restrict__ x_fp8_scr,
+    int M, int K, float up_act_scale)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = M * K;
+    if (idx >= total) return;
+    int col = idx % K;
+    float q = __bfloat162float(x_in[idx]) *
+              __bfloat162float(up_inv_s[col]) / up_act_scale;
+    q = fmaxf(-448.0f, fminf(448.0f, q));
+    x_fp8_scr[idx] = __nv_fp8_e4m3(q);
+}
+
+__global__ void __launch_bounds__(THREADS, V5S_LAUNCH_MIN)
+kernel_up_sm110(
+    const __nv_fp8_e4m3* __restrict__ x_fp8_scr,
+    const __nv_fp8_e4m3* __restrict__ up_w_NK,
+    const __nv_bfloat16* __restrict__ up_bias,
+    const __nv_bfloat16* __restrict__ dn_inv_s,
+    __nv_fp8_e4m3* __restrict__ up_fp8_scr,
+    int M, int K_up, int N_up,
+    float up_alpha, float dn_act_scale_inv)
+{
+    constexpr int A_SMEM_BYTES = 2 * M_ROWS_AT * SMEM_K_PAD_UP;
+    constexpr int B_SMEM_BYTES = 2 * BLOCK_N_UP * SMEM_K_PAD_UP;
+    __shared__ __align__(16) uint8_t A_smem[A_SMEM_BYTES];
+    __shared__ __align__(16) uint8_t B_smem[B_SMEM_BYTES];
+
+    int n_tiles_up = N_up / BLOCK_N_UP;
+    int tile = blockIdx.x;
+    int total_tiles = ((M + BLOCK_M - 1) / BLOCK_M) * n_tiles_up;
+    if (tile >= total_tiles) return;
+    int m_idx = tile / n_tiles_up;
+    int n_idx = tile % n_tiles_up;
+    phase_gemm_up_fused_eup(
+        x_fp8_scr, up_w_NK, up_bias, dn_inv_s,
+        up_alpha, dn_act_scale_inv, up_fp8_scr,
+        M, N_up, K_up, m_idx * BLOCK_M, n_idx * BLOCK_N_UP,
+        A_smem, B_smem);
+}
+
 __global__ void __launch_bounds__(THREADS, V5S_LAUNCH_MIN)
 kernel_A_und(
     const __nv_bfloat16* __restrict__ x_in,
@@ -483,17 +535,38 @@ extern "C" int und_ffn_v5split_stage3_launch(
     if (M > 192) return -1;
     if (K_up != 512 || N_up != 2048 || K_dn != 2048 || N_dn != 512) return -2;
 
-    kernel_A_und<<<dim3(NUM_CTAS), dim3(THREADS), 0, stream>>>(
-        reinterpret_cast<const __nv_bfloat16*>(x_in),
-        reinterpret_cast<const __nv_bfloat16*>(up_inv_s),
-        reinterpret_cast<const __nv_fp8_e4m3*>(up_w_NK),
-        reinterpret_cast<const __nv_bfloat16*>(up_bias),
-        reinterpret_cast<const __nv_bfloat16*>(dn_inv_s),
-        reinterpret_cast<__nv_fp8_e4m3*>(x_fp8_scr),
-        reinterpret_cast<__nv_fp8_e4m3*>(up_fp8_scr),
-        M, K_up, N_up,
-        up_alpha, 1.0f / dn_act_scale, up_act_scale,
-        reinterpret_cast<uint32_t*>(barrier_state));
+    int device = 0;
+    cudaGetDevice(&device);
+    cudaDeviceProp prop{};
+    cudaGetDeviceProperties(&prop, device);
+    if (prop.major == 11) {
+        int total = M * K_up;
+        quant_input_sm110<<<dim3((total + 255) / 256), dim3(256), 0, stream>>>(
+            reinterpret_cast<const __nv_bfloat16*>(x_in),
+            reinterpret_cast<const __nv_bfloat16*>(up_inv_s),
+            reinterpret_cast<__nv_fp8_e4m3*>(x_fp8_scr),
+            M, K_up, up_act_scale);
+        int up_tiles = ((M + BLOCK_M - 1) / BLOCK_M) * (N_up / BLOCK_N_UP);
+        kernel_up_sm110<<<dim3(up_tiles), dim3(THREADS), 0, stream>>>(
+            reinterpret_cast<const __nv_fp8_e4m3*>(x_fp8_scr),
+            reinterpret_cast<const __nv_fp8_e4m3*>(up_w_NK),
+            reinterpret_cast<const __nv_bfloat16*>(up_bias),
+            reinterpret_cast<const __nv_bfloat16*>(dn_inv_s),
+            reinterpret_cast<__nv_fp8_e4m3*>(up_fp8_scr),
+            M, K_up, N_up, up_alpha, 1.0f / dn_act_scale);
+    } else {
+        kernel_A_und<<<dim3(NUM_CTAS), dim3(THREADS), 0, stream>>>(
+            reinterpret_cast<const __nv_bfloat16*>(x_in),
+            reinterpret_cast<const __nv_bfloat16*>(up_inv_s),
+            reinterpret_cast<const __nv_fp8_e4m3*>(up_w_NK),
+            reinterpret_cast<const __nv_bfloat16*>(up_bias),
+            reinterpret_cast<const __nv_bfloat16*>(dn_inv_s),
+            reinterpret_cast<__nv_fp8_e4m3*>(x_fp8_scr),
+            reinterpret_cast<__nv_fp8_e4m3*>(up_fp8_scr),
+            M, K_up, N_up,
+            up_alpha, 1.0f / dn_act_scale, up_act_scale,
+            reinterpret_cast<uint32_t*>(barrier_state));
+    }
 
     kernel_B_und<<<dim3(NUM_CTAS_B_UND), dim3(THREADS), 0, stream>>>(
         reinterpret_cast<__nv_fp8_e4m3*>(up_fp8_scr),

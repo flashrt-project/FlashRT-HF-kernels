@@ -10,4 +10,6 @@ Scale floats follow the FlashRT static per-tensor calibration contract.
 
 These are region megakernels, not arbitrary-shape linear layers. A mismatched
 dimension, dtype, layout, capacity or device raises an error. No silent eager
-fallback is present. CUDA 12.8+ and SM120/SM121 are required. Inference only.
+fallback is present. SM110 uses standard FP8 MMA and explicit ordered launches
+to avoid the SM120 software-grid-barrier residency assumption. SM120 retains
+the original tuned path. Inference only.

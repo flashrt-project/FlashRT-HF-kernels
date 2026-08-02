@@ -7,6 +7,22 @@
 namespace flash_rt {
 namespace conv {
 
+extern "C" int bf16_conv3d_v0_ndhwc_bf16out(
+    const void* cache_x_bf16,
+    const void* new_x_bf16,
+    const void* w_bf16,
+    void* y_bf16,
+    const void* bias_bf16,
+    int N,
+    int T_cache,
+    int T_new,
+    int H,
+    int W,
+    int Ci,
+    int Co,
+    float alpha,
+    cudaStream_t stream);
+
 extern "C" int fp8_conv3d_v18_ncdhw_res_bf16out(
     const void* cache_x_fp8,
     const void* new_x_fp8,

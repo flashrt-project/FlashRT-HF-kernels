@@ -1,5 +1,7 @@
 from __future__ import annotations
 import os
+import importlib
+import sys
 from pathlib import Path
 import torch
 
@@ -38,7 +40,8 @@ def load_source_ops(registration_include=None):
             / "kernels/kernel-builder/src/pyproject/templates/torch"
         )
     )
-    os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0a"
+    major, minor = torch.cuda.get_device_capability()
+    os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}a"
     ns = "smallm_ffn_megakernels_blackwell_source_test"
     load(
         name=ns,
@@ -112,3 +115,52 @@ def load_source_ops(registration_include=None):
         return torch.empty_like(r)
 
     return SourceOps(ns, gated, residual)
+
+
+def load_installed_ops(artifact):
+    artifact = str(Path(artifact).resolve())
+    sys.path.insert(0, artifact)
+    try:
+        module = importlib.import_module("smallm_ffn_megakernels_blackwell")
+    finally:
+        sys.path.pop(0)
+
+    class InstalledOps:
+        @staticmethod
+        def gated_functional(x, uw, ub, dinv, dw, db, g, r, ua, da, hs):
+            return module.fp8_gelu_ffn_gated_residual_bf16_static(
+                x, uw, ub, dinv, dw, db, g, r,
+                up_alpha=ua, down_alpha=da, hidden_scale=hs,
+            )
+
+        @staticmethod
+        def residual_functional(
+            x, uinv, uw, ub, dinv, dw, db, r, ua, da, us, ds, split,
+        ):
+            return module.fp8_gelu_ffn_residual_bf16_static(
+                x, uinv, uw, ub, dinv, dw, db, r,
+                up_alpha=ua, down_alpha=da, input_scale=us,
+                hidden_scale=ds, split_stage=split,
+            )
+
+        @staticmethod
+        def gated(x, uw, ub, dinv, dw, db, g, r, ua, da, hs, out, scr):
+            return module.fp8_gelu_ffn_gated_residual_bf16_static(
+                x, uw, ub, dinv, dw, db, g, r,
+                up_alpha=ua, down_alpha=da, hidden_scale=hs,
+                out=out, hidden_scratch=scr,
+            )
+
+        @staticmethod
+        def residual(
+            x, uinv, uw, ub, dinv, dw, db, r, ua, da, us, ds,
+            split, out, xs, hs, barrier,
+        ):
+            return module.fp8_gelu_ffn_residual_bf16_static(
+                x, uinv, uw, ub, dinv, dw, db, r,
+                up_alpha=ua, down_alpha=da, input_scale=us,
+                hidden_scale=ds, split_stage=split, out=out,
+                input_scratch=xs, hidden_scratch=hs, barrier=barrier,
+            )
+
+    return InstalledOps()

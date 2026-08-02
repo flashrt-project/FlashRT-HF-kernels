@@ -30,5 +30,7 @@ max/p99/mean error, cosine, invalid-shape rejection, fullgraph tracing, raw
 native parity and cuDNN/PyTorch convolution baselines where the numerical
 contract is equivalent.
 
-The source JIT validation forces `TORCH_CUDA_ARCH_LIST=12.0a` because these
-kernels use architecture-specific Blackwell low-precision MMA instructions.
+Source validation selects the installed architecture. SM120 runs the existing
+FP8/NVFP4 matrix. SM110 runs four BF16 boundary/channel cases plus
+`torch.compile(fullgraph=True)`. The SM110 source is byte-synced from FlashRT
+commit `9972f0f` (`csrc/conv/bf16_conv3d_v0_sm110.cu`).

@@ -4,6 +4,7 @@ Native CUDA kernels for world-model / video-diffusion convolution hot paths.
 
 The package exports:
 
+- `bf16_causal_conv3d_ndhwc_bf16` (experimental SM110 probe)
 - `fp8_conv3d_v18_ncdhw_res_bf16out`
 - `fp8_causal_conv3d_ndhwc_bf16`
 - `fp8_conv2d_3x3_nhwc_bf16`
@@ -47,7 +48,8 @@ wmc.fp8_conv3d_v18_ncdhw_res_bf16out(
 
 ## Shape Contract
 
-- GPU target: Blackwell architecture-specific SM120a.
+- GPU target: SM120a for FP8/NVFP4 functions; SM110a for the explicit BF16
+  probe.
 - `T_cache == 2`.
 - `Ci % 32 == 0`.
 - `Co % 8 == 0`.
@@ -60,3 +62,7 @@ The FP8 Conv2D paths cover NHWC and NCDHW tensor seams. The causal Conv3D
 paths consume prepacked FP8 or NVFP4 activations/weights and expose optional
 preallocated outputs for CUDA Graph runtimes. Unsupported channel, kernel,
 stride and architecture combinations raise before launch.
+
+The SM110 BF16 function is opt-in and is not the default backend. On the three
+Cosmos3-Edge VAE sites it is accurate but slower than cuDNN; see the benchmark
+ledger.

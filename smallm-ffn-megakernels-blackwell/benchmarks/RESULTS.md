@@ -15,3 +15,22 @@ math and documented BF16/FP8 rounding points. Values are microseconds.
 
 This is a source acceptance table, not the final Hub claim. HF Jobs artifacts
 must reproduce correctness and original-source latency before publication.
+
+## NVIDIA Thor SM110 installed artifact
+
+PyTorch 2.11.0+cu130, CUDA 13.0, static buffers. Full 10-case correctness,
+`torch.compile(fullgraph=True)`, and CUDA Graph checks pass.
+
+| Region | M | FlashRT us | PyTorch reference us | vs reference |
+|---|---:|---:|---:|---:|
+| gated residual 1024/4096 | 1 | 27.19 | 294.12 | 10.82x |
+| gated residual 1024/4096 | 8 | 27.00 | 389.73 | 14.44x |
+| gated residual 1024/4096 | 21 | 45.47 | 522.26 | 11.49x |
+| gated residual 1024/4096 | 32 | 45.22 | 557.98 | 12.34x |
+| residual 512/2048 | 1 | 22.46 | 131.52 | 5.85x |
+| residual 512/2048 | 51 | 33.78 | 246.47 | 7.30x |
+| residual 512/2048 | 144 | 57.08 | 354.68 | 6.21x |
+| residual 512/2048 | 188 | 72.57 | 382.29 | 5.27x |
+
+The PyTorch column is the exact dequantized FP8 operation sequence, not a
+FlashRT-native baseline. Public model claims must use the model pipeline gate.

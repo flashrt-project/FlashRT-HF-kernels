@@ -81,6 +81,10 @@ void fp8_gelu_ffn_residual_bf16_out(
   ct(hs, c10::ScalarType::Float8_e4m3fn, "hidden_scratch");
   ct(barrier, torch::kUInt32, "barrier");
   int64_t cap = split ? 192 : 144;
+#if defined(CUDA_KERNEL)
+  const auto* props = at::cuda::getDeviceProperties(x.get_device());
+  if (props->major == 11) cap = 192;
+#endif
   TORCH_CHECK(x.dim() == 2 && x.size(0) > 0 && x.size(0) <= cap &&
                   x.size(1) == 512,
               "input must be [M,512] in selected capacity");
@@ -95,8 +99,9 @@ void fp8_gelu_ffn_residual_bf16_out(
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard gd(x.device());
   auto s = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const bool use_split = split || props->major == 11;
   int rc =
-      split ? flash_rt::megakernel::und_ffn_v5split_stage3_launch_sm120(
+      use_split ? flash_rt::megakernel::und_ffn_v5split_stage3_launch_sm120(
                   x.data_ptr(), uinv.data_ptr(), uw.data_ptr(), ub.data_ptr(),
                   dinv.data_ptr(), dw.data_ptr(), db.data_ptr(), res.data_ptr(),
                   out.data_ptr(), xs.data_ptr(), hs.data_ptr(), x.size(0), 512,

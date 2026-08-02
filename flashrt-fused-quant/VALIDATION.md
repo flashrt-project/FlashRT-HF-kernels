@@ -15,7 +15,7 @@ Runtime smoke environment:
 - GPU: NVIDIA GeForce RTX 5090
 - PyTorch: 2.9.1+cu128
 - CUDA capability: 12.0
-- Build scope: CUDA 12.8+ and SM120
+- Build scope: CUDA 12.8+, SM110a and SM120a
 
 ## Current Scope
 
@@ -85,6 +85,6 @@ over the full grid.
   package.
 - Official Hub `kernels benchmark` has not been run after upload.
 - Memory-bandwidth results are still pending.
-- Runtime validation is currently RTX 5090 only; this v1 source slice is
-  declared SM120-only in `build.toml`.
+- NVIDIA Thor installed-artifact validation uses PyTorch 2.11.0+cu130,
+  CUDA 13.0, and `torch211-cxx11-cu130-aarch64-linux`: 5/5 tests pass.
 - Residual/RMSNorm and SFA variants are not yet exposed.

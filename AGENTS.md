@@ -82,6 +82,17 @@ Before pushing a package change that should rebuild Hub artifacts:
     compatibility with retired Torch versions by renaming artifact directories.
     `torch.stable-abi` is valid only after `kernel-builder check-abi
     --torch-stable-abi` passes and the binding uses only stable ABI headers.
+11. Treat every CUDA capability as a source-level contract. A release artifact
+    for a new capability must come from a matching target in `build.toml` and a
+    native backend that has passed correctness and performance gates on that
+    device. Never use a builder `--force-capability` option, rename an artifact
+    directory, or compile an SM120-only implementation for SM110 as release
+    evidence. One package may contain separate architecture-specific targets
+    and source lists behind the same stable Tensor API.
+12. For architecture-specific additions, compare against the strongest existing
+    backend on that device. Keep a correct but losing implementation explicit
+    and opt-in; do not let it replace cuDNN, cuBLASLt, or an already-qualified
+    FlashRT package in automatic dispatch.
 
 ## Performance Qualification
 

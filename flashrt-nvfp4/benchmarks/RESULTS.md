@@ -12,7 +12,7 @@ Environment:
 - Built artifact: `torch211-cxx11-cu128-x86_64-linux`
 - PyTorch inside HF testshell: 2.11.0+cu128
 - CUDA runtime reported by PyTorch: 12.8
-- Hardware scope: CUDA 12.8+ SM120 local validation only so far
+- Hardware scope: CUDA 12.8+ SM110a and SM120a
 - Benchmark path: local release-candidate runner over copied built artifact
 
 ## Current Scope
@@ -80,5 +80,5 @@ reference path.
   release-candidate benchmark runner.
 - Full `kernel-builder build-and-copy` matrix has not been run.
 - Official Hub `kernels benchmark` has not been run after upload.
-- Non-SM120 hardware validation is not applicable to the current v1 surface
-  unless a non-SM120 source path is added.
+- Thor SM110 installed artifact passes all 18 package tests; public latency
+  rows remain the RTX 5090 measurements above.

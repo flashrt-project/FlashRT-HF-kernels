@@ -41,4 +41,5 @@ https://github.com/LiangSu8899/FlashRT-HF-kernels/blob/main/flashrt-fused-quant/
 
 ## Hardware
 
-Current v1 build scope is CUDA 12.8+ SM120.
+Current v1 build scope is CUDA 12.8+ SM110a and SM120a. The implementation
+does not use SM120-only tensor-core instructions.

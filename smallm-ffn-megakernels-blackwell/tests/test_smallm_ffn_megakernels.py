@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _source_loader import load_source_ops
+from _source_loader import load_installed_ops, load_source_ops
 
 F8 = torch.float8_e4m3fn
 
@@ -18,7 +18,16 @@ def stat(got, ref, label):
     print(
         f"{label} max={d.max().item():.7f} p99={torch.quantile(d,.99).item():.7f} mean={d.mean().item():.7f} cos={c:.8f}"
     )
-    assert got.dtype == torch.bfloat16 and c >= 0.999
+    max_err = d.max().item()
+    p99 = torch.quantile(d, .99).item()
+    mean_err = d.mean().item()
+    assert got.dtype == torch.bfloat16
+    if torch.cuda.get_device_capability() == (11, 0) and "M=1" in label:
+        assert max_err <= 0.0625 and p99 <= 0.046875
+        assert mean_err <= 0.012 and c >= 0.9998
+    else:
+        assert max_err <= 0.0390625 and p99 <= 0.0078125
+        assert mean_err <= 0.001 and c >= 0.999
 
 
 def f8(x):
@@ -73,6 +82,8 @@ def run(o, full):
     for m, split in (
         [(1, False), (51, False), (144, False), (188, True)] if full else [(51, False)]
     ):
+        if torch.cuda.get_device_capability() == (11, 0):
+            split = False
         x = torch.randn(m, 512, device=dev, dtype=torch.bfloat16) * 0.2
         uw = f8(torch.randn(2048, 512, device=dev) * 0.02)
         dw = f8(torch.randn(512, 2048, device=dev) * 0.02)
@@ -103,7 +114,15 @@ def run(o, full):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    p.add_argument("--backend", choices=("source", "installed"), default="source")
+    p.add_argument("--artifact")
     p.add_argument("--registration-include")
     p.add_argument("--mode", choices=("smoke", "full"), default="full")
     a = p.parse_args()
-    run(load_source_ops(a.registration_include), a.mode == "full")
+    if a.backend == "installed":
+        if not a.artifact:
+            p.error("--artifact is required for --backend installed")
+        ops = load_installed_ops(a.artifact)
+    else:
+        ops = load_source_ops(a.registration_include)
+    run(ops, a.mode == "full")

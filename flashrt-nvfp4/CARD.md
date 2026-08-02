@@ -34,7 +34,8 @@ For fused `SiLU(gate) * up` plus NVFP4 quantization, use
 
 Current validation status is recorded in `VALIDATION.md`.
 
-Current v1 build scope is CUDA 12.8+ SM120.
+Current v1 build scope is CUDA 12.8+ SM110a and SM120a. This layout transform
+does not use architecture-specific tensor-core instructions.
 
 See `examples/nvfp4_scale_factor_layout.py` for a minimal layout-conversion
 example.

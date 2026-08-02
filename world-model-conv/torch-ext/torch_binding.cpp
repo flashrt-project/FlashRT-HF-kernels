@@ -120,6 +120,56 @@ Nvfp4ConvShape check_nvfp4_conv_inputs(
 
 }  // namespace
 
+void bf16_causal_conv3d_ndhwc_bf16(
+    torch::Tensor const& cache_x,
+    torch::Tensor const& new_x,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& out) {
+  check_bf16(cache_x, "cache_x");
+  check_bf16(new_x, "new_x");
+  check_bf16(weight, "weight");
+  check_bf16(bias, "bias");
+  check_bf16(out, "out");
+  TORCH_CHECK(new_x.dim() == 5 && cache_x.dim() == 5,
+              "cache_x/new_x must be NDHWC");
+  const int64_t n = new_x.size(0), tn = new_x.size(1);
+  const int64_t h = new_x.size(2), w = new_x.size(3), ci = new_x.size(4);
+  TORCH_CHECK(weight.dim() == 5, "weight must have shape (Co,3,3,3,Ci)");
+  const int64_t co = weight.size(0);
+  TORCH_CHECK(cache_x.sizes() == torch::IntArrayRef({n, 2, h, w, ci}),
+              "cache_x must have shape (N,2,H,W,Ci)");
+  TORCH_CHECK(weight.sizes() == torch::IntArrayRef({co, 3, 3, 3, ci}),
+              "weight must have shape (Co,3,3,3,Ci)");
+  TORCH_CHECK(ci % 16 == 0 && co % 8 == 0,
+              "Ci must be divisible by 16 and Co by 8");
+  TORCH_CHECK(bias.sizes() == torch::IntArrayRef({co}),
+              "bias must have shape (Co,)");
+  TORCH_CHECK(out.sizes() == torch::IntArrayRef({n, tn, h, w, co}),
+              "out must have shape (N,T,H,W,Co)");
+  TORCH_CHECK(cache_x.get_device() == new_x.get_device() &&
+                  cache_x.get_device() == weight.get_device() &&
+                  cache_x.get_device() == bias.get_device() &&
+                  cache_x.get_device() == out.get_device(),
+              "all tensors must be on the same CUDA device");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(new_x.device());
+  const auto* props = at::cuda::getDeviceProperties(new_x.get_device());
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              "bf16_causal_conv3d_ndhwc_bf16 requires SM110");
+  auto stream = at::cuda::getCurrentCUDAStream(new_x.get_device()).stream();
+  int status = flash_rt::conv::bf16_conv3d_v0_ndhwc_bf16out(
+      cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(), out.data_ptr(),
+      bias.data_ptr(), n, 2, tn, h, w, ci, co,
+      static_cast<float>(alpha), stream);
+  TORCH_CHECK(status == 0,
+              "bf16_causal_conv3d_ndhwc_bf16 failed with status ", status);
+#else
+  TORCH_CHECK(false, "world-model-conv was not built with CUDA support");
+#endif
+}
+
 void fp8_conv3d_v18_ncdhw_res_bf16out(
     torch::Tensor const& cache_x,
     torch::Tensor const& new_x,
@@ -437,6 +487,7 @@ void nvfp4_causal_conv3d_residual_ncdhw_bf16(
 }
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
+  ops.def("bf16_causal_conv3d_ndhwc_bf16(Tensor cache_x, Tensor new_x, Tensor weight, Tensor bias, float alpha, Tensor! out) -> ()");
   ops.def("fp8_conv3d_v18_ncdhw_res_bf16out(Tensor cache_x, Tensor new_x, Tensor weight, Tensor bias, Tensor residual, float alpha, Tensor! out) -> ()");
   ops.def("fp8_causal_conv3d_ndhwc_bf16(Tensor cache_x, Tensor new_x, Tensor weight, Tensor bias, float alpha, Tensor! out) -> ()");
   ops.def("fp8_conv2d_3x3_nhwc_bf16(Tensor input, Tensor weight, Tensor bias, float alpha, Tensor! out) -> ()");
@@ -444,6 +495,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nvfp4_causal_conv3d_ndhwc_bf16(Tensor cache_packed, Tensor new_packed, Tensor weight_packed, Tensor cache_sf, Tensor new_sf, Tensor weight_sf, Tensor bias, Tensor? outer_weight, float alpha, Tensor! out) -> ()");
   ops.def("nvfp4_causal_conv3d_residual_ncdhw_bf16(Tensor cache_packed, Tensor new_packed, Tensor weight_packed, Tensor cache_sf, Tensor new_sf, Tensor weight_sf, Tensor bias, Tensor residual, Tensor? outer_weight, float alpha, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
+  ops.impl("bf16_causal_conv3d_ndhwc_bf16", torch::kCUDA, &bf16_causal_conv3d_ndhwc_bf16);
   ops.impl("fp8_conv3d_v18_ncdhw_res_bf16out", torch::kCUDA, &fp8_conv3d_v18_ncdhw_res_bf16out);
   ops.impl("fp8_causal_conv3d_ndhwc_bf16", torch::kCUDA, &fp8_causal_conv3d_ndhwc_bf16);
   ops.impl("fp8_conv2d_3x3_nhwc_bf16", torch::kCUDA, &fp8_conv2d_3x3_nhwc_bf16);
