@@ -334,6 +334,8 @@ def main() -> int:
         if args.backend == "source"
         else helpers.load_installed_ops(args.artifact)
     )
+    if not hasattr(ops, "alloc"):
+        ops.alloc = lambda rows, dim: helpers.alloc_fp4(ops, rows, dim)
     native_root = Path(os.environ.get("FLASHRT_NATIVE_ROOT", str(ROOT.parent / "official" / "FlashRT")))
     sys.path.insert(0, str(native_root))
     try:
