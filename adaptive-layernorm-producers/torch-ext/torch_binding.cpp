@@ -161,6 +161,97 @@ void ada_layer_norm_quant_fp8_bf16(
 #endif
 }
 
+void check_bf16_mod_ptok(torch::Tensor const& x,
+                         torch::Tensor const& scale,
+                         torch::Tensor const& shift) {
+  check_bf16(scale, "scale");
+  check_bf16(shift, "shift");
+  TORCH_CHECK(scale.sizes() == x.sizes(),
+              "per-token scale must have shape (seq_len, dim)");
+  TORCH_CHECK(shift.sizes() == x.sizes(),
+              "per-token shift must have shape (seq_len, dim)");
+  check_same_device(x, scale, "x", "scale");
+  check_same_device(x, shift, "x", "shift");
+}
+
+void ada_layer_norm_quant_fp8_ptok_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& scale,
+    torch::Tensor const& shift,
+    torch::Tensor const& act_scale,
+    double eps,
+    torch::Tensor& out) {
+  check_x(x);
+  check_bf16_mod_ptok(x, scale, shift);
+  check_act_scale(x, act_scale);
+  check_fp8_out(x, out);
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::quantize::ada_layer_norm_ptok_fp8(
+      x.data_ptr(),
+      scale.data_ptr(),
+      shift.data_ptr(),
+      out.data_ptr(),
+      static_cast<const float*>(act_scale.data_ptr()),
+      static_cast<int>(x.size(0)),
+      static_cast<int>(x.size(1)),
+      static_cast<float>(eps),
+      stream);
+#else
+  TORCH_CHECK(false, "adaptive-layernorm-producers was not built with CUDA support");
+#endif
+}
+
+void ada_layer_norm_quant_fp8_ptok_table_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& temb,
+    torch::Tensor const& table,
+    torch::Tensor const& act_scale,
+    int64_t shift_idx,
+    int64_t scale_idx,
+    double eps,
+    torch::Tensor& out) {
+  check_x(x);
+  check_bf16(temb, "temb");
+  check_cuda_contiguous(temb, "temb");
+  check_fp32(table, "table");
+  check_cuda_contiguous(table, "table");
+  TORCH_CHECK(temb.dim() == 3 && temb.size(0) == x.size(0) &&
+                  temb.size(2) == x.size(1),
+              "temb must have shape (seq_len, n_chunks, dim)");
+  const int64_t n_chunks = temb.size(1);
+  TORCH_CHECK(table.dim() == 2 && table.size(0) == n_chunks &&
+                  table.size(1) == x.size(1),
+              "table must have shape (n_chunks, dim)");
+  TORCH_CHECK(shift_idx >= 0 && shift_idx < n_chunks &&
+                  scale_idx >= 0 && scale_idx < n_chunks,
+              "chunk indices must lie in [0, n_chunks)");
+  check_act_scale(x, act_scale);
+  check_fp8_out(x, out);
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::quantize::ada_layer_norm_ptok_table_fp8(
+      x.data_ptr(),
+      temb.data_ptr(),
+      static_cast<const float*>(table.data_ptr()),
+      out.data_ptr(),
+      static_cast<const float*>(act_scale.data_ptr()),
+      static_cast<int>(x.size(0)),
+      static_cast<int>(x.size(1)),
+      static_cast<int>(n_chunks),
+      static_cast<int>(shift_idx),
+      static_cast<int>(scale_idx),
+      static_cast<float>(eps),
+      stream);
+#else
+  TORCH_CHECK(false, "adaptive-layernorm-producers was not built with CUDA support");
+#endif
+}
+
 void ada_layer_norm_quant_fp8_modfp8_bf16(
     torch::Tensor const& x,
     torch::Tensor const& scale_fp8,
@@ -382,6 +473,11 @@ void adaln_modulation6_bf16(
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("ada_layer_norm_quant_fp8_bf16("
           "Tensor x, Tensor scale, Tensor shift, Tensor act_scale, float eps, Tensor! out) -> ()");
+  ops.def("ada_layer_norm_quant_fp8_ptok_bf16("
+          "Tensor x, Tensor scale, Tensor shift, Tensor act_scale, float eps, Tensor! out) -> ()");
+  ops.def("ada_layer_norm_quant_fp8_ptok_table_bf16("
+          "Tensor x, Tensor temb, Tensor table, Tensor act_scale, "
+          "int shift_idx, int scale_idx, float eps, Tensor! out) -> ()");
   ops.def("ada_layer_norm_quant_fp8_modfp8_bf16("
           "Tensor x, Tensor scale_fp8, Tensor shift_fp8, Tensor scale_deq, Tensor shift_deq, "
           "Tensor act_scale, float eps, Tensor! out) -> ()");
@@ -402,6 +498,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("ada_layer_norm_quant_fp8_bf16",
            torch::kCUDA,
            &ada_layer_norm_quant_fp8_bf16);
+  ops.impl("ada_layer_norm_quant_fp8_ptok_bf16",
+           torch::kCUDA,
+           &ada_layer_norm_quant_fp8_ptok_bf16);
+  ops.impl("ada_layer_norm_quant_fp8_ptok_table_bf16",
+           torch::kCUDA,
+           &ada_layer_norm_quant_fp8_ptok_table_bf16);
   ops.impl("ada_layer_norm_quant_fp8_modfp8_bf16",
            torch::kCUDA,
            &ada_layer_norm_quant_fp8_modfp8_bf16);

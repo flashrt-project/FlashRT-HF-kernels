@@ -75,5 +75,28 @@ void ada_layer_norm_nvfp4_swizzled_modfp8(
     int seq_len, int dim, float eps,
     cudaStream_t stream);
 
+// Per-token modulation form: scale/shift are [seq_len, dim], one row per
+// activation row (video-DiT per-token timestep tables).
+void ada_layer_norm_ptok_fp8(
+    const void*  x_bf16,
+    const void*  scale_bf16,
+    const void*  shift_bf16,
+    void*        out_fp8,
+    const float* act_scale,
+    int seq_len, int dim, float eps,
+    cudaStream_t stream);
+
+// Table form: the block's [n_chunks, dim] modulation table is added to
+// the per-token embedding [seq_len, n_chunks, dim] inside the kernel —
+// the host-side per-block chunk materialization disappears.
+void ada_layer_norm_ptok_table_fp8(
+    const void*  x_bf16,
+    const void*  temb_bf16,
+    const float* table_f32,
+    void*        out_fp8,
+    const float* act_scale,
+    int seq_len, int dim, int n_chunks, int shift_idx, int scale_idx,
+    float eps, cudaStream_t stream);
+
 }  // namespace quantize
 }  // namespace flash_rt

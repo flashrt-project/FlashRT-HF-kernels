@@ -64,6 +64,47 @@ def _ada_layer_norm_quant_fp8_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("ada_layer_norm_quant_fp8_ptok_bf16"))
+def _ada_layer_norm_quant_fp8_ptok_bf16_fake(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+    shift: torch.Tensor,
+    act_scale: torch.Tensor,
+    eps: float,
+    out: torch.Tensor,
+) -> None:
+    _check_x(x)
+    if scale.shape != x.shape or shift.shape != x.shape:
+        raise RuntimeError(
+            "per-token scale and shift must have shape (seq_len, dim)")
+    _check_scalar(act_scale, "act_scale")
+    if out.shape != x.shape:
+        raise RuntimeError("out must have the same shape as x")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("ada_layer_norm_quant_fp8_ptok_table_bf16"))
+def _ada_layer_norm_quant_fp8_ptok_table_bf16_fake(
+    x: torch.Tensor,
+    temb: torch.Tensor,
+    table: torch.Tensor,
+    act_scale: torch.Tensor,
+    shift_idx: int,
+    scale_idx: int,
+    eps: float,
+    out: torch.Tensor,
+) -> None:
+    _check_x(x)
+    if temb.dim() != 3 or temb.shape[0] != x.shape[0] or temb.shape[2] != x.shape[1]:
+        raise RuntimeError("temb must have shape (seq_len, n_chunks, dim)")
+    if table.dim() != 2 or table.shape[0] != temb.shape[1] or table.shape[1] != x.shape[1]:
+        raise RuntimeError("table must have shape (n_chunks, dim)")
+    _check_scalar(act_scale, "act_scale")
+    if out.shape != x.shape:
+        raise RuntimeError("out must have the same shape as x")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("ada_layer_norm_quant_fp8_modfp8_bf16"))
 def _ada_layer_norm_quant_fp8_modfp8_bf16_fake(
     x: torch.Tensor,
@@ -170,6 +211,58 @@ def ada_layer_norm_quant_fp8_bf16(
     if out is None:
         out = _alloc_fp8(x)
     ops.ada_layer_norm_quant_fp8_bf16(x, scale, shift, act_scale, float(eps), out)
+    return out
+
+
+def ada_layer_norm_quant_fp8_ptok_bf16(
+    x: torch.Tensor,
+    scale: torch.Tensor,
+    shift: torch.Tensor,
+    act_scale: torch.Tensor,
+    eps: float = 1e-5,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Per-token AdaLN producer: no-affine LayerNorm + [M, D] scale/shift
+    modulation + static FP8 quantize, one pass.
+
+    The per-token form serves hosts whose timestep embedding carries one
+    modulation vector per activation row (video DiTs with [B, S, 6, D]
+    tables); the broadcast form above cannot express that seam.
+    """
+
+    if out is None:
+        out = _alloc_fp8(x)
+    ops.ada_layer_norm_quant_fp8_ptok_bf16(
+        x, scale, shift, act_scale, float(eps), out)
+    return out
+
+
+def ada_layer_norm_quant_fp8_ptok_table_bf16(
+    x: torch.Tensor,
+    temb: torch.Tensor,
+    table: torch.Tensor,
+    act_scale: torch.Tensor,
+    shift_idx: int,
+    scale_idx: int,
+    eps: float = 1e-5,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Per-token AdaLN producer, table form.
+
+    ``temb`` is the host's per-token modulation embedding
+    ``[seq_len, n_chunks, dim]`` (cast to BF16 once per call) and
+    ``table`` the block's own ``[n_chunks, dim]`` FP32 modulation
+    parameter. The table add, chunk selection, no-affine LayerNorm,
+    modulation and static FP8 quantize all happen in one pass — the
+    per-block six-chunk materialization the host would otherwise pay
+    never exists.
+    """
+
+    if out is None:
+        out = _alloc_fp8(x)
+    ops.ada_layer_norm_quant_fp8_ptok_table_bf16(
+        x, temb, table, act_scale, int(shift_idx), int(scale_idx),
+        float(eps), out)
     return out
 
 
@@ -318,6 +411,8 @@ def adaln_modulation6_bf16(
 
 __all__ = [
     "ada_layer_norm_quant_fp8_bf16",
+    "ada_layer_norm_quant_fp8_ptok_bf16",
+    "ada_layer_norm_quant_fp8_ptok_table_bf16",
     "ada_layer_norm_quant_fp8_modfp8_bf16",
     "awq_ada_layer_norm_quant_fp8_bf16",
     "ada_layer_norm_quant_nvfp4_swizzled_bf16",

@@ -38,6 +38,20 @@ class SourceOps:
         self._ops.ada_layer_norm_quant_fp8_bf16(x, scale, shift, act_scale, float(eps), out)
         return out
 
+    def ada_layer_norm_quant_fp8_ptok_bf16(self, x, scale, shift, act_scale, eps=1e-5, out=None):
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn) if out is None else out
+        self._ops.ada_layer_norm_quant_fp8_ptok_bf16(x, scale, shift, act_scale, float(eps), out)
+        return out
+
+    def ada_layer_norm_quant_fp8_ptok_table_bf16(
+        self, x, temb, table, act_scale, shift_idx, scale_idx, eps=1e-5, out=None
+    ):
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn) if out is None else out
+        self._ops.ada_layer_norm_quant_fp8_ptok_table_bf16(
+            x, temb, table, act_scale, int(shift_idx), int(scale_idx), float(eps), out
+        )
+        return out
+
     def ada_layer_norm_quant_fp8_modfp8_bf16(
         self, x, scale_fp8, shift_fp8, scale_deq, shift_deq, act_scale, eps=1e-5, out=None
     ):
@@ -117,6 +131,7 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "ada_layer_norm_fp8.cu"),
+            str(PACKAGE / "csrc" / "ada_layer_norm_fp8_ptok.cu"),
             str(PACKAGE / "csrc" / "dit_layer_norm_fp8.cu"),
             str(PACKAGE / "csrc" / "adaln_modulation6.cu"),
         ],
@@ -300,6 +315,28 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
     mod = ref_adaln(x, scale, shift, eps)
     got_fp8 = ops.ada_layer_norm_quant_fp8_bf16(x, scale, shift, act_scale, eps)
     assert_fp8_contract(f"{label}/ada_fp8", got_fp8, quant_fp8(mod, act_scale))
+
+    # per-token form: one modulation row per activation row; the reference
+    # is the same adaln math, broadcasting replaced by row alignment
+    scale_pt = (0.1 * torch.randn(rows, dim, device=x.device)).to(torch.bfloat16)
+    shift_pt = (0.1 * torch.randn(rows, dim, device=x.device)).to(torch.bfloat16)
+    mod_pt = ref_adaln(x, scale_pt, shift_pt, eps)
+    got_ptok = ops.ada_layer_norm_quant_fp8_ptok_bf16(x, scale_pt, shift_pt, act_scale, eps)
+    assert_fp8_contract(f"{label}/ada_fp8_ptok", got_ptok, quant_fp8(mod_pt, act_scale))
+
+    # table form: the block's [n_chunks, dim] fp32 table is added to a
+    # [rows, n_chunks, dim] bf16 per-token embedding inside the kernel;
+    # the reference materializes the chunks the way a host block would
+    n_chunks, s_idx, c_idx = 6, 0, 1
+    temb_pt = (0.1 * torch.randn(rows, n_chunks, dim, device=x.device)).to(torch.bfloat16)
+    table_pt = (torch.randn(n_chunks, dim, device=x.device) / dim**0.5).float()
+    shift_tab = (table_pt[s_idx] + temb_pt[:, s_idx].float())
+    scale_tab = (table_pt[c_idx] + temb_pt[:, c_idx].float())
+    mod_tab = ref_adaln_float_mod(x, scale_tab, shift_tab, eps)
+    got_tab = ops.ada_layer_norm_quant_fp8_ptok_table_bf16(
+        x, temb_pt, table_pt, act_scale, s_idx, c_idx, eps
+    )
+    assert_fp8_contract(f"{label}/ada_fp8_ptok_table", got_tab, quant_fp8(mod_tab, act_scale))
 
     scale_mod = scale_fp8.float() * scale_deq
     shift_mod = shift_fp8.float() * shift_deq
