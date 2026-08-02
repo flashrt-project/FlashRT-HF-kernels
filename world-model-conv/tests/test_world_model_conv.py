@@ -147,21 +147,28 @@ def load_source_ops() -> SourceOps:
     major, minor = torch.cuda.get_device_capability(0)
     os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}a"
     namespace = "world_model_conv_test"
-    if major == 11:
+    sm120_sources = [
+        "fp8_conv3d_sm120_v18.cu",
+        "fp8_causal_conv3d_sm120.cu",
+        "fp8_conv2d_3x3_sm120.cu",
+        "nvfp4_causal_conv3d_sm120.cu",
+        "nvfp4_causal_conv3d_residual_sm120.cu",
+        "nvfp4_causal_conv3d_residual_k128_sm120.cu",
+    ]
+    sm110_sources = ["bf16_conv3d_v0_sm110.cu"]
+    cuda_major = int((torch.version.cuda or "0").split(".", 1)[0])
+    if cuda_major >= 13:
+        # CUDA 13 builder variants may combine both eligible targets into one
+        # extension. Compile the same union here so weak fallback symbols and
+        # strong native implementations are tested together.
         cuda_sources = [
-            "bf16_conv3d_v0_sm110.cu",
+            *sm120_sources,
+            *sm110_sources,
             "world_model_conv_sm110_stubs.cu",
-        ]
-    else:
-        cuda_sources = [
-            "fp8_conv3d_sm120_v18.cu",
-            "fp8_causal_conv3d_sm120.cu",
-            "fp8_conv2d_3x3_sm120.cu",
-            "nvfp4_causal_conv3d_sm120.cu",
-            "nvfp4_causal_conv3d_residual_sm120.cu",
-            "nvfp4_causal_conv3d_residual_k128_sm120.cu",
             "world_model_conv_sm120_stubs.cu",
         ]
+    else:
+        cuda_sources = [*sm120_sources, "world_model_conv_sm120_stubs.cu"]
     load(
         name=namespace,
         sources=[
