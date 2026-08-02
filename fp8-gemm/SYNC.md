@@ -54,6 +54,12 @@ Architecture assumptions:
   `sm_120`.
 - The SM110 kernel depends on the builder-provided CUTLASS 4.5 package. The
   package flake is pinned to a builder revision that exports `cutlass_4_5`.
+- The release flake temporarily pins
+  `LiangSu8899/kernels@d720fa9`, based on
+  `huggingface/kernels@e9152aa`. The fork preserves the upstream builder
+  sources and changes only the stale CUTLASS 4.5.2 fixed-output hash from the
+  specified value to the value returned by the upstream archive. Return to an
+  upstream revision after that hash correction lands.
 
 Runtime constraints:
 
