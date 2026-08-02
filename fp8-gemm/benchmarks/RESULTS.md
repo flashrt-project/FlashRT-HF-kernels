@@ -95,26 +95,33 @@ the ratio is installed artifact / native, so values above 1 are slower.
 
 | Workload `(M,K,N)` | Auto tile | Artifact us | Native us | Artifact/native | Correctness |
 | --- | --- | ---: | ---: | ---: | --- |
-| decode `(1,4096,2048)` | T1 | 16.4 | 16.4 | 1.001 | pass |
-| decode-wide `(1,4096,8192)` | T1 | 49.2 | 49.2 | 1.001 | pass |
-| small-M `(16,4096,4096)` | T1 | 24.0 | 23.8 | 1.011 | pass |
-| small-M `(32,4096,8192)` | T1 | 42.3 | 46.1 | 0.917 | pass |
-| small-M `(64,512,1024)` | T1 | 6.5 | 6.4 | 1.003 | pass |
-| PI0.5 QKV `(51,2048,2560)` | T1 | 12.3 | 12.3 | 1.000 | pass |
-| PI0.5 O `(51,2048,2048)` | T1 | 10.5 | 10.5 | 1.008 | pass |
-| PI0.5 gate/up `(51,2048,16384)` | T1 | 138.6 | 130.9 | 1.059 | pass |
-| PI0.5 down `(51,8192,2048)` | T1 | 22.6 | 22.6 | 0.999 | pass |
-| GROOT DiT QKV `(51,1536,4608)` | T1 | 14.4 | 14.4 | 1.000 | pass |
-| GROOT N1.7 O `(277,2048,2048)` | Wide | 17.4 | 17.3 | 1.003 | pass |
-| GROOT N1.7 gate/up `(277,2048,16384)` | Wide | 171.0 | 171.3 | 0.998 | pass |
-| GROOT N1.7 down `(277,8192,2048)` | T1 | 58.4 | 56.3 | 1.037 | pass |
-| GROOT vision O `(1024,1024,1024)` | Sq | 12.3 | 12.3 | 1.000 | pass |
-| Cosmos Edge action `(64,2048,9216)` | T1 | 24.6 | 24.6 | 1.001 | pass |
-| LingBot vision O `(1024,1280,1280)` | Wide | 16.4 | 16.4 | 1.000 | pass |
-| LingBot action gate/up `(105,2048,16384)` | T1 | 143.4 | 145.4 | 0.986 | pass |
+| decode `(1,4096,2048)` | T1 | 17.232 | 17.344 | 0.997 | pass |
+| decode-wide `(1,4096,8192)` | T1 | 50.144 | 50.112 | 1.001 | pass |
+| small-M `(16,4096,4096)` | T1 | 23.952 | 24.304 | 0.997 | pass |
+| small-M `(32,4096,8192)` | T1 | 46.256 | 46.000 | 1.013 | pass |
+| small-M `(64,512,1024)` | T1 | 11.296 | 11.264 | 0.997 | pass |
+| PI0.5 QKV `(51,2048,2560)` | T1 | 14.080 | 14.048 | 1.009 | pass |
+| PI0.5 O `(51,2048,2048)` | T1 | 13.440 | 13.504 | 0.993 | pass |
+| PI0.5 gate/up `(51,2048,16384)` | Wide | 92.496 | 81.312 | 1.128 | pass |
+| PI0.5 down `(51,8192,2048)` | T1 | 23.392 | 23.392 | 1.003 | pass |
+| GROOT DiT QKV `(51,1536,4608)` | T1 | 15.232 | 15.104 | 1.004 | pass |
+| GROOT N1.7 O `(277,2048,2048)` | Wide | 18.704 | 18.704 | 1.002 | pass |
+| GROOT N1.7 gate/up `(277,2048,16384)` | Wide | 186.432 | 189.360 | 0.985 | pass |
+| GROOT N1.7 down `(277,8192,2048)` | Sq | 50.080 | 49.984 | 1.003 | pass |
+| GROOT vision O `(1024,1024,1024)` | Sq | 15.360 | 15.424 | 0.997 | pass |
+| Cosmos Edge action `(64,2048,9216)` | T1 | 25.264 | 25.312 | 0.999 | pass |
+| LingBot vision O `(1024,1280,1280)` | Wide | 17.152 | 17.216 | 0.997 | pass |
+| LingBot action gate/up `(105,2048,16384)` | Wide | 140.080 | 139.984 | 1.002 | pass |
 
-The stable PI0.5 gate/up row is 5.9% slower than the old native extension and
-is retained explicitly rather than averaged away. It remains within the
-internal per-path 10% release blocker, while source-to-artifact packaging
-parity itself passed with p95/max 1.0068. No speedup claim is derived from rows
-where dynamic Thor clocks made the artifact appear faster than native.
+Each graph ratio is the median of paired, per-launch package/native samples;
+candidate order rotates every round to control Thor DVFS bias. Sixteen rows are
+within about 1.3% of the original FlashRT pointer extension. PI0.5 gate/up is a
+reproducible CUTLASS dependency-version outlier: the Hub-buildable package uses
+CUTLASS 4.5.2 while the original native extension uses 4.4.2, and the paired
+ratio in the final clean artifact run is 1.128. CUTLASS 4.0 was also tested but
+failed at runtime on SM110, so it is not a valid packaging fallback. This row
+is retained explicitly and is not used for a native-parity claim.
+
+The installed artifact selected the fastest validated tactic on every row;
+worst auto/fastest-valid-tile was 1.0028. Source-to-artifact packaging parity
+passed with median 0.9986, p95 1.0195, and max 1.0244.

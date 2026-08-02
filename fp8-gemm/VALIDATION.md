@@ -99,10 +99,19 @@ accumulation reference after BF16 output conversion. The residual row passed
 with `max_abs=0.0625`, `p99_abs=0.0625`, and cosine `0.9999958` under the
 documented BF16 residual contract.
 
-Source-to-installed-artifact A-B-B-A performance parity passed over 17 public
-auto-dispatch shapes: median artifact/source `0.9996`, p95/max `1.0068`.
+Source-to-installed-artifact performance parity passed over 17 public
+auto-dispatch shapes: median artifact/source `0.9986`, p95 `1.0195`, and max
+`1.0244`.
 Comparisons against the original FlashRT pointer entry are reported separately
 in `benchmarks/RESULTS.md`.
+
+The final clean local artifact was built from
+`d31c69b1cb97ecd703aba01e29f423097f11c86a`. All 17 production rows passed the
+dispatcher gate; the worst auto/fastest-valid-tile paired ratio was `1.0028`.
+Sixteen rows matched the original CUTLASS 4.4.2 native entry within about 1.3%
+in the paired graph comparison. The PI0.5 gate/up row is a documented CUTLASS
+4.5.2 version outlier at `1.128x`; it is not described as native-performance
+parity.
 
 Before the SM110 update was published, the existing Thor pipeline dependency
 set was cold-loaded from Hub using both `kernels==0.16.0` and
