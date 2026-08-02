@@ -36,6 +36,15 @@ def _linear_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("fp4_w4a4_gemv_warpsplit_bf16"))
+def _gemv_warpsplit_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, warps: int = 4, stages: int = 4) -> None:
+    if a_packed.shape[0] != 1:
+        raise RuntimeError("warp-split GEMV serves M=1 only")
+    if out.shape != (1, b_packed.shape[0]):
+        raise RuntimeError("out must have shape (1, N)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp4_w4a16_linear_bf16"))
 def _legacy_linear_fake(
     a_packed: torch.Tensor,
@@ -122,6 +131,30 @@ def nvfp4_gemm_bf16(
     if out is None:
         out = torch.empty((a_packed.shape[0], b_packed.shape[0]), device=a_packed.device, dtype=torch.bfloat16)
     ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, float(alpha), int(variant))
+    return out
+
+
+def fp4_w4a4_gemv_warpsplit_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    alpha: float = 1.0,
+    warps: int = 4,
+    stages: int = 4,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Warp-split-K NVFP4 W4A4 GEMV for the M=1 decode row (SM120).
+
+    Splits K across warps inside one block with a shared-memory reduce -
+    no cross-block intermediate, so it stays safe under CUDA-graph
+    replay - and fills the SMs the tiled GEMM underfills at long-K
+    small-M decode shapes. Same packed/scale layouts as the linear
+    entry points."""
+    if out is None:
+        out = torch.empty((1, b_packed.shape[0]), device=a_packed.device, dtype=torch.bfloat16)
+    ops.fp4_w4a4_gemv_warpsplit_bf16(a_packed, b_packed, sfa, sfb, out, float(alpha), int(warps), int(stages))
     return out
 
 
@@ -243,6 +276,7 @@ def nvfp4_gemm_streamk_bias_bf16(
 __all__ = [
     "dequantize_fp4_sfa_fp16",
     "fp4_w4a16_linear_bf16",
+    "fp4_w4a4_gemv_warpsplit_bf16",
     "nvfp4_gemm_bf16",
     "nvfp4_gemm_bias_gelu_bf16",
     "nvfp4_gemm_bias_gelu_nvfp4",
