@@ -227,7 +227,9 @@ def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         if variant:
             return forced[variant]
         if n >= 8 * k:
-            return "sm110_t1_bf16" if m <= 128 else "sm110_wide_bf16"
+            return "sm110_wide_bf16"
+        if m >= 128 and k >= 4 * n:
+            return "sm110_sq_bf16"
         if n == k and m >= 512:
             return "sm110_sq_bf16" if k <= 1024 else "sm110_wide_bf16"
         if n == k and m >= 128:

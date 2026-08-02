@@ -174,11 +174,13 @@ const char* sm110_tile_name_for_shape(int M, int N, int K, int variant) {
   if (variant == 1) return "sm110_sq_bf16";
   if (variant == 2) return "sm110_t1_bf16";
   if (variant == 3) return "sm110_wide_bf16";
-  // Thor sweep envelope (PI0.5/GROOT/Cosmos Edge/LingBot): T1 wins
-  // small/mid-M expansion and projection paths, Wide wins larger-row
-  // expansions and large square projections, and Sq wins smaller square
-  // vision projections. The forced variants remain available for diagnostics.
-  if (N >= 8 * K) return M <= 128 ? "sm110_t1_bf16" : "sm110_wide_bf16";
+  // Thor sweep envelope (PI0.5/GROOT/Cosmos Edge/LingBot): Wide wins
+  // N>=8K expansions and larger square projections. Sq wins smaller square
+  // vision projections and larger-row K>=4N contractions; T1 wins the
+  // remaining projection/down paths.
+  // The forced variants remain available for diagnostic tile sweeps.
+  if (N >= 8 * K) return "sm110_wide_bf16";
+  if (M >= 128 && K >= 4 * N) return "sm110_sq_bf16";
   if (N == K && M >= 512) {
     return K <= 1024 ? "sm110_sq_bf16" : "sm110_wide_bf16";
   }

@@ -74,6 +74,7 @@ class Result:
     flashrt_graph_us: float | None
     package_best_graph_tile: str | None
     package_best_graph_us: float | None
+    auto_over_package_best: float | None
     package_tiles_us: dict[str, dict[str, float]] | None
     native_best_tile: str | None
     native_best_us: float | None
@@ -179,7 +180,9 @@ def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         if variant:
             return forced[variant]
         if n >= 8 * k:
-            return "sm110_t1_bf16" if m <= 128 else "sm110_wide_bf16"
+            return "sm110_wide_bf16"
+        if m >= 128 and k >= 4 * n:
+            return "sm110_sq_bf16"
         if n == k and m >= 512:
             return "sm110_sq_bf16" if k <= 1024 else "sm110_wide_bf16"
         if n == k and m >= 128:
@@ -274,18 +277,31 @@ def capture_graph(fn, warmup: int) -> torch.cuda.CUDAGraph:
 
 
 def measure_group(functions, warmup: int, iters: int, rounds: int = 7):
-    """Round-robin timing balances clock drift across equivalent entry points."""
+    """Measure one launch per candidate per round to balance Thor DVFS drift."""
     names = list(functions)
     samples = {name: [] for name in names}
     for _ in range(warmup):
         for fn in functions.values():
             fn()
     torch.cuda.synchronize()
-    for round_index in range(rounds):
+    sample_count = max(iters, rounds * 16)
+    event_pairs = {name: [] for name in names}
+    for round_index in range(sample_count):
         offset = round_index % len(names)
         for name in names[offset:] + names[:offset]:
-            samples[name].append(measure(functions[name], 0, iters))
-    return {name: float(statistics.median(values)) for name, values in samples.items()}
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            functions[name]()
+            end.record()
+            event_pairs[name].append((start, end))
+    torch.cuda.synchronize()
+    for name, pairs in event_pairs.items():
+        samples[name] = [start.elapsed_time(end) * 1000.0 for start, end in pairs]
+    medians = {
+        name: float(statistics.median(values)) for name, values in samples.items()
+    }
+    return medians, samples
 
 
 def metrics(got, expected):
@@ -352,6 +368,10 @@ def bench_case(ops, native, name: str, shape: tuple[int, int, int], variant: int
     native_best_graph_tile = None
     native_best_graph_us = None
     native_tiles_us = None
+    native_invokes = {}
+    wrapper_vs_native = None
+    graph_vs_native = None
+    auto_over_package_best = None
     if native is not None and torch.cuda.get_device_capability(0) == (11, 0):
         native_out = torch.empty_like(out)
         candidates = [
@@ -359,7 +379,6 @@ def bench_case(ops, native, name: str, shape: tuple[int, int, int], variant: int
             ("sm110_t1_bf16", native.cutlass_fp8_t1_bf16out),
             ("sm110_wide_bf16", native.cutlass_fp8_wide_bf16out),
         ]
-        native_invokes = {}
         for tile_name, fn in candidates:
             invoke = lambda fn=fn: fn(
                 x.data_ptr(), w.data_ptr(), native_out.data_ptr(),
@@ -380,27 +399,41 @@ def bench_case(ops, native, name: str, shape: tuple[int, int, int], variant: int
             native_invokes[tile_name] = invoke
             eager_functions[key] = invoke
             graph_objects[key] = capture_graph(invoke, warmup)
-        if native_invokes:
-            eager_times = measure_group(eager_functions, warmup, iters)
-            graph_times = measure_group(
-                {name: graph.replay for name, graph in graph_objects.items()},
-                warmup,
-                iters,
+    if package_forced_tiles:
+        eager_times, eager_samples = measure_group(eager_functions, warmup, iters)
+        graph_times, graph_samples = measure_group(
+            {
+                key: graph.replay
+                for key, graph in graph_objects.items()
+                if key != "wrapper"
+            },
+            warmup,
+            iters,
+        )
+        flashrt_us = eager_times["wrapper"]
+        package_tiles_us = {
+            tile_name: {
+                "eager": eager_times[f"package:{tile_name}"],
+                "graph": graph_times[f"package:{tile_name}"],
+            }
+            for tile_name in package_forced_tiles
+        }
+        package_best_graph_us, package_best_graph_tile = min(
+            (times["graph"], tile_name)
+            for tile_name, times in package_tiles_us.items()
+        )
+        # Auto and its matching forced variant resolve to the same native
+        # function. Use that single graph measurement for the tile gate; timing
+        # duplicate graph objects is vulnerable to Thor DVFS order bias.
+        flashrt_graph_us = package_tiles_us[tile]["graph"]
+        auto_over_package_best = float(statistics.median(
+            selected / best
+            for selected, best in zip(
+                graph_samples[f"package:{tile}"],
+                graph_samples[f"package:{package_best_graph_tile}"],
             )
-            flashrt_us = eager_times["wrapper"]
-            flashrt_graph_us = graph_times["wrapper"]
-            package_tiles_us = {
-                tile_name: {
-                    "eager": eager_times[f"package:{tile_name}"],
-                    "graph": graph_times[f"package:{tile_name}"],
-                }
-                for tile_name in package_forced_tiles
-            } or None
-            if package_tiles_us:
-                package_best_graph_us, package_best_graph_tile = min(
-                    (times["graph"], tile_name)
-                    for tile_name, times in package_tiles_us.items()
-                )
+        ))
+        if native_invokes:
             native_tiles_us = {
                 tile_name: {
                     "eager": eager_times[f"native:{tile_name}"],
@@ -416,11 +449,26 @@ def bench_case(ops, native, name: str, shape: tuple[int, int, int], variant: int
                 (times["graph"], tile_name)
                 for tile_name, times in native_tiles_us.items()
             )
-    if native_tiles_us is None:
+            wrapper_vs_native = float(statistics.median(
+                wrapper / native_sample
+                for wrapper, native_sample in zip(
+                    eager_samples["wrapper"],
+                    eager_samples[f"native:{native_best_tile}"],
+                )
+            ))
+            graph_vs_native = float(statistics.median(
+                package_sample / native_sample
+                for package_sample, native_sample in zip(
+                    graph_samples[f"package:{tile}"],
+                    graph_samples[f"native:{native_best_graph_tile}"],
+                )
+            ))
+    else:
         flashrt_us = measure_median(wrapper_invoke, warmup, iters)
         flashrt_graph_us = measure_median(
             graph_objects["wrapper"].replay, warmup, iters
         )
+    tile_pass = auto_over_package_best is None or auto_over_package_best <= 1.10
     eager_us = measure(lambda: ref_fn(x, w), warmup, iters)
     compile_us = None
     if compile_ref:
@@ -443,15 +491,15 @@ def bench_case(ops, native, name: str, shape: tuple[int, int, int], variant: int
         flashrt_graph_us=flashrt_graph_us,
         package_best_graph_tile=package_best_graph_tile,
         package_best_graph_us=package_best_graph_us,
+        auto_over_package_best=auto_over_package_best,
         package_tiles_us=package_tiles_us,
         native_best_tile=native_best_tile,
         native_best_us=native_best_us,
         native_best_graph_tile=native_best_graph_tile,
         native_best_graph_us=native_best_graph_us,
         native_tiles_us=native_tiles_us,
-        wrapper_vs_native=(native_best_us / flashrt_us) if native_best_us else None,
-        graph_vs_native=(native_best_graph_us / flashrt_graph_us)
-        if native_best_graph_us else None,
+        wrapper_vs_native=wrapper_vs_native,
+        graph_vs_native=graph_vs_native,
         torch_eager_us=eager_us,
         torch_compile_us=compile_us,
         speedup_vs_eager=eager_us / flashrt_us,
@@ -460,7 +508,11 @@ def bench_case(ops, native, name: str, shape: tuple[int, int, int], variant: int
         mean_abs=mean_abs,
         p99_abs=p99_abs,
         cosine=cos,
-        status="pass" if max_abs <= 0.5 and p99_abs <= 0.25 and cos >= 0.999 else "fail",
+        status=(
+            "pass"
+            if max_abs <= 0.5 and p99_abs <= 0.25 and cos >= 0.999 and tile_pass
+            else "fail"
+        ),
     )
 
 
