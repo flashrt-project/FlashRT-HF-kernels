@@ -312,6 +312,134 @@ void gated_deltanet_recurrent_inout_qwen36_bf16(
       num_v_heads, use_qk_l2norm);
 }
 
+// FP32-log-decay variant of the in/out step. Identical math to
+// gated_deltanet_recurrent_inout_kernel except that ``g`` is read as
+// FP32: the official cached-decode host exposes the log-decay in FP32,
+// and rounding it through BF16 (or paying a cast kernel in the swapped
+// hot path) is exactly what the structure qualification refused.
+namespace {
+
+template <int HD>
+__global__ void gated_deltanet_recurrent_inout_gf32_kernel(
+    const __nv_bfloat16* __restrict__ q_in,
+    const __nv_bfloat16* __restrict__ k_in,
+    const __nv_bfloat16* __restrict__ v_in,
+    const float*         __restrict__ g_in,
+    const __nv_bfloat16* __restrict__ beta_in,
+    const __nv_bfloat16* __restrict__ state_in,
+    __nv_bfloat16* __restrict__ state_out,
+    __nv_bfloat16* __restrict__ out_,
+    int num_v_heads,
+    bool use_qk_l2norm)
+{
+  static_assert(HD == 128, "HD must be 128 for Qwen3.6");
+  const int h = blockIdx.x;
+  const int b = blockIdx.y;
+  const int t = threadIdx.x;
+  if (t >= HD) return;
+
+  __shared__ float smem[2 * HD + 32];
+  float* qs = smem;
+  float* ks = smem + HD;
+  float* scratch = smem + 2 * HD;
+
+  const size_t qkv_off = ((size_t)b * num_v_heads + h) * HD + t;
+  qs[t] = static_cast<float>(q_in[qkv_off]);
+  ks[t] = static_cast<float>(k_in[qkv_off]);
+  __syncthreads();
+
+  if (use_qk_l2norm) {
+    float q_sq = qs[t] * qs[t];
+    float k_sq = ks[t] * ks[t];
+    q_sq = block_reduce_sum<HD>(q_sq, scratch);
+    // Required between consecutive block_reduce_sum calls that share
+    // the same ``scratch`` smem region — see chunked kernel comment.
+    __syncthreads();
+    k_sq = block_reduce_sum<HD>(k_sq, scratch);
+    const float q_inv = rsqrtf(q_sq + kEps);
+    const float k_inv = rsqrtf(k_sq + kEps);
+    qs[t] *= q_inv;
+    ks[t] *= k_inv;
+    __syncthreads();
+  }
+
+  qs[t] *= rsqrtf(static_cast<float>(HD));
+  __syncthreads();
+
+  const float g_t = __expf(g_in[b * num_v_heads + h]);
+  const float beta_t =
+      static_cast<float>(beta_in[b * num_v_heads + h]);
+
+  float col[HD];
+  const size_t state_h_off =
+      (((size_t)b * num_v_heads + h)) * HD * HD;
+  #pragma unroll 16
+  for (int i = 0; i < HD; ++i) {
+    col[i] =
+        static_cast<float>(state_in[state_h_off + (size_t)i * HD + t]) * g_t;
+  }
+
+  float kv_mem = 0.0f;
+  #pragma unroll 16
+  for (int i = 0; i < HD; ++i) {
+    kv_mem = fmaf(col[i], ks[i], kv_mem);
+  }
+
+  const float v_t =
+      static_cast<float>(v_in[(size_t)b * num_v_heads * HD + h * HD + t]);
+  const float delta = (v_t - kv_mem) * beta_t;
+
+  #pragma unroll 16
+  for (int i = 0; i < HD; ++i) {
+    col[i] = fmaf(ks[i], delta, col[i]);
+  }
+
+  #pragma unroll 16
+  for (int i = 0; i < HD; ++i) {
+    state_out[state_h_off + (size_t)i * HD + t] = __float2bfloat16(col[i]);
+  }
+
+  float out_t = 0.0f;
+  #pragma unroll 16
+  for (int i = 0; i < HD; ++i) {
+    out_t = fmaf(col[i], qs[i], out_t);
+  }
+  out_[(size_t)b * num_v_heads * HD + h * HD + t] =
+      __float2bfloat16(out_t);
+}
+
+}  // namespace
+
+void gated_deltanet_recurrent_inout_qwen36_gf32(
+    const void* q,
+    const void* k,
+    const void* v,
+    const void* g,
+    const void* beta,
+    const void* state_in,
+    void*       state_out,
+    void*       out,
+    int B, int num_v_heads, int head_k_dim, int head_v_dim,
+    bool use_qk_l2norm,
+    cudaStream_t stream)
+{
+  if (head_k_dim != kHD || head_v_dim != kHD) {
+    return;
+  }
+  dim3 grid(num_v_heads, B);
+  dim3 block(kHD);
+  gated_deltanet_recurrent_inout_gf32_kernel<kHD><<<grid, block, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(q),
+      reinterpret_cast<const __nv_bfloat16*>(k),
+      reinterpret_cast<const __nv_bfloat16*>(v),
+      reinterpret_cast<const float*>(g),
+      reinterpret_cast<const __nv_bfloat16*>(beta),
+      reinterpret_cast<const __nv_bfloat16*>(state_in),
+      reinterpret_cast<__nv_bfloat16*>(state_out),
+      reinterpret_cast<__nv_bfloat16*>(out),
+      num_v_heads, use_qk_l2norm);
+}
+
 // FP32-state variant. Mathematically identical to the BF16-state path
 // (FP32 col[] accumulator), but the persistent state is read AND
 // written in FP32 — no __float2bfloat16 round-trip per recurrent

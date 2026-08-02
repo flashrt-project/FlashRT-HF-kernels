@@ -193,6 +193,44 @@ void gated_delta_recurrent_inout_bf16(torch::Tensor const& q, torch::Tensor cons
 #endif
 }
 
+void gated_delta_recurrent_inout_gf32_bf16(torch::Tensor const& q, torch::Tensor const& k,
+                                           torch::Tensor const& v, torch::Tensor const& g,
+                                           torch::Tensor const& beta,
+                                           torch::Tensor const& state_in,
+                                           torch::Tensor& state_out,
+                                           torch::Tensor& out,
+                                           bool use_qk_l2norm) {
+  check_bf16(q, "q");
+  check_bf16(k, "k");
+  check_bf16(v, "v");
+  check_f32(g, "g");
+  check_bf16(beta, "beta");
+  TORCH_CHECK(q.dim() == 3, "q must have shape (B,H,D)");
+  TORCH_CHECK(k.sizes() == q.sizes() && v.sizes() == q.sizes(),
+              "k/v must match q shape");
+  TORCH_CHECK(g.sizes() == torch::IntArrayRef({q.size(0), q.size(1)}),
+              "g must have shape (B,H)");
+  TORCH_CHECK(beta.sizes() == g.sizes(), "beta must match g shape");
+  TORCH_CHECK(q.size(2) == 128, "v1 recurrent profile requires head_dim=128");
+  same_device(q, k, "q", "k");
+  same_device(q, g, "q", "g");
+  check_state_bf16(q, state_in, "state_in");
+  check_state_bf16(q, state_out, "state_out");
+  check_out(q, out);
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(q.device());
+  auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
+  flash_rt::kernels::gated_deltanet_recurrent_inout_qwen36_gf32(
+      q.data_ptr(), k.data_ptr(), v.data_ptr(), g.data_ptr(), beta.data_ptr(),
+      state_in.data_ptr(), state_out.data_ptr(), out.data_ptr(),
+      static_cast<int>(q.size(0)), static_cast<int>(q.size(1)),
+      static_cast<int>(q.size(2)), static_cast<int>(q.size(2)),
+      use_qk_l2norm, stream);
+#else
+  TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
+#endif
+}
+
 void gated_delta_recurrent_f32state_bf16io(torch::Tensor const& q, torch::Tensor const& k,
                                            torch::Tensor const& v, torch::Tensor const& g,
                                            torch::Tensor const& beta,
@@ -754,6 +792,7 @@ void gdn_wy_output_o_b64_mma_fla_rawk_bf16(torch::Tensor const& q_pack_hv,
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("gated_delta_recurrent_bf16(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor! state, Tensor! out, bool use_qk_l2norm=True) -> ()");
   ops.def("gated_delta_recurrent_inout_bf16(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor state_in, Tensor! state_out, Tensor! out, bool use_qk_l2norm=True) -> ()");
+  ops.def("gated_delta_recurrent_inout_gf32_bf16(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor state_in, Tensor! state_out, Tensor! out, bool use_qk_l2norm=True) -> ()");
   ops.def("gated_delta_recurrent_f32state_bf16io(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor! state_f32, Tensor! out, bool use_qk_l2norm=True) -> ()");
   ops.def("gated_delta_chunk_bf16(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor! state, Tensor! out, bool use_qk_l2norm=True) -> ()");
   ops.def("gated_delta_chunk_smem_bf16(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor! state, Tensor! out, bool use_qk_l2norm=True) -> ()");
@@ -778,6 +817,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
 #if defined(CUDA_KERNEL)
   ops.impl("gated_delta_recurrent_bf16", torch::kCUDA, &gated_delta_recurrent_bf16);
   ops.impl("gated_delta_recurrent_inout_bf16", torch::kCUDA, &gated_delta_recurrent_inout_bf16);
+  ops.impl("gated_delta_recurrent_inout_gf32_bf16", torch::kCUDA, &gated_delta_recurrent_inout_gf32_bf16);
   ops.impl("gated_delta_recurrent_f32state_bf16io", torch::kCUDA, &gated_delta_recurrent_f32state_bf16io);
   ops.impl("gated_delta_chunk_bf16", torch::kCUDA, &gated_delta_chunk_bf16);
   ops.impl("gated_delta_chunk_smem_bf16", torch::kCUDA, &gated_delta_chunk_smem_bf16);
