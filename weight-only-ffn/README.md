@@ -92,19 +92,35 @@ scale lookup table and all library state.
 
 ## Supported Domain
 
-- Hardware: Blackwell SM120/SM121
+- Hardware: Blackwell SM110/SM120/SM121
 - CUDA: 12.8 or newer; the exact Hub artifact depends on CUDA and Torch ABI
 - Activations/output: contiguous BF16 matrices
 - Static weights: W4 or W8 formats described above
 - `K`: divisible by 64
 - W8 production auto dispatch: qualified `M=1..4` shapes; narrow-output,
   large-`K` linear geometries are rejected
-- W4 linear production auto dispatch: `M=1` with `N>=4096`, or `M=2`
-  with `N>=2048`, `2048<=K<=8192`, and at least 8M weight elements
+- W4 linear production auto dispatch on SM120/SM121: `M=1` with `N>=4096`
 - W4 gated FFN production auto dispatch: `M<=3`, with a measured minimum
   static-weight footprint of 12M/32M/64M elements for `M=1/2/3`
 - W4 GELU FFN production auto dispatch: `M<=3` and at least 64M static
   weight elements
+
+Thor SM110 uses a separately compiled CUDA 13 component in the same package.
+Its production auto dispatch is intentionally narrower than the SM120/SM121
+dispatch:
+
+- standalone W4/W8 linear is accepted only for wide projections with
+  `N>=2K` and at least 32M static-weight elements; W4 supports `M<=2` in this
+  Thor-only envelope;
+- W8 gated FFN requires at least 24M static-weight elements;
+- W8 GELU FFN requires at least 16M static-weight elements;
+- W4 gated FFN requires at least 24M elements at `M=1`; all measured Thor
+  `M=3` W4 gated and GELU paths are rejected.
+
+These rules come from the installed-artifact Thor sweep against the stronger
+of BF16 PyTorch eager and warmed `torch.compile`. They are performance
+qualification rules, not correctness limitations. Explicit variants remain
+available only for diagnostics.
 
 `variant=1..3` exists for reproducible tile diagnostics. Applications should
 use the default `variant=0`; diagnostic variants are not a compatibility

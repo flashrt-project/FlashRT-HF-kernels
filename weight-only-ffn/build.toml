@@ -54,3 +54,37 @@ src = [
   "csrc/ffn_epilogues.cu",
   "csrc/weight_only_ffn.cuh",
 ]
+
+[kernel.weight_only_sm110]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "13"
+cuda-capabilities = ["11.0a"]
+cuda-flags = [
+  "--use_fast_math",
+  "-Dquantize_w4_weight_bf16=quantize_w4_weight_bf16_sm110",
+  "-Ddequantize_w4_weight_bf16=dequantize_w4_weight_bf16_sm110",
+  "-Dw4a16_linear_bf16=w4a16_linear_bf16_sm110",
+  "-Dquantize_w8_weight_bf16=quantize_w8_weight_bf16_sm110",
+  "-Ddequantize_w8_weight_bf16=dequantize_w8_weight_bf16_sm110",
+  "-Dw8a16_linear_bf16=w8a16_linear_bf16_sm110",
+  "-Dgated_activation_bf16=gated_activation_bf16_sm110",
+  "-Dgelu_activation_bf16=gelu_activation_bf16_sm110",
+  "-Dadd_bias_bf16=add_bias_bf16_sm110",
+  "-Dw4a16_gemm_sm120_bf16=w4a16_gemm_sm110_bf16",
+  "-Dw4a16_matvec_sm120_bf16=w4a16_matvec_sm110_bf16",
+  "-Dw4a16_smallm_sm120_bf16=w4a16_smallm_sm110_bf16",
+]
+src = [
+  "csrc/w4_weight_only.cu",
+  "csrc/w4a16_gemm_sm120.cu",
+  "csrc/w4a16_gemm_sm120.cuh",
+  "csrc/w4a16_matvec_sm120.cu",
+  "csrc/w4a16_matvec_sm120.cuh",
+  "csrc/w8_weight_only.cu",
+  "csrc/ffn_epilogues.cu",
+  "csrc/weight_only_ffn.cuh",
+  "csrc/sm110_dispatch.cu",
+  "csrc/sm110_dispatch.cuh",
+]

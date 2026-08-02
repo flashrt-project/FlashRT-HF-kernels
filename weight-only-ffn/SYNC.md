@@ -14,3 +14,8 @@ changes are maintained in this package.
 All CUDA translation units require `--use_fast_math`. Source tests and
 benchmarks use the same flag, and `build.toml` passes it explicitly to
 `kernel-builder` so published artifacts preserve the validated code generation.
+
+The SM110 component recompiles the same mathematical kernels under unique
+symbols and registers them through `csrc/sm110_dispatch.cu`. This prevents
+CUDA 13 SM110 support from replacing or colliding with the existing CUDA 12.8
+SM120/SM121 component in a multi-architecture artifact.

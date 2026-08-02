@@ -15,7 +15,7 @@ tags:
 # weight-only-ffn
 
 Small-M BF16-activation FFN regions with static W4 or W8 weights for Blackwell
-SM120/SM121.
+SM110/SM120/SM121.
 
 Available functions:
 
@@ -48,3 +48,8 @@ Production auto dispatch supports qualified `M=1..4` shapes and rejects known
 slow regions based on row count and weight dimensions.
 Weights are prepared once; activations remain BF16 throughout the public
 contract.
+
+SM110 uses an independent CUDA 13 component and architecture-specific
+performance gates. Standalone Thor linears are accepted only for sufficiently
+large wide projections; callers should use the complete FFN API where the
+whole region is qualified.

@@ -52,11 +52,13 @@ class Check:
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if major == 11 and minor == 0:
+        return "11.0a"
     if major == 12 and minor == 1:
         return "12.1"
     if major >= 12:
         return "12.0a"
-    raise RuntimeError("weight-only-ffn source tests require Blackwell SM120/SM121")
+    raise RuntimeError("weight-only-ffn source tests require Blackwell SM110/SM120/SM121")
 
 
 def load_source_module():
@@ -120,7 +122,7 @@ class RawOps:
         if bits == 4:
             self.ops.w4a16_linear_bf16(x, weight, scale, 1.0, 3, out)
         else:
-            self.ops.w8a16_linear_bf16(x, weight, scale, 0, out)
+            self.ops.w8a16_linear_bf16(x, weight, scale, 3, out)
 
     def gated(self, bits, x, gu_w, gu_s, dn_w, dn_s, gu_b, dn_b, gelu, gu, hidden, out):
         if bits == 4:
@@ -164,7 +166,7 @@ class PublicOps(RawOps):
         if bits == 4:
             self.module.w4a16_linear_bf16(x, weight, scale, variant=3, out=out)
         else:
-            self.module.w8a16_linear_bf16(x, weight, scale, out=out)
+            self.module.w8a16_linear_bf16(x, weight, scale, variant=3, out=out)
 
     def gated(self, bits, x, gu_w, gu_s, dn_w, dn_s, gu_b, dn_b, gelu, gu, hidden, out):
         fn = getattr(self.module, f"w{bits}a16_{'geglu' if gelu else 'swiglu'}_ffn_bf16")
@@ -274,8 +276,10 @@ def run(backend, mode: str) -> list[Check]:
                 backend.module.w4a16_linear_bf16(x, packed, scale, out=out)
             elif bits == 4:
                 backend.ops.w4a16_linear_bf16(x, packed, scale, 1.0, 0, out)
+            elif isinstance(backend, PublicOps):
+                backend.module.w8a16_linear_bf16(x, packed, scale, variant=0, out=out)
             else:
-                backend.linear(bits, x, packed, scale, out)
+                backend.ops.w8a16_linear_bf16(x, packed, scale, 0, out)
         except RuntimeError as exc:
             if "M in [1,4]" not in str(exc):
                 raise
@@ -307,10 +311,11 @@ def run(backend, mode: str) -> list[Check]:
                     f"W{bits}A16 auto must reject weak M={m}, N={n}, K={k}"
                 )
 
-    call_auto_linear(4, 1, 4096, 256, True)
-    call_auto_linear(4, 2, 2048, 4096, True)
+    thor = torch.cuda.get_device_capability(0)[0] == 11
+    call_auto_linear(4, 1, 4096, 256, not thor)
+    call_auto_linear(4, 2, 2048, 4096, False)
     call_auto_linear(4, 3, 11008, 4096, False)
-    call_auto_linear(8, 4, 1024, 4096, True)
+    call_auto_linear(8, 4, 1024, 4096, not thor)
     call_auto_linear(8, 4, 1024, 8192, False)
 
     if isinstance(backend, PublicOps) and mode == "full":
@@ -319,7 +324,7 @@ def run(backend, mode: str) -> list[Check]:
         packed, scale, _ = backend.quantize(weight, 8)
 
         def public_linear(inp):
-            return backend.module.w8a16_linear_bf16(inp, packed, scale)
+            return backend.module.w8a16_linear_bf16(inp, packed, scale, variant=3)
 
         eager = public_linear(x)
         compiled = torch.compile(public_linear, fullgraph=True)

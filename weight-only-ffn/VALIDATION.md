@@ -57,24 +57,47 @@ Each op is measured against both PyTorch eager and a warmed
 `torch.compile(mode="max-autotune-no-cudagraphs")` reference. Variant timings
 are retained so the selected auto dispatch can be audited. An accepted auto
 path fails the benchmark if it is more than 5% slower than the fastest
-diagnostic tile. Rejected shapes remain visible as `auto_status="rejected"` and
-are never reported as production speedups.
+diagnostic tile or if it does not beat the stronger eager/compile baseline by
+at least 2%. Rejected shapes remain visible as `auto_status="rejected"` and are
+never reported as production speedups. The full matrix contains complete FFN
+regions and standalone linear projections so a fast first projection cannot
+hide a weak second projection.
 
 ## RTX 5090 Release-Candidate Evidence
 
-The installed `torch211-cxx11-cu128-x86_64-linux` kernel-builder artifact was
-tested on an NVIDIA GeForce RTX 5090 with Torch 2.11.0+cu128:
+The source release candidate was tested on an NVIDIA GeForce RTX 5090 with
+Torch 2.9.1+cu128:
 
 - correctness: `26/26` checks passed
 - worst W8 cosine similarity: `0.9999913`
 - worst W8 p99 absolute error: `0.001953125`
 - public W8 linear wrapper: exact eager/`torch.compile(fullgraph=True)` parity
-- performance sweep: 60 rows, 39 accepted and 21 explicitly rejected
-- minimum accepted speedup: `1.22x` versus eager and `1.38x` versus compile
-- maximum auto-to-best-diagnostic-tile gap: `1.81%`
+- performance sweep: 76 rows, 51 accepted and 25 explicitly rejected
+- minimum accepted speedup: `1.22x` versus eager and `1.37x` versus compile
+- maximum auto-to-best-diagnostic-tile gap: `2.82%`
 
 The release flake pins upstream kernel-builder commit
 `19aaa6421e674e9fecc352bbae6eab81d19a6bf4`. With CUDA 12.8+ filtering, the
 expected x86_64 release matrix is Torch 2.11 cu128/cu130, Torch 2.12
 cu130/cu132, and Torch 2.13 cu130/cu132. HF Jobs must build and upload every
 eligible variant before the Hub release is considered complete.
+
+## Thor SM110 Evidence
+
+The CUDA 13 builder-generated aarch64 artifact was tested on NVIDIA Thor,
+SM110, with Torch 2.11.0+cu130:
+
+- source correctness: 26/26 checks passed;
+- installed-artifact correctness: 26/26 checks passed;
+- generated fatbin contains SM110a, SM120a, and SM121 cubins, while the CUDA
+  12.8 SM120 component remains unchanged;
+- complete FFN sweep: W4 accepts 8 winning rows and W8 accepts 21 winning
+  rows; the standalone linear sweep accepts two W4 and two W8 rows; zero
+  accepted rows lose to the stronger eager/compile baseline;
+- minimum complete-region speedup: W4 `1.188x`, W8 `1.352x` against the
+  stronger baseline;
+- accepted auto selection is at most `0.76%` from the fastest diagnostic tile;
+- standalone projection sweep covers eight model-oriented shapes for both W4
+  and W8. Thor auto dispatch retains only the large wide-projection envelope
+  and rejects square, down-projection, and small-weight rows that lose to
+  eager BF16 GEMM.

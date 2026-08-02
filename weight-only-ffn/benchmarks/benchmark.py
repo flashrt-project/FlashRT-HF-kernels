@@ -28,6 +28,17 @@ SHAPES = {
     "vision_m4": (4, 1536, 6144, 1536),
 }
 
+LINEAR_SHAPES = {
+    "llm_square_m1": (1, 4096, 4096),
+    "llm_wide_m1": (1, 4096, 11008),
+    "vla_wide_m1": (1, 1024, 4096),
+    "vision_wide_m1": (1, 1536, 6144),
+    "llm_square_m2": (2, 4096, 4096),
+    "llm_wide_m2": (2, 4096, 11008),
+    "vla_wide_m2": (2, 1024, 4096),
+    "vision_wide_m2": (2, 1536, 6144),
+}
+
 
 def bench(fn, warmup: int, iterations: int, repeats: int = 3) -> float:
     for _ in range(warmup):
@@ -75,6 +86,26 @@ class SourceModule:
     def dequantize_w8_weight_bf16(self, packed, scale):
         out = torch.empty_like(packed, dtype=torch.bfloat16)
         self.ops.dequantize_w8_weight_bf16(packed, scale, out)
+        return out
+
+    def w4a16_linear_bf16(self, x, weight, scale, *, variant=0, out=None):
+        if out is None:
+            out = torch.empty(
+                (x.shape[0], weight.shape[0]), device=x.device,
+                dtype=torch.bfloat16,
+            )
+        self.ops.w4a16_linear_bf16(
+            x, weight, scale, 1.0, variant, out,
+        )
+        return out
+
+    def w8a16_linear_bf16(self, x, weight, scale, *, variant=0, out=None):
+        if out is None:
+            out = torch.empty(
+                (x.shape[0], weight.shape[0]), device=x.device,
+                dtype=torch.bfloat16,
+            )
+        self.ops.w8a16_linear_bf16(x, weight, scale, variant, out)
         return out
 
     def _gated(self, bits, x, gu_w, gu_s, dn_w, dn_s, *, gelu,
@@ -132,9 +163,15 @@ def load_source_module():
     root = Path(__file__).resolve().parents[1]
     registration = root.parent.parent / "kernels" / "kernel-builder" / "src" / "pyproject" / "templates" / "torch"
     major, minor = torch.cuda.get_device_capability(0)
-    if major < 12:
-        raise RuntimeError("source benchmark requires SM120/SM121")
-    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.1" if minor == 1 else "12.0a")
+    if major == 11 and minor == 0:
+        arch = "11.0a"
+    elif major == 12 and minor == 1:
+        arch = "12.1"
+    elif major >= 12:
+        arch = "12.0a"
+    else:
+        raise RuntimeError("source benchmark requires Blackwell SM110/SM120/SM121")
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", arch)
     namespace = "weight_only_ffn_benchmark_source"
     load(
         name=namespace,
@@ -260,7 +297,15 @@ def run_case(module, name: str, shape, bits: int, activation: str,
             f"than 5% slower than diagnostic variant {best_diagnostic_variant} "
             f"at {best_diagnostic_us:.3f} us"
         )
+    if auto_us is not None and auto_us * 1.02 >= min(eager_us, compiled_us):
+        raise AssertionError(
+            f"{name} W{bits}A16 {activation}: accepted auto path must beat "
+            f"the strongest eager/compile baseline by at least 2%; "
+            f"auto={auto_us:.3f} us, eager={eager_us:.3f} us, "
+            f"compile={compiled_us:.3f} us"
+        )
     return {
+        "region": "ffn",
         "shape": name,
         "M": m,
         "K": k,
@@ -285,6 +330,94 @@ def run_case(module, name: str, shape, bits: int, activation: str,
     }
 
 
+def run_linear_case(module, name: str, shape, bits: int, warmup: int,
+                    iterations: int):
+    m, k, n = shape
+    generator = torch.Generator(device="cuda").manual_seed(
+        92000 + m + k + n + bits
+    )
+    x = (torch.randn((m, k), generator=generator, device="cuda") * 0.1).bfloat16()
+    weight = (
+        torch.randn((n, k), generator=generator, device="cuda") * 0.02
+    ).bfloat16()
+    packed, scale, dequant = quantize(module, bits, weight)
+    out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+    linear = getattr(module, f"w{bits}a16_linear_bf16")
+
+    def kernel(variant: int):
+        return linear(x, packed, scale, variant=variant, out=out)
+
+    def reference():
+        return F.linear(x, dequant)
+
+    eager_us = bench(reference, warmup, iterations)
+    compiled = torch.compile(
+        reference, fullgraph=True, mode="max-autotune-no-cudagraphs"
+    )
+    compiled()
+    torch.cuda.synchronize()
+    compiled_us = bench(compiled, warmup, iterations)
+    variants = {
+        str(variant): bench(
+            lambda variant=variant: kernel(variant), warmup, iterations
+        )
+        for variant in (1, 2, 3)
+    }
+    auto_error = None
+    try:
+        auto_us = bench(lambda: kernel(0), warmup, iterations)
+        kernel(0)
+    except RuntimeError as exc:
+        if "no qualified fast path" not in str(exc):
+            raise
+        auto_us = None
+        auto_error = str(exc)
+        kernel(int(min(variants, key=variants.get)))
+    ref = reference()
+    torch.cuda.synchronize()
+    diff = (out.float() - ref.float()).abs().flatten()
+    cosine = F.cosine_similarity(
+        out.float().flatten(), ref.float().flatten(), dim=0
+    )
+    best_variant = min(variants, key=variants.get)
+    best_us = variants[best_variant]
+    if auto_us is not None and auto_us > best_us * 1.05:
+        raise AssertionError(
+            f"{name} W{bits}A16 linear: auto {auto_us:.3f} us is more than "
+            f"5% slower than diagnostic variant {best_variant} at {best_us:.3f} us"
+        )
+    if auto_us is not None and auto_us * 1.02 >= min(eager_us, compiled_us):
+        raise AssertionError(
+            f"{name} W{bits}A16 linear: accepted auto path must beat the "
+            f"strongest eager/compile baseline by at least 2%; "
+            f"auto={auto_us:.3f} us, eager={eager_us:.3f} us, "
+            f"compile={compiled_us:.3f} us"
+        )
+    return {
+        "region": "linear",
+        "shape": name,
+        "M": m,
+        "K": k,
+        "N": n,
+        "precision": f"W{bits}A16",
+        "op": "linear",
+        "eager_us": eager_us,
+        "compile_us": compiled_us,
+        "variant_us": variants,
+        "auto_status": "accepted" if auto_us is not None else "rejected",
+        "auto_us": auto_us,
+        "auto_error": auto_error,
+        "auto_speedup_vs_eager": eager_us / auto_us if auto_us else None,
+        "auto_speedup_vs_compile": compiled_us / auto_us if auto_us else None,
+        "best_diagnostic_variant": int(best_variant),
+        "best_diagnostic_us": best_us,
+        "max_abs": float(diff.max()),
+        "mean_abs": float(diff.mean()),
+        "p99_abs": float(torch.quantile(diff, 0.99)),
+        "cosine": float(cosine),
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -302,6 +435,13 @@ def main() -> int:
             for activation in ("swiglu", "geglu", "gelu"):
                 rows.append(run_case(module, name, SHAPES[name], bits, activation,
                                      args.warmup, args.iterations))
+    linear_names = ["llm_square_m1"] if args.mode == "smoke" else list(LINEAR_SHAPES)
+    for name in linear_names:
+        for bits in (4, 8):
+            rows.append(run_linear_case(
+                module, name, LINEAR_SHAPES[name], bits,
+                args.warmup, args.iterations,
+            ))
     payload = {
         "device": torch.cuda.get_device_name(),
         "capability": list(torch.cuda.get_device_capability()),

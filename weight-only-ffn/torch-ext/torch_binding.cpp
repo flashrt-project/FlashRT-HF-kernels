@@ -9,10 +9,30 @@
 #endif
 
 #include "registration.h"
+#include "sm110_dispatch.cuh"
 #include "torch_binding.h"
+#define FLASHRT_WEIGHT_ONLY_OPTIONAL_SYMBOLS
 #include "weight_only_ffn.cuh"
+#undef FLASHRT_WEIGHT_ONLY_OPTIONAL_SYMBOLS
+
+const flashrt_weight_only::hub::Sm110Dispatch*
+    flashrt_weight_only::hub::sm110_dispatch = nullptr;
 
 namespace {
+
+#if defined(CUDA_KERNEL)
+const flashrt_weight_only::hub::Sm110Dispatch* sm110_dispatch_for(
+    torch::Tensor const& tensor) {
+  const auto* properties = at::cuda::getDeviceProperties(tensor.get_device());
+  return properties->major == 11 ? flashrt_weight_only::hub::sm110_dispatch
+                                 : nullptr;
+}
+
+bool is_sm110(torch::Tensor const& tensor) {
+  const auto* properties = at::cuda::getDeviceProperties(tensor.get_device());
+  return properties->major == 11 && properties->minor == 0;
+}
+#endif
 
 void check_cuda_contiguous(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.is_cuda(), name, " must be a CUDA tensor");
@@ -165,6 +185,121 @@ MatrixShape check_w8_linear(torch::Tensor const& x,
 cudaStream_t current_stream(torch::Tensor const& tensor) {
   return at::cuda::getCurrentCUDAStream(tensor.get_device()).stream();
 }
+
+int launch_quantize_w4(torch::Tensor const& device, const void* weight,
+                       void* packed, void* scales, int rows, int cols,
+                       cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    return dispatch->quantize_w4(weight, packed, scales, rows, cols, stream);
+  }
+  TORCH_CHECK(flashrt_weight_only::quantize_w4_weight_bf16 != nullptr,
+              "W4 quantization source is not present for this architecture");
+  return flashrt_weight_only::quantize_w4_weight_bf16(
+      weight, packed, scales, rows, cols, stream);
+}
+
+int launch_dequantize_w4(torch::Tensor const& device, const void* packed,
+                         const void* scales, void* weight, int rows, int cols,
+                         cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    return dispatch->dequantize_w4(packed, scales, weight, rows, cols, stream);
+  }
+  TORCH_CHECK(flashrt_weight_only::dequantize_w4_weight_bf16 != nullptr,
+              "W4 dequantization source is not present for this architecture");
+  return flashrt_weight_only::dequantize_w4_weight_bf16(
+      packed, scales, weight, rows, cols, stream);
+}
+
+int launch_linear_w4(torch::Tensor const& device, const void* input,
+                     const void* weight, const void* scales, void* output,
+                     int m, int n, int k, float alpha, int variant,
+                     cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    return dispatch->linear_w4(input, weight, scales, output, m, n, k, alpha,
+                               variant, stream);
+  }
+  TORCH_CHECK(flashrt_weight_only::w4a16_linear_bf16 != nullptr,
+              "W4A16 source is not present for this architecture");
+  return flashrt_weight_only::w4a16_linear_bf16(
+      input, weight, scales, output, m, n, k, alpha, variant, stream);
+}
+
+int launch_quantize_w8(torch::Tensor const& device, const void* weight,
+                       void* packed, void* scales, int rows, int cols,
+                       cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    return dispatch->quantize_w8(weight, packed, scales, rows, cols, stream);
+  }
+  TORCH_CHECK(flashrt_weight_only::quantize_w8_weight_bf16 != nullptr,
+              "W8 quantization source is not present for this architecture");
+  return flashrt_weight_only::quantize_w8_weight_bf16(
+      weight, packed, scales, rows, cols, stream);
+}
+
+int launch_dequantize_w8(torch::Tensor const& device, const void* packed,
+                         const void* scales, void* weight, int rows, int cols,
+                         cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    return dispatch->dequantize_w8(packed, scales, weight, rows, cols, stream);
+  }
+  TORCH_CHECK(flashrt_weight_only::dequantize_w8_weight_bf16 != nullptr,
+              "W8 dequantization source is not present for this architecture");
+  return flashrt_weight_only::dequantize_w8_weight_bf16(
+      packed, scales, weight, rows, cols, stream);
+}
+
+int launch_linear_w8(torch::Tensor const& device, const void* input,
+                     const void* weight, const void* scales, void* output,
+                     int m, int n, int k, int variant, cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    return dispatch->linear_w8(input, weight, scales, output, m, n, k, variant,
+                               stream);
+  }
+  TORCH_CHECK(flashrt_weight_only::w8a16_linear_bf16 != nullptr,
+              "W8A16 source is not present for this architecture");
+  return flashrt_weight_only::w8a16_linear_bf16(
+      input, weight, scales, output, m, n, k, variant, stream);
+}
+
+void launch_gated_activation(torch::Tensor const& device, const void* merged,
+                             const void* bias, void* hidden, int rows,
+                             int hidden_size, bool gelu,
+                             cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    dispatch->gated_activation(merged, bias, hidden, rows, hidden_size, gelu,
+                               stream);
+    return;
+  }
+  TORCH_CHECK(flashrt_weight_only::gated_activation_bf16 != nullptr,
+              "gated activation source is not present for this architecture");
+  flashrt_weight_only::gated_activation_bf16(
+      merged, bias, hidden, rows, hidden_size, gelu, stream);
+}
+
+void launch_gelu_activation(torch::Tensor const& device, const void* input,
+                            const void* bias, void* output, int rows,
+                            int hidden_size, cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    dispatch->gelu_activation(input, bias, output, rows, hidden_size, stream);
+    return;
+  }
+  TORCH_CHECK(flashrt_weight_only::gelu_activation_bf16 != nullptr,
+              "GELU activation source is not present for this architecture");
+  flashrt_weight_only::gelu_activation_bf16(
+      input, bias, output, rows, hidden_size, stream);
+}
+
+void launch_add_bias(torch::Tensor const& device, void* output,
+                     const void* bias, int rows, int cols,
+                     cudaStream_t stream) {
+  if (const auto* dispatch = sm110_dispatch_for(device)) {
+    dispatch->add_bias(output, bias, rows, cols, stream);
+    return;
+  }
+  TORCH_CHECK(flashrt_weight_only::add_bias_bf16 != nullptr,
+              "bias epilogue source is not present for this architecture");
+  flashrt_weight_only::add_bias_bf16(output, bias, rows, cols, stream);
+}
 #endif
 
 }  // namespace
@@ -186,7 +321,7 @@ void quantize_w4_weight_bf16(torch::Tensor const& weight,
   check_same_device(weight, sfb, "sfb");
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard guard(weight.device());
-  const int rc = flashrt_weight_only::quantize_w4_weight_bf16(
+  const int rc = launch_quantize_w4(weight,
       weight.data_ptr(), packed.data_ptr(), sfb.data_ptr(),
       as_int(n, "N"), as_int(k, "K"), current_stream(weight));
   TORCH_CHECK(rc == 0, "quantize_w4_weight_bf16 failed with rc=", rc);
@@ -209,7 +344,7 @@ void dequantize_w4_weight_bf16(torch::Tensor const& packed,
   check_same_device(weight, sfb, "sfb");
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard guard(weight.device());
-  const int rc = flashrt_weight_only::dequantize_w4_weight_bf16(
+  const int rc = launch_dequantize_w4(weight,
       packed.data_ptr(), sfb.data_ptr(), weight.data_ptr(),
       as_int(n, "N"), as_int(k, "K"), current_stream(weight));
   TORCH_CHECK(rc == 0, "dequantize_w4_weight_bf16 failed with rc=", rc);
@@ -226,8 +361,18 @@ void w4a16_linear_bf16(torch::Tensor const& x,
   check_variant(variant, shape.m);
   check_w4_auto_linear(shape, variant);
 #if defined(CUDA_KERNEL)
+  TORCH_CHECK(variant != 0 || is_sm110(x) || shape.m == 1,
+              "W4A16 auto dispatch has no qualified fast path on this GPU for M=",
+              shape.m, ", N=", shape.n, ", K=", shape.k,
+              "; use W8A16 or an explicit diagnostic variant");
+  TORCH_CHECK(variant != 0 || !is_sm110(x) ||
+                  (shape.n >= 2 * shape.k &&
+                   shape.n * shape.k >= 32 * 1024 * 1024),
+              "W4A16 auto dispatch has no qualified fast path on Thor for M=",
+              shape.m, ", N=", shape.n, ", K=", shape.k,
+              "; use the fused FFN region or an explicit diagnostic variant");
   c10::cuda::CUDAGuard guard(x.device());
-  const int rc = flashrt_weight_only::w4a16_linear_bf16(
+  const int rc = launch_linear_w4(x,
       x.data_ptr(), packed.data_ptr(), sfb.data_ptr(), out.data_ptr(),
       as_int(shape.m, "M"), as_int(shape.n, "N"), as_int(shape.k, "K"),
       static_cast<float>(alpha), static_cast<int>(variant), current_stream(x));
@@ -251,7 +396,7 @@ void quantize_w8_weight_bf16(torch::Tensor const& weight,
   check_same_device(weight, scales, "scales");
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard guard(weight.device());
-  const int rc = flashrt_weight_only::quantize_w8_weight_bf16(
+  const int rc = launch_quantize_w8(weight,
       weight.data_ptr(), quantized.data_ptr(), scales.data_ptr(),
       as_int(n, "N"), as_int(k, "K"), current_stream(weight));
   TORCH_CHECK(rc == 0, "quantize_w8_weight_bf16 failed with rc=", rc);
@@ -272,7 +417,7 @@ void dequantize_w8_weight_bf16(torch::Tensor const& quantized,
   check_same_device(weight, scales, "scales");
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard guard(weight.device());
-  const int rc = flashrt_weight_only::dequantize_w8_weight_bf16(
+  const int rc = launch_dequantize_w8(weight,
       quantized.data_ptr(), scales.data_ptr(), weight.data_ptr(),
       as_int(weight.size(0), "N"), as_int(weight.size(1), "K"), current_stream(weight));
   TORCH_CHECK(rc == 0, "dequantize_w8_weight_bf16 failed with rc=", rc);
@@ -288,8 +433,14 @@ void w8a16_linear_bf16(torch::Tensor const& x,
   check_variant(variant, shape.m);
   check_w8_auto_linear(shape, variant);
 #if defined(CUDA_KERNEL)
+  TORCH_CHECK(variant != 0 || !is_sm110(x) ||
+                  (shape.n >= 2 * shape.k &&
+                   shape.n * shape.k >= 32 * 1024 * 1024),
+              "W8A16 auto dispatch has no qualified fast path on Thor for M=",
+              shape.m, ", N=", shape.n, ", K=", shape.k,
+              "; use the fused FFN region or an explicit diagnostic variant");
   c10::cuda::CUDAGuard guard(x.device());
-  const int rc = flashrt_weight_only::w8a16_linear_bf16(
+  const int rc = launch_linear_w8(x,
       x.data_ptr(), quantized.data_ptr(), scales.data_ptr(), out.data_ptr(),
       as_int(shape.m, "M"), as_int(shape.n, "N"), as_int(shape.k, "K"),
       static_cast<int>(variant), current_stream(x));
@@ -333,17 +484,24 @@ void gated_ffn(torch::Tensor const& x,
   TORCH_CHECK(second.k == h, "down weight K must equal hidden size");
   const void* dn_bias = optional_bf16_ptr(down_bias, x, second.n, "down_bias");
   const int64_t weight_elements = first.n * first.k + second.n * second.k;
+#if defined(CUDA_KERNEL)
+  const bool thor = is_sm110(x);
+#else
+  const bool thor = false;
+#endif
   if constexpr (W4) {
     const int64_t minimum_elements =
-        first.m == 1 ? 12 * 1024 * 1024
+        first.m == 1 ? (thor ? 24 : 12) * 1024 * 1024
                      : (first.m == 2 ? 32 * 1024 * 1024 : 64 * 1024 * 1024);
     TORCH_CHECK(variant != 0 ||
-                    (first.m <= 3 && weight_elements >= minimum_elements),
+                    (first.m <= 3 && weight_elements >= minimum_elements &&
+                     !(thor && first.m == 3)),
                 "W4A16 gated FFN auto dispatch is not qualified for this shape; "
                 "use W8A16 or an explicit diagnostic variant");
   } else {
     const int64_t minimum_elements =
-        first.m == 4 ? 16 * 1024 * 1024 : 8 * 1024 * 1024;
+        thor ? 24 * 1024 * 1024
+             : (first.m == 4 ? 16 * 1024 * 1024 : 8 * 1024 * 1024);
     TORCH_CHECK(variant != 0 || weight_elements >= minimum_elements,
                 "W8A16 gated FFN auto dispatch is not qualified for this shape; "
                 "use an explicit diagnostic variant for analysis");
@@ -353,33 +511,33 @@ void gated_ffn(torch::Tensor const& x,
   const auto stream = current_stream(x);
   int rc;
   if constexpr (W4) {
-    rc = flashrt_weight_only::w4a16_linear_bf16(
+    rc = launch_linear_w4(x,
         x.data_ptr(), gate_up_weight.data_ptr(), gate_up_scale.data_ptr(), gate_up.data_ptr(),
         as_int(first.m, "M"), as_int(first.n, "2H"), as_int(first.k, "K"),
         static_cast<float>(gate_up_alpha), static_cast<int>(variant), stream);
   } else {
-    rc = flashrt_weight_only::w8a16_linear_bf16(
+    rc = launch_linear_w8(x,
         x.data_ptr(), gate_up_weight.data_ptr(), gate_up_scale.data_ptr(), gate_up.data_ptr(),
         as_int(first.m, "M"), as_int(first.n, "2H"), as_int(first.k, "K"),
         static_cast<int>(variant), stream);
   }
   TORCH_CHECK(rc == 0, "gate/up projection failed with rc=", rc);
-  flashrt_weight_only::gated_activation_bf16(
+  launch_gated_activation(x,
       gate_up.data_ptr(), gu_bias, hidden.data_ptr(),
       as_int(first.m, "M"), as_int(h, "H"), gelu, stream);
   if constexpr (W4) {
-    rc = flashrt_weight_only::w4a16_linear_bf16(
+    rc = launch_linear_w4(x,
         hidden.data_ptr(), down_weight.data_ptr(), down_scale.data_ptr(), out.data_ptr(),
         as_int(second.m, "M"), as_int(second.n, "N"), as_int(second.k, "H"),
         static_cast<float>(down_alpha), static_cast<int>(variant), stream);
   } else {
-    rc = flashrt_weight_only::w8a16_linear_bf16(
+    rc = launch_linear_w8(x,
         hidden.data_ptr(), down_weight.data_ptr(), down_scale.data_ptr(), out.data_ptr(),
         as_int(second.m, "M"), as_int(second.n, "N"), as_int(second.k, "H"),
         static_cast<int>(variant), stream);
   }
   TORCH_CHECK(rc == 0, "down projection failed with rc=", rc);
-  flashrt_weight_only::add_bias_bf16(out.data_ptr(), dn_bias,
+  launch_add_bias(x, out.data_ptr(), dn_bias,
       as_int(second.m, "M"), as_int(second.n, "N"), stream);
   const auto error = cudaGetLastError();
   TORCH_CHECK(error == cudaSuccess, "gated FFN launch failed: ", cudaGetErrorString(error));
@@ -416,13 +574,21 @@ void gelu_ffn(torch::Tensor const& x,
   TORCH_CHECK(second.k == first.n, "down weight K must equal hidden size");
   const void* down_bias_ptr = optional_bf16_ptr(down_bias, x, second.n, "down_bias");
   const int64_t weight_elements = first.n * first.k + second.n * second.k;
+#if defined(CUDA_KERNEL)
+  const bool thor = is_sm110(x);
+#else
+  const bool thor = false;
+#endif
   if constexpr (W4) {
-    TORCH_CHECK(variant != 0 || (first.m <= 3 && weight_elements >= 64 * 1024 * 1024),
+    TORCH_CHECK(variant != 0 ||
+                    (first.m <= (thor ? 2 : 3) &&
+                     weight_elements >= 64 * 1024 * 1024),
                 "W4A16 GELU FFN auto dispatch is not qualified for this shape; "
                 "use W8A16 or an explicit diagnostic variant");
   } else {
     const int64_t minimum_elements =
-        first.m == 1 ? 8 * 1024 * 1024 : 16 * 1024 * 1024;
+        thor ? 16 * 1024 * 1024
+             : (first.m == 1 ? 8 * 1024 * 1024 : 16 * 1024 * 1024);
     TORCH_CHECK(variant != 0 || weight_elements >= minimum_elements,
                 "W8A16 GELU FFN auto dispatch is not qualified for this shape; "
                 "use an explicit diagnostic variant for analysis");
@@ -432,33 +598,33 @@ void gelu_ffn(torch::Tensor const& x,
   const auto stream = current_stream(x);
   int rc;
   if constexpr (W4) {
-    rc = flashrt_weight_only::w4a16_linear_bf16(
+    rc = launch_linear_w4(x,
         x.data_ptr(), up_weight.data_ptr(), up_scale.data_ptr(), up.data_ptr(),
         as_int(first.m, "M"), as_int(first.n, "H"), as_int(first.k, "K"),
         static_cast<float>(up_alpha), static_cast<int>(variant), stream);
   } else {
-    rc = flashrt_weight_only::w8a16_linear_bf16(
+    rc = launch_linear_w8(x,
         x.data_ptr(), up_weight.data_ptr(), up_scale.data_ptr(), up.data_ptr(),
         as_int(first.m, "M"), as_int(first.n, "H"), as_int(first.k, "K"),
         static_cast<int>(variant), stream);
   }
   TORCH_CHECK(rc == 0, "up projection failed with rc=", rc);
-  flashrt_weight_only::gelu_activation_bf16(
+  launch_gelu_activation(x,
       up.data_ptr(), up_bias_ptr, hidden.data_ptr(),
       as_int(first.m, "M"), as_int(first.n, "H"), stream);
   if constexpr (W4) {
-    rc = flashrt_weight_only::w4a16_linear_bf16(
+    rc = launch_linear_w4(x,
         hidden.data_ptr(), down_weight.data_ptr(), down_scale.data_ptr(), out.data_ptr(),
         as_int(second.m, "M"), as_int(second.n, "N"), as_int(second.k, "H"),
         static_cast<float>(down_alpha), static_cast<int>(variant), stream);
   } else {
-    rc = flashrt_weight_only::w8a16_linear_bf16(
+    rc = launch_linear_w8(x,
         hidden.data_ptr(), down_weight.data_ptr(), down_scale.data_ptr(), out.data_ptr(),
         as_int(second.m, "M"), as_int(second.n, "N"), as_int(second.k, "H"),
         static_cast<int>(variant), stream);
   }
   TORCH_CHECK(rc == 0, "down projection failed with rc=", rc);
-  flashrt_weight_only::add_bias_bf16(out.data_ptr(), down_bias_ptr,
+  launch_add_bias(x, out.data_ptr(), down_bias_ptr,
       as_int(second.m, "M"), as_int(second.n, "N"), stream);
   const auto error = cudaGetLastError();
   TORCH_CHECK(error == cudaSuccess, "GELU FFN launch failed: ", cudaGetErrorString(error));
