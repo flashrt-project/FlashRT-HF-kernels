@@ -12,9 +12,10 @@ This script makes the legacy model `main` ref a usable alias:
 
 * for normal compiled packages, copy the latest Kernel Hub `vN` branch to the
   legacy model `main` branch;
-* if the legacy model `main` already contains a usable `build/**` tree (for
-  example a pure Python `torch-universal` package), use that as the source and
-  leave it untouched instead of overwriting it with an older `vN`.
+* if the legacy model `main` contains a pure Python `torch-universal` build,
+  use that as the source and leave it untouched;
+* for compiled packages, always rebuild the alias from the latest Kernel Hub
+  `vN`, even when model `main` contains older compiled artifacts.
 
 Note: current `huggingface_hub.upload_folder()` does not support
 `repo_type="kernel"` uploads, so Kernel Hub `main` cannot be updated by this
@@ -77,13 +78,13 @@ def repo_files(api: HfApi, repo_id: str, repo_type: str, revision: str, token: s
         return []
 
 
-def has_usable_build(files: list[str]) -> bool:
-    return any(path.startswith("build/") for path in files)
+def has_torch_universal_build(files: list[str]) -> bool:
+    return any(path.startswith("build/torch-universal/") for path in files)
 
 
 def source_ref(api: HfApi, repo_id: str, token: str | None) -> tuple[str, str, str]:
     model_main_files = repo_files(api, repo_id, "model", "main", token)
-    if has_usable_build(model_main_files):
+    if has_torch_universal_build(model_main_files):
         return "model", "main", "legacy model main"
     branch = latest_version_branch(api, repo_id, token)
     return "kernel", branch, f"kernel {branch}"

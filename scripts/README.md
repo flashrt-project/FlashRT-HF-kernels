@@ -21,6 +21,10 @@ Current scripts:
   operation verifies variant paths, sizes, generated Python files, metadata,
   and builder-recorded shared-object digests. Use `--verify-only` to audit
   without uploading.
+- `promote_kernel_main_alias.py`: copies the latest canonical Kernel Hub `vN`
+  artifact tree to the legacy model `main` alias used by unversioned old-client
+  calls. Compiled packages are always refreshed from `vN`; only an existing
+  `torch-universal` main build is preserved as its own source.
 - `run_built_artifact_benchmarks.py`: local release-candidate runner for the
   public `kernels.benchmark.Benchmark` scripts against either local source
   extensions or copied built artifacts. Add `--compile-baseline` to time
