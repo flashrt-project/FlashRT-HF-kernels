@@ -69,10 +69,11 @@ For production code, derive SF sizes from the checkpoint packer metadata.
 
 ## Dispatch guidance
 
-W4A4 compute is the right path when activations already come from an FP4
-producer. If the input exists only as BF16, the extra producer launch can make
-the package's W4A16 grouped path faster at these small shapes. The benchmark
-reports both; callers should not assume lower precision is automatically faster.
+Use the built-artifact benchmark to dispatch rather than selecting only by
+dtype. On the tested cu128 artifact W4A16 wins gate-up, W4A4 wins down verify,
+and down decode is effectively tied kernel-only. A fused/upstream FP4 producer
+removes the standalone quantization charge, but callers still should not assume
+lower precision is automatically faster.
 
 ## Validation
 

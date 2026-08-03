@@ -1,20 +1,23 @@
-# RTX 5090 source results
+# RTX 5090 built-artifact results
 
 Environment: NVIDIA GeForce RTX 5090 (SM120), driver 580.159.03, PyTorch
-2.9.1+cu128, CUDA runtime 12.8. Measurements use CUDA events after warmup.
+2.11.0+cu128, CUDA runtime 12.8. Artifact variant:
+`torch211-cxx11-cu128-x86_64-linux`, source commit `4baeadf`. Measurements use
+CUDA events after warmup.
 
 | Workload | M x top-k | N x K | W4A4 region us | W4A4 kernel us | W4A16 us | Per-pair loop us | Region speedup |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| gate_up decode | 1 x 8 | 1024 x 2048 | 10.287 | 6.188 | 6.186 | 65.543 | 6.37x |
-| gate_up verify | 7 x 8 | 1024 x 2048 | 30.746 | 26.627 | 22.562 | 458.337 | 14.91x |
-| down decode | 8 x 1 | 2048 x 512 | 8.225 | 4.123 | 5.611 | 49.212 | 5.98x |
-| down verify | 56 x 1 | 2048 x 512 | 21.932 | 17.971 | 18.485 | 344.385 | 15.70x |
+| gate_up decode | 1 x 8 | 1024 x 2048 | 12.286 | 8.177 | 6.204 | 65.612 | 5.34x |
+| gate_up verify | 7 x 8 | 1024 x 2048 | 32.785 | 28.691 | 24.605 | 459.022 | 14.00x |
+| down decode | 8 x 1 | 2048 x 512 | 10.259 | 6.162 | 6.169 | 64.847 | 6.32x |
+| down verify | 56 x 1 | 2048 x 512 | 22.540 | 18.449 | 24.602 | 451.777 | 20.04x |
 
 `W4A4 region` includes one batched activation quantization plus one grouped
 compute launch. `Per-pair loop` quantizes and launches each routed pair
-separately. W4A16 is faster when the only available input is BF16 in three of
-four rows; W4A4 kernel-only is competitive or faster when an upstream producer
-already emits packed FP4. These results do not claim otherwise.
+separately. On this cu128 artifact W4A16 wins gate-up, the two kernel-only paths
+tie for down decode, and W4A4 wins down verify. The complete W4A4 region still
+removes the legacy launch storm, but lower precision is not presented as a
+universal per-kernel winner.
 
 Full source correctness: 21/21 checks passed. Worst dequantized-contract result
 from the random sweep: max abs 0.004084, p99 abs 0.002907, mean abs 0.000507,
