@@ -577,7 +577,7 @@ def main() -> None:
             )
             for variant in (1, 2, 3)
         )
-    if capability in {(8, 9), (12, 0)}:
+    if capability in {(8, 9), (11, 0), (12, 0)}:
         blockwise_shapes = [
             ("blockwise_decode", (1, 1024, 1024)),
             ("blockwise_action", (51, 1536, 1536)),
@@ -593,7 +593,8 @@ def main() -> None:
             run_blockwise_case(ops, name, shape)
             for name, shape in blockwise_shapes
         )
-        run_blockwise_simt_case(ops)
+        if capability in {(8, 9), (12, 0)}:
+            run_blockwise_simt_case(ops)
         run_blockwise_compile_case(ops)
     if capability == (8, 9):
         for m, n, k in [
