@@ -3,6 +3,7 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <cstdlib>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -323,7 +324,8 @@ void fp8_blockwise_linear_bf16(
   at::cuda::CUDAGuard device_guard(input.device());
   auto* props = at::cuda::getDeviceProperties(input.get_device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  if (props->major == 8 && props->minor == 9) {
+  const bool force_simt = std::getenv("FLASHRT_FORCE_SIMT") != nullptr;
+  if (!force_simt && props->major == 8 && props->minor == 9) {
 #if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY) || \
     defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM89 blockwise kernels are not present in this source-test build");
@@ -360,7 +362,7 @@ void fp8_blockwise_linear_bf16(
     }
     TORCH_CHECK(rc == 0, "SM89 blockwise FP8 linear failed with rc=", rc);
 #endif
-  } else if (props->major == 12 && props->minor == 0) {
+  } else if (!force_simt && props->major == 12 && props->minor == 0) {
 #if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
     defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM120 blockwise kernel is not present in this source-test build");
