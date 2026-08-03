@@ -1,7 +1,7 @@
 [general]
 name = "grouped-moe-gemv"
 license = "Apache-2.0"
-version = 1
+version = 2
 backends = ["cuda"]
 
 [general.cuda]
@@ -19,7 +19,7 @@ src = [
 
 [kernel.grouped_moe_gemv]
 backend = "cuda"
-depends = ["torch"]
+depends = ["torch", "cutlass_4_0"]
 include = ["csrc"]
 cuda-minver = "12.8"
 cuda-capabilities = ["12.0a"]
@@ -28,4 +28,8 @@ src = [
   "csrc/kernels/nexn2_w4a16_gemv.cuh",
   "csrc/kernels/nexn2_moe_grouped_w4a16.cu",
   "csrc/kernels/nexn2_moe_grouped_w4a16.cuh",
+  "csrc/kernels/grouped_w4a4_gemv_sm120.cu",
+  "csrc/kernels/grouped_w4a4_gemv_sm120.cuh",
+  "csrc/kernels/quantize_activations_nvfp4.cu",
+  "csrc/kernels/quantize_activations_nvfp4.cuh",
 ]

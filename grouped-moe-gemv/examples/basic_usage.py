@@ -1,7 +1,7 @@
 from kernels import get_kernel
 import torch
 
-ops = get_kernel("flashrt/grouped-moe-gemv", version=1, trust_remote_code=True)
+ops = get_kernel("flashrt/grouped-moe-gemv", version=2, trust_remote_code=True)
 K, N = 256, 128
 x = torch.ones((K,), device="cuda", dtype=torch.bfloat16)
 w = torch.full((N, K // 2), 0x11, device="cuda", dtype=torch.uint8)
