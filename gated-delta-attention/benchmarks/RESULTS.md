@@ -11,13 +11,14 @@ the fused path reads `conv_out/a/b` directly. Correctness is bit-identical.
 
 | S | Fused native us | Staged native us | Speedup | Exact |
 | ---: | ---: | ---: | ---: | --- |
-| 1 | 12.315 | 16.392 | 1.33x | yes |
-| 4 | 51.230 | 55.191 | 1.08x | yes |
-| 64 | 755.921 | 754.430 | 1.00x | yes |
+| 1 | 12.293 | 17.288 | 1.41x | yes |
+| 4 | 28.666 | 32.777 | 1.14x | yes |
+| 64 | 362.683 | 366.435 | 1.01x | yes |
 
-The long-sequence row is retained as a no-regression coverage point, not a
-speedup claim. Regenerate these rows from the v4 built artifact before making
-artifact-level performance claims.
+The fused chunk computes each per-token/head gate scalar once in thread 0 and
+broadcasts it through shared memory; all 128 lanes no longer repeat the same
+transcendentals. Regenerate these rows from the v4 built artifact before
+making artifact-level performance claims.
 
 The table below is a local source-extension triage benchmark on
 `NVIDIA GeForce RTX 5090`, CUDA `12.8`, PyTorch `2.9.1+cu128`. It compares the

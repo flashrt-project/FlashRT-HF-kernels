@@ -1063,6 +1063,7 @@ __global__ void qwen36_gdn_chunk_from_conv_smem_kernel(
   float* qs = state_s + HD * HD;
   float* ks = qs + HD;
   float* scratch = ks + HD;
+  float* gate_values = scratch + 32;
 
   const size_t state_h_off =
       (((size_t)b * num_v_heads + h)) * HD * HD;
@@ -1106,15 +1107,20 @@ __global__ void qwen36_gdn_chunk_from_conv_smem_kernel(
     qs[t] *= rsqrtf(static_cast<float>(HD));
     __syncthreads();
 
-    const float av =
-        static_cast<float>(a_in[s * a_stride + h]) + dt_bias[h];
-    const float sp = log1pf(__expf(av));
-    const float g_log = static_cast<float>(
-        __float2bfloat16(neg_exp_A_log[h] * sp));
-    const float g_t = __expf(g_log);
-    const float bv = static_cast<float>(b_in[s * b_stride + h]);
-    const float beta_t = static_cast<float>(
-        __float2bfloat16(1.0f / (1.0f + __expf(-bv))));
+    if (t == 0) {
+      const float av =
+          static_cast<float>(a_in[s * a_stride + h]) + dt_bias[h];
+      const float sp = log1pf(__expf(av));
+      const float g_log = static_cast<float>(
+          __float2bfloat16(neg_exp_A_log[h] * sp));
+      gate_values[0] = __expf(g_log);
+      const float bv = static_cast<float>(b_in[s * b_stride + h]);
+      gate_values[1] = static_cast<float>(
+          __float2bfloat16(1.0f / (1.0f + __expf(-bv))));
+    }
+    __syncthreads();
+    const float g_t = gate_values[0];
+    const float beta_t = gate_values[1];
 
     #pragma unroll 16
     for (int i = 0; i < HD; ++i) {
@@ -1723,7 +1729,7 @@ void gdn_chunk_from_conv_smem_h_bf16(
   dim3 grid(num_v_heads, 1);
   dim3 block(kHD);
   constexpr size_t kSmemBytes =
-      (kHD * kHD + 2 * kHD + 32) * sizeof(float);
+      (kHD * kHD + 2 * kHD + 34) * sizeof(float);
   static bool attr_set = false;
   if (!attr_set) {
     cudaFuncSetAttribute(
@@ -1763,7 +1769,7 @@ void qwen36_gdn_chunk_from_conv_smem_strided_bf16(
   dim3 grid(num_v_heads, 1);
   dim3 block(kHD);
   constexpr size_t kSmemBytes =
-      (kHD * kHD + 2 * kHD + 32) * sizeof(float);
+      (kHD * kHD + 2 * kHD + 34) * sizeof(float);
   static bool attr_set = false;
   if (!attr_set) {
     cudaFuncSetAttribute(

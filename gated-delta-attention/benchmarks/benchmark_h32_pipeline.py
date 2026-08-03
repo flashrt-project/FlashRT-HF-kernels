@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import sys
 from pathlib import Path
 
@@ -36,14 +35,12 @@ def main() -> None:
 
     tests = Path(__file__).resolve().parents[1] / "tests"
     sys.path.insert(0, str(tests))
-    from test_gated_delta_attention import InstalledOps, load_source_ops, make_conv_inputs_h
+    from test_gated_delta_attention import load_installed_ops, load_source_ops, make_conv_inputs_h
 
     if args.backend == "source":
         ops = load_source_ops()
     else:
-        if args.artifact:
-            sys.path.insert(0, args.artifact)
-        ops = InstalledOps(importlib.import_module("gated_delta_attention"))
+        ops = load_installed_ops(args.artifact)
 
     Hv, Hk, D = 32, 16, 128
     for S in (int(x) for x in args.sequences.split(",")):

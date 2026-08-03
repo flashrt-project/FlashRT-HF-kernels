@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -403,12 +404,22 @@ def load_source_ops() -> SourceOps:
 
 def load_installed_ops(artifact: str | None):
     if artifact:
-        sys.path.insert(0, artifact)
-    try:
-        return InstalledOps(importlib.import_module("gated_delta_attention"))
-    finally:
-        if artifact:
-            sys.path.remove(artifact)
+        artifact_path = Path(artifact).resolve()
+        init_path = artifact_path / "__init__.py"
+        if not init_path.is_file():
+            raise RuntimeError(f"missing top-level artifact entry: {init_path}")
+        spec = importlib.util.spec_from_file_location(
+            "gated_delta_attention",
+            init_path,
+            submodule_search_locations=[str(artifact_path)],
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load artifact entry: {init_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return InstalledOps(module)
+    return InstalledOps(importlib.import_module("gated_delta_attention"))
 
 
 def make_step_inputs(B: int, H: int, seed: int, f32_state=False):
