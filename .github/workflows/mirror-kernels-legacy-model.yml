@@ -138,3 +138,7 @@ jobs:
             --namespace flashrt \
             --package "${{ matrix.package }}" \
             --repo-root .
+          python scripts/promote_kernel_main_alias.py \
+            --namespace flashrt \
+            --package "${{ matrix.package }}" \
+            --repo-root .
