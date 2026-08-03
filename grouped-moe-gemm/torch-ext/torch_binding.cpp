@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <torch/all.h>
 #include <torch/library.h>
+#include <cstdlib>
 #if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -55,8 +56,9 @@ void grouped_nvfp4_gemm_bf16_out(
   c10::cuda::CUDAGuard guard(input.device());
   auto s = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
   const auto* props = at::cuda::getDeviceProperties(input.get_device());
+  const bool force_simt = std::getenv("FLASHRT_FORCE_SIMT") != nullptr;
   int rc;
-  if (props->major == 12 && props->minor == 0) {
+  if (!force_simt && props->major == 12 && props->minor == 0) {
     if (tile_rows == 16) {
       TORCH_CHECK(N % 8 == 0, "M16 path requires N divisible by 8");
       rc = flash_rt::gemm::moe_m16_mma_sm120_bf16(
