@@ -173,11 +173,11 @@ __global__ void fp8_conv2d_ncdhw_kernel(
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int total = B * Co * T * H * W;
   if (idx >= total) return;
-  int co = idx % Co;
-  int t = (idx / Co) % T;
-  int h = (idx / (Co * T)) % H;
-  int w_out = (idx / (Co * T * H)) % W;
-  int n = idx / (Co * T * H * W);
+  int w_out = idx % W;
+  int h = (idx / W) % H;
+  int t = (idx / (W * H)) % T;
+  int co = (idx / (W * H * T)) % Co;
+  int n = idx / (W * H * T * Co);
   float acc = 0.0f;
   for (int kr = 0; kr < 3; ++kr)
     for (int ks = 0; ks < 3; ++ks) {
