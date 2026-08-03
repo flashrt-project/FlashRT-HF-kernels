@@ -29,11 +29,19 @@ Installed `torch211-cxx11-cu130-aarch64-linux` artifact, CUDA 13.0. Correctness
 passes 5/5 checks including fullgraph tracing. The strong baseline is BF16
 cuDNN through `torch.nn.functional.conv3d`.
 
+This is a standalone VAE Conv3D probe at three real Cosmos3-Edge shapes. It is
+not the `CosmosEdgeThor` denoise pipeline benchmark, and that pipeline does not
+dispatch this BF16 v0 operation. The model-level denoise speedup instead comes
+from its FP8/FP4 projections, static conditioning/KV caches, FA4, native UniPC,
+and static/CUDA-Graph execution. Therefore the ratios below neither describe
+nor contradict the model's end-to-end speedup.
+
 | Cosmos3-Edge site | FlashRT ms | cuDNN ms | Ratio | Cosine |
 |---|---:|---:|---:|---:|
 | C=160,T=24,H=240,W=416 | 275.22 | 75.44 | 0.27x | 0.9999965 |
 | C=320,T=24,H=120,W=208 | 214.27 | 51.01 | 0.24x | 0.9999962 |
 | C=640,T=12,H=60,W=104 | 88.94 | 20.22 | 0.23x | 0.9999962 |
 
-This backend is therefore experimental and never selected by default. A future
-SM110 Conv backend must beat cuDNN on the full site before promotion.
+This VAE backend is therefore experimental and never selected by default. A
+future SM110 Conv backend must beat cuDNN on the complete VAE site, including
+required layout/cache handling, before promotion.
