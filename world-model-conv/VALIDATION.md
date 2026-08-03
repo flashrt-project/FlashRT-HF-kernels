@@ -34,3 +34,13 @@ Source validation selects the installed architecture. SM120 runs the existing
 FP8/NVFP4 matrix. SM110 runs four BF16 boundary/channel cases plus
 `torch.compile(fullgraph=True)`. The SM110 source is byte-synced from FlashRT
 commit `9972f0f` (`csrc/conv/bf16_conv3d_v0_sm110.cu`).
+
+## SM110 portable SIMT fp8/nvfp4 fallback
+
+The FP8/NVFP4 conv ops also ship a pure-SIMT reference
+(`portable_conv_simt.cu`) compiled for `sm_110a`, since no native tensor-core
+backend exists for them on Thor. The correctness test forces the SIMT path
+with `FLASHRT_FORCE_SIMT=1` and compares against the native SM120 output within
+the same tolerance envelope, validating the fallback on any device. Runtime
+validation of the SM110 fp8/nvfp4 artifact on Thor hardware is pending and is
+not recorded as passed here.
