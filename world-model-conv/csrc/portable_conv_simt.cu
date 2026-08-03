@@ -37,10 +37,10 @@ __device__ __forceinline__ float fp4_to_float(uint8_t v) {
 }
 
 __device__ __forceinline__ float ue4m3_to_float(uint8_t v) {
-  int e = (v >> 3) & 1;
+  int e = (v >> 3) & 0xF;
   int m = v & 7;
-  if (e == 0) return m == 0 ? 0.0f : m * 0.125f;
-  return 1.0f + m * 0.25f;
+  if (e == 0) return m * (1.0f / 512.0f);
+  return (1.0f + m * (1.0f / 8.0f)) * exp2f(static_cast<float>(e - 7));
 }
 
 __device__ __forceinline__ float fp4_read(const uint8_t* p, int idx) {
