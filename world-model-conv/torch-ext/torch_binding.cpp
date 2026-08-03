@@ -15,16 +15,6 @@
 
 namespace {
 
-bool is_sm120(torch::Tensor const& t) {
-#if defined(CUDA_KERNEL)
-  auto* props = at::cuda::getDeviceProperties(t.get_device());
-  return props->major == 12 && props->minor == 0;
-#else
-  (void)t;
-  return false;
-#endif
-}
-
 void check_cuda_contiguous(torch::Tensor const& t, const char* name) {
   TORCH_CHECK(t.is_cuda(), name, " must be a CUDA tensor");
   TORCH_CHECK(t.is_contiguous(), name, " must be contiguous");
@@ -222,8 +212,9 @@ void fp8_conv3d_v18_ncdhw_res_bf16out(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(cache_x.device());
   auto stream = at::cuda::getCurrentCUDAStream(cache_x.get_device()).stream();
+  const auto* props = at::cuda::getDeviceProperties(cache_x.get_device());
   int status;
-  if (is_sm120(cache_x)) {
+  if (props->major == 12 && props->minor == 0) {
     status = flash_rt::conv::fp8_conv3d_v18_ncdhw_res_bf16out(
         cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(), out.data_ptr(),
         bias.data_ptr(), residual.data_ptr(), static_cast<int>(n), static_cast<int>(t_cache),
@@ -287,8 +278,9 @@ void fp8_causal_conv3d_ndhwc_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(cache_x.device());
   auto stream = at::cuda::getCurrentCUDAStream(cache_x.get_device()).stream();
+  const auto* props = at::cuda::getDeviceProperties(cache_x.get_device());
   int status;
-  if (is_sm120(cache_x)) {
+  if (props->major == 12 && props->minor == 0) {
     status =
         co % 8 == 0
             ? flash_rt::conv::fp8_conv3d_v17_ndhwc_bf16out(
@@ -361,8 +353,9 @@ void fp8_conv2d_3x3_nhwc_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  const auto* props = at::cuda::getDeviceProperties(input.get_device());
   int status;
-  if (is_sm120(input)) {
+  if (props->major == 12 && props->minor == 0) {
     status = flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_bf16out(
         input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
         static_cast<int>(n), static_cast<int>(h), static_cast<int>(w),
@@ -411,8 +404,9 @@ void fp8_conv2d_3x3_ncdhw_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  const auto* props = at::cuda::getDeviceProperties(input.get_device());
   int status;
-  if (is_sm120(input)) {
+  if (props->major == 12 && props->minor == 0) {
     status =
         flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_ncdhw_bf16out(
             input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
@@ -459,8 +453,9 @@ void nvfp4_causal_conv3d_ndhwc_bf16(
   at::cuda::CUDAGuard guard(new_packed.device());
   auto stream =
       at::cuda::getCurrentCUDAStream(new_packed.get_device()).stream();
+  const auto* props = at::cuda::getDeviceProperties(new_packed.get_device());
   int status;
-  if (is_sm120(new_packed)) {
+  if (props->major == 12 && props->minor == 0) {
     status = outer_weight.has_value()
         ? flash_rt::conv::motus_fp4_conv3d_v19sf_ndhwc_bf16out_v2(
               cache_packed.data_ptr(), new_packed.data_ptr(),
@@ -521,8 +516,9 @@ void nvfp4_causal_conv3d_residual_ncdhw_bf16(
   at::cuda::CUDAGuard guard(new_packed.device());
   auto stream =
       at::cuda::getCurrentCUDAStream(new_packed.get_device()).stream();
+  const auto* props = at::cuda::getDeviceProperties(new_packed.get_device());
   int status;
-  if (is_sm120(new_packed)) {
+  if (props->major == 12 && props->minor == 0) {
     if (outer_weight.has_value()) {
       status =
           flash_rt::conv::motus_fp4_conv3d_v19sfb_ncdhw_res_bf16out_v2(
