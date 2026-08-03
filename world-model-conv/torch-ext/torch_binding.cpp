@@ -8,11 +8,22 @@
 #include <c10/cuda/CUDAGuard.h>
 #endif
 
+#include "portable_conv_simt.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 #include "world_model_conv.cuh"
 
 namespace {
+
+bool is_sm120(torch::Tensor const& t) {
+#if defined(CUDA_KERNEL)
+  auto* props = at::cuda::getDeviceProperties(t.get_device());
+  return props->major == 12 && props->minor == 0;
+#else
+  (void)t;
+  return false;
+#endif
+}
 
 void check_cuda_contiguous(torch::Tensor const& t, const char* name) {
   TORCH_CHECK(t.is_cuda(), name, " must be a CUDA tensor");
@@ -211,11 +222,20 @@ void fp8_conv3d_v18_ncdhw_res_bf16out(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(cache_x.device());
   auto stream = at::cuda::getCurrentCUDAStream(cache_x.get_device()).stream();
-  int status = flash_rt::conv::fp8_conv3d_v18_ncdhw_res_bf16out(
-      cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(), out.data_ptr(),
-      bias.data_ptr(), residual.data_ptr(), static_cast<int>(n), static_cast<int>(t_cache),
-      static_cast<int>(t_new), static_cast<int>(h), static_cast<int>(w),
-      static_cast<int>(ci), static_cast<int>(co), static_cast<float>(alpha), stream);
+  int status;
+  if (is_sm120(cache_x)) {
+    status = flash_rt::conv::fp8_conv3d_v18_ncdhw_res_bf16out(
+        cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(), out.data_ptr(),
+        bias.data_ptr(), residual.data_ptr(), static_cast<int>(n), static_cast<int>(t_cache),
+        static_cast<int>(t_new), static_cast<int>(h), static_cast<int>(w),
+        static_cast<int>(ci), static_cast<int>(co), static_cast<float>(alpha), stream);
+  } else {
+    status = flash_rt::conv::fp8_conv3d_v18_ncdhw_res_bf16out_simt(
+        cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(), out.data_ptr(),
+        bias.data_ptr(), residual.data_ptr(), static_cast<int>(n), static_cast<int>(t_cache),
+        static_cast<int>(t_new), static_cast<int>(h), static_cast<int>(w),
+        static_cast<int>(ci), static_cast<int>(co), static_cast<float>(alpha), stream);
+  }
   TORCH_CHECK(status == 0, "fp8_conv3d_v18_ncdhw_res_bf16out failed with status ", status);
 #else
   TORCH_CHECK(false, "world-model-conv was not built with CUDA support");
@@ -267,22 +287,41 @@ void fp8_causal_conv3d_ndhwc_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(cache_x.device());
   auto stream = at::cuda::getCurrentCUDAStream(cache_x.get_device()).stream();
-  const int status =
-      co % 8 == 0
-          ? flash_rt::conv::fp8_conv3d_v17_ndhwc_bf16out(
-                cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(),
-                out.data_ptr(), bias.data_ptr(), static_cast<int>(n),
-                static_cast<int>(tc), static_cast<int>(tn),
-                static_cast<int>(h), static_cast<int>(w),
-                static_cast<int>(ci), static_cast<int>(co),
-                static_cast<float>(alpha), stream)
-          : flash_rt::conv::fp8_conv3d_v17_anyco_ndhwc_bf16out(
-                cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(),
-                out.data_ptr(), bias.data_ptr(), static_cast<int>(n),
-                static_cast<int>(tc), static_cast<int>(tn),
-                static_cast<int>(h), static_cast<int>(w),
-                static_cast<int>(ci), static_cast<int>(co),
-                static_cast<float>(alpha), stream);
+  int status;
+  if (is_sm120(cache_x)) {
+    status =
+        co % 8 == 0
+            ? flash_rt::conv::fp8_conv3d_v17_ndhwc_bf16out(
+                  cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(),
+                  out.data_ptr(), bias.data_ptr(), static_cast<int>(n),
+                  static_cast<int>(tc), static_cast<int>(tn),
+                  static_cast<int>(h), static_cast<int>(w),
+                  static_cast<int>(ci), static_cast<int>(co),
+                  static_cast<float>(alpha), stream)
+            : flash_rt::conv::fp8_conv3d_v17_anyco_ndhwc_bf16out(
+                  cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(),
+                  out.data_ptr(), bias.data_ptr(), static_cast<int>(n),
+                  static_cast<int>(tc), static_cast<int>(tn),
+                  static_cast<int>(h), static_cast<int>(w),
+                  static_cast<int>(ci), static_cast<int>(co),
+                  static_cast<float>(alpha), stream);
+  } else {
+    status = co % 8 == 0
+                 ? flash_rt::conv::fp8_conv3d_v17_ndhwc_bf16out_simt(
+                       cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(),
+                       out.data_ptr(), bias.data_ptr(), static_cast<int>(n),
+                       static_cast<int>(tc), static_cast<int>(tn),
+                       static_cast<int>(h), static_cast<int>(w),
+                       static_cast<int>(ci), static_cast<int>(co),
+                       static_cast<float>(alpha), stream)
+                 : flash_rt::conv::fp8_conv3d_v17_anyco_ndhwc_bf16out_simt(
+                       cache_x.data_ptr(), new_x.data_ptr(), weight.data_ptr(),
+                       out.data_ptr(), bias.data_ptr(), static_cast<int>(n),
+                       static_cast<int>(tc), static_cast<int>(tn),
+                       static_cast<int>(h), static_cast<int>(w),
+                       static_cast<int>(ci), static_cast<int>(co),
+                       static_cast<float>(alpha), stream);
+  }
   TORCH_CHECK(status == 0,
               "fp8_causal_conv3d_ndhwc_bf16 failed with status ", status);
 #else
@@ -322,11 +361,20 @@ void fp8_conv2d_3x3_nhwc_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  const int status = flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_bf16out(
-      input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
-      static_cast<int>(n), static_cast<int>(h), static_cast<int>(w),
-      static_cast<int>(ci), static_cast<int>(co), static_cast<float>(alpha),
-      stream);
+  int status;
+  if (is_sm120(input)) {
+    status = flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_bf16out(
+        input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
+        static_cast<int>(n), static_cast<int>(h), static_cast<int>(w),
+        static_cast<int>(ci), static_cast<int>(co), static_cast<float>(alpha),
+        stream);
+  } else {
+    status = flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_bf16out_simt(
+        input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
+        static_cast<int>(n), static_cast<int>(h), static_cast<int>(w),
+        static_cast<int>(ci), static_cast<int>(co), static_cast<float>(alpha),
+        stream);
+  }
   TORCH_CHECK(status == 0,
               "fp8_conv2d_3x3_nhwc_bf16 failed with status ", status);
 #else
@@ -363,12 +411,21 @@ void fp8_conv2d_3x3_ncdhw_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(input.device());
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  const int status =
-      flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_ncdhw_bf16out(
-          input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
-          static_cast<int>(b), static_cast<int>(t), static_cast<int>(h),
-          static_cast<int>(w), static_cast<int>(ci), static_cast<int>(co),
-          static_cast<float>(alpha), stream);
+  int status;
+  if (is_sm120(input)) {
+    status =
+        flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_ncdhw_bf16out(
+            input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
+            static_cast<int>(b), static_cast<int>(t), static_cast<int>(h),
+            static_cast<int>(w), static_cast<int>(ci), static_cast<int>(co),
+            static_cast<float>(alpha), stream);
+  } else {
+    status = flash_rt::conv::fp8_conv2d_3x3_v2_nhwc_ncdhw_bf16out_simt(
+        input.data_ptr(), weight.data_ptr(), out.data_ptr(), bias.data_ptr(),
+        static_cast<int>(b), static_cast<int>(t), static_cast<int>(h),
+        static_cast<int>(w), static_cast<int>(ci), static_cast<int>(co),
+        static_cast<float>(alpha), stream);
+  }
   TORCH_CHECK(status == 0,
               "fp8_conv2d_3x3_ncdhw_bf16 failed with status ", status);
 #else
@@ -402,19 +459,30 @@ void nvfp4_causal_conv3d_ndhwc_bf16(
   at::cuda::CUDAGuard guard(new_packed.device());
   auto stream =
       at::cuda::getCurrentCUDAStream(new_packed.get_device()).stream();
-  const int status = outer_weight.has_value()
-      ? flash_rt::conv::motus_fp4_conv3d_v19sf_ndhwc_bf16out_v2(
-            cache_packed.data_ptr(), new_packed.data_ptr(),
-            weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
-            weight_sf.data_ptr(), outer_weight->data_ptr(), out.data_ptr(),
-            bias.data_ptr(), shape.n, shape.tc, shape.tn, shape.h, shape.w,
-            shape.ci, shape.co, static_cast<float>(alpha), stream)
-      : flash_rt::conv::motus_fp4_conv3d_v19sf_ndhwc_bf16out(
-            cache_packed.data_ptr(), new_packed.data_ptr(),
-            weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
-            weight_sf.data_ptr(), out.data_ptr(), bias.data_ptr(), shape.n,
-            shape.tc, shape.tn, shape.h, shape.w, shape.ci, shape.co,
-            static_cast<float>(alpha), stream);
+  int status;
+  if (is_sm120(new_packed)) {
+    status = outer_weight.has_value()
+        ? flash_rt::conv::motus_fp4_conv3d_v19sf_ndhwc_bf16out_v2(
+              cache_packed.data_ptr(), new_packed.data_ptr(),
+              weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
+              weight_sf.data_ptr(), outer_weight->data_ptr(), out.data_ptr(),
+              bias.data_ptr(), shape.n, shape.tc, shape.tn, shape.h, shape.w,
+              shape.ci, shape.co, static_cast<float>(alpha), stream)
+        : flash_rt::conv::motus_fp4_conv3d_v19sf_ndhwc_bf16out(
+              cache_packed.data_ptr(), new_packed.data_ptr(),
+              weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
+              weight_sf.data_ptr(), out.data_ptr(), bias.data_ptr(), shape.n,
+              shape.tc, shape.tn, shape.h, shape.w, shape.ci, shape.co,
+              static_cast<float>(alpha), stream);
+  } else {
+    status = flash_rt::conv::fp4_conv3d_ndhwc_bf16out_simt(
+        cache_packed.data_ptr(), new_packed.data_ptr(),
+        weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
+        weight_sf.data_ptr(),
+        outer_weight.has_value() ? outer_weight->data_ptr() : nullptr,
+        out.data_ptr(), bias.data_ptr(), shape.n, shape.tc, shape.tn, shape.h,
+        shape.w, shape.ci, shape.co, static_cast<float>(alpha), stream);
+  }
   TORCH_CHECK(status == 0,
               "nvfp4_causal_conv3d_ndhwc_bf16 failed with status ", status);
 #endif
@@ -454,31 +522,42 @@ void nvfp4_causal_conv3d_residual_ncdhw_bf16(
   auto stream =
       at::cuda::getCurrentCUDAStream(new_packed.get_device()).stream();
   int status;
-  if (outer_weight.has_value()) {
-    status =
-        flash_rt::conv::motus_fp4_conv3d_v19sfb_ncdhw_res_bf16out_v2(
-            cache_packed.data_ptr(), new_packed.data_ptr(),
-            weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
-            weight_sf.data_ptr(), outer_weight->data_ptr(), out.data_ptr(),
-            bias.data_ptr(), residual.data_ptr(), shape.n, shape.tc, shape.tn,
-            shape.h, shape.w, shape.ci, shape.co,
-            static_cast<float>(alpha), stream);
-  } else if (shape.ci % 128 == 0) {
-    status =
-        flash_rt::conv::motus_fp4_conv3d_v19sfbk128_ncdhw_res_bf16out(
-            cache_packed.data_ptr(), new_packed.data_ptr(),
-            weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
-            weight_sf.data_ptr(), out.data_ptr(), bias.data_ptr(),
-            residual.data_ptr(), shape.n, shape.tc, shape.tn, shape.h,
-            shape.w, shape.ci, shape.co, static_cast<float>(alpha), stream);
+  if (is_sm120(new_packed)) {
+    if (outer_weight.has_value()) {
+      status =
+          flash_rt::conv::motus_fp4_conv3d_v19sfb_ncdhw_res_bf16out_v2(
+              cache_packed.data_ptr(), new_packed.data_ptr(),
+              weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
+              weight_sf.data_ptr(), outer_weight->data_ptr(), out.data_ptr(),
+              bias.data_ptr(), residual.data_ptr(), shape.n, shape.tc, shape.tn,
+              shape.h, shape.w, shape.ci, shape.co,
+              static_cast<float>(alpha), stream);
+    } else if (shape.ci % 128 == 0) {
+      status =
+          flash_rt::conv::motus_fp4_conv3d_v19sfbk128_ncdhw_res_bf16out(
+              cache_packed.data_ptr(), new_packed.data_ptr(),
+              weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
+              weight_sf.data_ptr(), out.data_ptr(), bias.data_ptr(),
+              residual.data_ptr(), shape.n, shape.tc, shape.tn, shape.h,
+              shape.w, shape.ci, shape.co, static_cast<float>(alpha), stream);
+    } else {
+      status =
+          flash_rt::conv::motus_fp4_conv3d_v19sfb_ncdhw_res_bf16out(
+              cache_packed.data_ptr(), new_packed.data_ptr(),
+              weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
+              weight_sf.data_ptr(), out.data_ptr(), bias.data_ptr(),
+              residual.data_ptr(), shape.n, shape.tc, shape.tn, shape.h,
+              shape.w, shape.ci, shape.co, static_cast<float>(alpha), stream);
+    }
   } else {
-    status =
-        flash_rt::conv::motus_fp4_conv3d_v19sfb_ncdhw_res_bf16out(
-            cache_packed.data_ptr(), new_packed.data_ptr(),
-            weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
-            weight_sf.data_ptr(), out.data_ptr(), bias.data_ptr(),
-            residual.data_ptr(), shape.n, shape.tc, shape.tn, shape.h,
-            shape.w, shape.ci, shape.co, static_cast<float>(alpha), stream);
+    status = flash_rt::conv::fp4_conv3d_ncdhw_res_bf16out_simt(
+        cache_packed.data_ptr(), new_packed.data_ptr(),
+        weight_packed.data_ptr(), cache_sf.data_ptr(), new_sf.data_ptr(),
+        weight_sf.data_ptr(),
+        outer_weight.has_value() ? outer_weight->data_ptr() : nullptr,
+        out.data_ptr(), bias.data_ptr(), residual.data_ptr(), shape.n,
+        shape.tc, shape.tn, shape.h, shape.w, shape.ci, shape.co,
+        static_cast<float>(alpha), stream);
   }
   TORCH_CHECK(
       status == 0,

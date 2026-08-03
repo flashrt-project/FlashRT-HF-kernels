@@ -66,6 +66,7 @@ void v19sfb_mma_m16n8k64_e2m1_4x(
     uint32_t b4, uint32_t b5, uint32_t b6, uint32_t b7,
     uint32_t sfa, uint32_t sfb)
 {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 1200)
   constexpr uint16_t bidA = 0, tidA = 0, bidB = 0;
   constexpr uint16_t tidB0 = 0, tidB1 = 1, tidB2 = 2, tidB3 = 3;
   asm volatile(
@@ -108,6 +109,15 @@ void v19sfb_mma_m16n8k64_e2m1_4x(
       "f"(d6), "f"(d7), "f"(d14), "f"(d15),
       "r"(sfa), "h"(bidA), "h"(tidA),
       "r"(sfb), "h"(bidB), "h"(tidB3));
+#else
+    (void)d0; (void)d1; (void)d2; (void)d3;
+    (void)d4; (void)d5; (void)d6; (void)d7;
+    (void)d8; (void)d9; (void)d10; (void)d11;
+    (void)d12; (void)d13; (void)d14; (void)d15;
+    (void)a0; (void)a1; (void)a2; (void)a3;
+    (void)b0; (void)b1; (void)b2; (void)b3; (void)b4; (void)b5; (void)b6; (void)b7;
+    (void)sfa; (void)sfb;
+#endif
 }
 
 // FP4 data ptrs (verbatim from v19_skeleton.cu, k_global in elements)

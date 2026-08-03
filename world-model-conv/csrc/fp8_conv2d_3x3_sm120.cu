@@ -43,6 +43,7 @@ void c2d_mma_m16n8k32_e4m3(
     uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
     uint32_t b0, uint32_t b1)
 {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 1200)
   asm volatile(
     "mma.sync.aligned.kind::f8f6f4.m16n8k32.row.col.f32.e4m3.e4m3.f32 "
     "{%0, %1, %2, %3}, "
@@ -52,6 +53,10 @@ void c2d_mma_m16n8k32_e4m3(
     : "+f"(d0), "+f"(d1), "+f"(d2), "+f"(d3)
     : "r"(a0), "r"(a1), "r"(a2), "r"(a3),
       "r"(b0), "r"(b1));
+#else
+    (void)d0; (void)d1; (void)d2; (void)d3;
+    (void)a0; (void)a1; (void)a2; (void)a3; (void)b0; (void)b1;
+#endif
 }
 
 // 2D conv input addressing: m_global decodes (b, h_out, w_out).
