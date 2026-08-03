@@ -40,3 +40,18 @@ Variant notes:
 
 The PyTorch references consume the same already-dequantized FP4 tensors and do
 not include quantization. The compiled reference is warmed before timing.
+
+## BF16 Direct Producer
+
+Source benchmark on RTX 5090 with 100 warmup and 1000 measured iterations:
+
+| Shape | Direct BF16 us | Cast + FP16 producer us | Speedup | Native BF16 us | Wrapper/native |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| M=1, K=5120 | 4.098 | 6.404 | 1.563x | 6.150 | 0.666x |
+| M=1, K=6144 | 4.098 | 6.403 | 1.562x | 8.190 | 0.500x |
+| M=1, K=17408 | 4.096 | 6.413 | 1.566x | 18.442 | 0.222x |
+
+The direct entry is byte-exact against the package's established
+BF16-to-FP16 plus FP16-producer contract. The native timing is reported as a
+performance reference only because that producer uses a distinct quantization
+strategy.

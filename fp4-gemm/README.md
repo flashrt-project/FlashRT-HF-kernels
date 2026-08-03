@@ -11,6 +11,7 @@ paths.
 
 - `sfa_size_bytes(rows, dim)`
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
+- `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
 - `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
 - `nvfp4_gemm_residual_bf16(a_packed, b_packed, sfa, sfb, residual, alpha=1.0, out=None)`
@@ -61,6 +62,18 @@ b_packed, sfb = ops.quantize_fp4_sfa_fp16(w, is_sfb=True)
 y = ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0)
 ```
 
+For BF16 model activations, use the direct producer so the hot path does not
+materialize an intermediate FP16 tensor:
+
+```python
+x_bf16 = torch.randn((1, 5120), device="cuda", dtype=torch.bfloat16)
+a_packed, sfa = ops.quantize_fp4_sfa_bf16(x_bf16)
+```
+
+The BF16 entry writes the same E2M1 bytes and CUTLASS SFA/SFB layout as
+`quantize_fp4_sfa_fp16(x_bf16.to(torch.float16))` for finite FP16-range
+inputs. It is an additive API; the existing FP16 producer remains unchanged.
+
 The quantize/dequantize helpers are included for examples and validation. A
 production runtime should keep weights prepacked and should avoid quantizing in
 the hot path unless that producer kernel is part of the intended low-bit block.
@@ -88,3 +101,7 @@ python fp4-gemm/tests/test_fp4_gemm.py --backend installed \
 The correctness reference dequantizes the same FP4/SFA and FP4/SFB inputs used
 by the kernel, then computes the PyTorch GEMM reference from those dequantized
 low-bit values.
+
+The producer gate also checks the BF16 direct entry byte-for-byte against the
+established FP16 compatibility chain at decode widths 5120, 6144 and 17408,
+plus multi-row activation and SFB layouts.

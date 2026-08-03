@@ -23,6 +23,9 @@ Local packaging edits:
 
 - Added Tensor-facing PyTorch custom ops in `torch-ext/torch_binding.cpp`.
 - Added Python wrappers and fake registrations in `torch-ext/fp4_gemm`.
+- Added the BF16 direct SFA/SFB producer as an input-type specialization of
+  the existing FP16 producer. Its E2M1 encoding and CUTLASS scale layout are
+  unchanged; the additive entry removes a standalone activation cast.
 - Public APIs accept CUDA tensors only; no raw pointers or stream arguments.
 - CUTLASS SM100/SM120 block-scaled layout support is treated as package scope,
   not as a test-only compiler define.

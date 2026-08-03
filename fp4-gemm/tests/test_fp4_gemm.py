@@ -96,6 +96,9 @@ class SourceOps:
     def quantize_fp4_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_fp4_sfa_fp16(x, packed, sfa, bool(is_sfb))
 
+    def quantize_fp4_sfa_bf16(self, x, packed, sfa, is_sfb=False):
+        self._ops.quantize_fp4_sfa_bf16(x, packed, sfa, bool(is_sfb))
+
     def dequantize_fp4_sfa_fp16(self, packed, sfa, out, is_sfb=False):
         self._ops.dequantize_fp4_sfa_fp16(packed, sfa, out, bool(is_sfb))
 
@@ -151,6 +154,11 @@ class InstalledOps:
 
     def quantize_fp4_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._module.quantize_fp4_sfa_fp16(
+            x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
+        )
+
+    def quantize_fp4_sfa_bf16(self, x, packed, sfa, is_sfb=False):
+        self._module.quantize_fp4_sfa_bf16(
             x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
         )
 
@@ -230,6 +238,7 @@ def load_source_ops() -> SourceOps:
     else:
         gemm_sources = [
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_w4a16_gemm_sm120.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "fp4_w4a4_mma_warpsplit_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cu"),
@@ -466,6 +475,57 @@ def check_installed_compile(ops: InstalledOps) -> dict[str, object]:
     }
 
 
+def check_bf16_quantizer(ops) -> dict[str, object]:
+    """Require the direct BF16 producer to preserve the established layout."""
+    cases = [
+        (1, 5120, False),
+        (1, 6144, False),
+        (1, 17408, False),
+        (16, 2048, False),
+        (128, 512, False),
+        (64, 1024, True),
+    ]
+    rows = []
+    for case_index, (m, k, is_sfb) in enumerate(cases):
+        torch.manual_seed(8100 + case_index)
+        x = (torch.randn((m, k), device="cuda") * 1.5).to(torch.bfloat16)
+        direct_packed, direct_sfa = ops.alloc_fp4(m, k)
+        compat_packed, compat_sfa = ops.alloc_fp4(m, k)
+        # CUTLASS SFA/SFB buffers contain alignment padding that producers do
+        # not write or consume. Zero it so a full-buffer equality check still
+        # proves every mapped scale byte lands at the same address.
+        direct_sfa.zero_()
+        compat_sfa.zero_()
+        ops.quantize_fp4_sfa_bf16(x, direct_packed, direct_sfa, is_sfb)
+        ops.quantize_fp4_sfa_fp16(
+            x.to(torch.float16), compat_packed, compat_sfa, is_sfb
+        )
+        torch.cuda.synchronize()
+        packed_exact = bool(torch.equal(direct_packed, compat_packed))
+        sfa_exact = bool(torch.equal(direct_sfa, compat_sfa))
+        direct_deq = torch.empty((m, k), device="cuda", dtype=torch.float16)
+        compat_deq = torch.empty_like(direct_deq)
+        ops.dequantize_fp4_sfa_fp16(
+            direct_packed, direct_sfa, direct_deq, is_sfb
+        )
+        ops.dequantize_fp4_sfa_fp16(
+            compat_packed, compat_sfa, compat_deq, is_sfb
+        )
+        torch.cuda.synchronize()
+        dequant_exact = bool(torch.equal(direct_deq, compat_deq))
+        rows.append(
+            {
+                "shape": [m, k],
+                "is_sfb": is_sfb,
+                "packed_exact": packed_exact,
+                "sfa_exact": sfa_exact,
+                "dequant_exact": dequant_exact,
+                "passed": packed_exact and sfa_exact and dequant_exact,
+            }
+        )
+    return {"rows": rows, "passed": all(row["passed"] for row in rows)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -487,6 +547,7 @@ def main() -> int:
         for name, shape in EPILOGUE_SHAPES.items():
             results.extend(run_epilogue_case(ops, name, shape))
     compile_check = None
+    bf16_quantizer_check = check_bf16_quantizer(ops)
     if args.backend == "installed" and args.mode == "full":
         compile_check = check_installed_compile(ops)
     passed = sum(1 for item in results if item.passed)
@@ -494,6 +555,8 @@ def main() -> int:
     if compile_check is not None:
         total += 1
         passed += int(bool(compile_check["passed"]))
+    total += 1
+    passed += int(bool(bf16_quantizer_check["passed"]))
     payload = {
         "backend": args.backend,
         "mode": args.mode,
@@ -503,6 +566,7 @@ def main() -> int:
         "total": total,
         "results": [asdict(item) for item in results],
         "compile_check": compile_check,
+        "bf16_quantizer_check": bf16_quantizer_check,
     }
     print(json.dumps(payload, indent=2))
     if args.json_out:

@@ -63,6 +63,11 @@ def _quant_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_bf16"))
+def _quant_bf16_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb: bool = False) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("dequantize_fp4_sfa_fp16"))
 def _dequant_fake(packed: torch.Tensor, sfa: torch.Tensor, out: torch.Tensor, is_sfb: bool = False) -> None:
     return None
@@ -104,6 +109,19 @@ def quantize_fp4_sfa_fp16(
     if packed is None or sfa is None:
         packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
     ops.quantize_fp4_sfa_fp16(x, packed, sfa, bool(is_sfb))
+    return packed, sfa
+
+
+def quantize_fp4_sfa_bf16(
+    x: torch.Tensor,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    is_sfb: bool = False,
+):
+    """Quantize BF16 directly to packed E2M1 and CUTLASS SFA/SFB."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.quantize_fp4_sfa_bf16(x, packed, sfa, bool(is_sfb))
     return packed, sfa
 
 
@@ -284,5 +302,6 @@ __all__ = [
     "nvfp4_gemm_streamk_bf16",
     "nvfp4_gemm_streamk_bias_bf16",
     "quantize_fp4_sfa_fp16",
+    "quantize_fp4_sfa_bf16",
     "sfa_size_bytes",
 ]

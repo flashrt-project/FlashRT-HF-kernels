@@ -7,6 +7,7 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 
 - `sfa_size_bytes`
 - `quantize_fp4_sfa_fp16`
+- `quantize_fp4_sfa_bf16`
 - `dequantize_fp4_sfa_fp16`
 - `nvfp4_gemm_bf16`
 - `nvfp4_gemm_residual_bf16`
@@ -30,6 +31,14 @@ w = torch.randn((512, 256), device="cuda", dtype=torch.float16)
 a, sfa = ops.quantize_fp4_sfa_fp16(x, is_sfb=False)
 b, sfb = ops.quantize_fp4_sfa_fp16(w, is_sfb=True)
 y = ops.nvfp4_gemm_bf16(a, b, sfa, sfb)
+```
+
+BF16 activations should use the direct producer to avoid a separate cast and
+copy before every low-bit projection:
+
+```python
+x = torch.randn((1, 5120), device="cuda", dtype=torch.bfloat16)
+a, sfa = ops.quantize_fp4_sfa_bf16(x)
 ```
 
 ## Notes

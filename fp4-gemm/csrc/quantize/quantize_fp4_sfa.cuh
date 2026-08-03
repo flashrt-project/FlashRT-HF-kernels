@@ -27,5 +27,15 @@ int quantize_fp4_dynamic_sfa_fp16(
     int N, int D, bool is_sfb,
     cudaStream_t stream);
 
+// BF16 [N, D] -> the exact same packed E2M1 + CUTLASS SFA/SFB layout as the
+// FP16 entry. This avoids a standalone BF16-to-FP16 conversion in decode
+// pipelines whose activations are already BF16.
+int quantize_fp4_dynamic_sfa_bf16(
+    const void* src_bf16,
+    void* dst_packed,
+    void* dst_sfa,
+    int N, int D, bool is_sfb,
+    cudaStream_t stream);
+
 }  // namespace fp4
 }  // namespace flash_rt
