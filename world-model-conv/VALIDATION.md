@@ -41,6 +41,15 @@ The FP8/NVFP4 conv ops also ship a pure-SIMT reference
 (`portable_conv_simt.cu`) compiled for `sm_110a`, since no native tensor-core
 backend exists for them on Thor. The correctness test forces the SIMT path
 with `FLASHRT_FORCE_SIMT=1` and compares against the native SM120 output within
-the same tolerance envelope, validating the fallback on any device. Runtime
-validation of the SM110 fp8/nvfp4 artifact on Thor hardware is pending and is
-not recorded as passed here.
+the same tolerance envelope, validating the fallback on any device.
+
+### SM110 (NVIDIA Thor) real-hardware validation
+
+Validated on an NVIDIA Thor (`sm_110a`) device with PyTorch 2.9.1+cu130 and
+CUDA 13.2, comparing the SIMT path against an FP32 eager convolution reference:
+
+- `fp8_conv3d_v18_ncdhw_res_bf16out`: max abs err 0.0, cosine 0.99999994
+- `fp8_causal_conv3d_ndhwc_bf16`: max abs err 0.0, cosine 0.99999994
+- `nvfp4_causal_conv3d_ndhwc_bf16`: max abs err 0.0, cosine 1.0
+
+The SIMT kernels are bit-faithful to the FP32 convolution reference on Thor.
