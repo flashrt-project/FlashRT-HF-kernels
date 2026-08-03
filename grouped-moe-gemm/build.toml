@@ -15,9 +15,10 @@ backend = "cuda"
 depends = ["torch", "cutlass_4_0"]
 include = ["csrc"]
 cuda-minver = "12.8"
-cuda-capabilities = ["12.0a"]
+cuda-capabilities = ["12.0a", "11.0"]
 src = [
   "csrc/moe_m16_mma_sm120.cu", "csrc/moe_m16_mma_sm120.cuh",
   "csrc/moe_m64_mma_sm120.cu", "csrc/moe_m64_mma_sm120.cuh",
   "csrc/moe_blocktile_mma_sm120.cu", "csrc/moe_blocktile_mma_sm120.cuh",
+  "csrc/portable_moe_simt.cu", "csrc/portable_moe_simt.cuh",
 ]
