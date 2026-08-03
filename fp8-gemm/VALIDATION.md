@@ -147,3 +147,13 @@ measured `32x128-w4-s1` tile. SM120 source regression remains 14/14. SM89
 installed correctness, tile parity, and performance claims remain gated on an
 SM89 release artifact run; source presence alone is not recorded as runtime
 validation.
+
+## SM110 portable SIMT blockwise fallback
+
+`fp8_blockwise_linear_bf16` also ships a pure-SIMT reference
+(`portable_fp8_blockwise_simt.cu`) compiled for `sm_110a`, the only arch
+without a native blockwise backend. The correctness test forces the SIMT path
+with `FLASHRT_FORCE_SIMT=1` and compares against the native SM120 output within
+the same tolerance envelope, validating the fallback on any device. Runtime
+validation of the SM110 artifact on Thor hardware is pending and is not
+recorded as passed here.

@@ -8,6 +8,13 @@ The per-tensor API supports Blackwell `sm_110a` (Jetson AGX Thor) and
 `sm_120a`. SM110 uses the production FlashRT Sq/T1/Wide CUTLASS family and has
 been swept across PI0.5, GROOT, Cosmos Edge, and LingBot VLA projection shapes.
 
+The block-128 scaled API also exposes a portable pure-SIMT reference
+(`portable_fp8_blockwise_simt.cu`) for `sm_110a`, which has no native
+blockwise backend. SM89 and SM120 keep their native block-scaled kernels;
+the SIMT reference is selected only on non-SM89/SM120 devices. Set
+`FLASHRT_FORCE_SIMT=1` to route any device through the SIMT reference
+(used by the correctness test to validate parity against the native path).
+
 ## Functions
 
 - `fp8_linear_bf16(input, weight, alpha=1.0, out=None, variant=0)`
