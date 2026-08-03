@@ -18,6 +18,17 @@ accumulation and BF16 state/output casts. Split/gating helpers are checked
 against exact PyTorch tensor formulas. `gdn_chunk_from_conv_smem_bf16` and the
 WY pipeline are checked end-to-end against the same recurrent reference.
 
+The v4 H32/H16 profile covers `S={1,4,64}`. It additionally requires:
+
+- exact split parity;
+- ordinary and strided gating parity with FP32 gate parameters;
+- fused chunk output and in-place state exact parity with the same package's
+  staged native split + gating + shared-memory chunk path;
+- independent PyTorch recurrent-reference metrics;
+- two CUDA Graph replays with bit-identical output and state;
+- fail-fast rejection for BF16 gate parameters, wrong conv width, and a
+  non-integral `Hv/Hk` broadcast ratio.
+
 `gated_delta_recurrent_sequence_bf16` keeps recurrent state in FP32 for the
 entire sequence and casts state to BF16 only once on exit. Its independent
 reference therefore does the same; comparing it to the legacy per-token BF16
@@ -32,7 +43,7 @@ Command:
 python gated-delta-attention/tests/test_gated_delta_attention.py \
   --backend source \
   --mode full \
-  --json-out internal-tests/gated-delta-attention-v3-source-full.json
+  --json-out internal-tests/gated-delta-attention-v4-source-full.json
 ```
 
 Rows:
@@ -48,6 +59,9 @@ Rows:
 | split_s4 | split | 1 | 4 | 48 | 0.000000 | 0.000000 | 0.000000 | 1.00000000 | PASS |
 | gating_s4 | gating | 1 | 4 | 48 | 0.000000 | 0.000000 | 0.000000 | 1.00000000 | PASS |
 | chunk_from_conv_s4 | chunk_from_conv | 1 | 4 | 48 | 0.000015 | 0.000000 | 0.000000 | 1.00000000 | PASS |
+| h32_pipeline_s1 | h32_pipeline | 1 | 1 | 32 | 0.000000 | 0.000000 | 0.000000 | 1.00000000 | PASS |
+| h32_pipeline_s4 | h32_pipeline | 1 | 4 | 32 | 0.000004 | 0.000000 | 0.000000 | 1.00000000 | PASS |
+| h32_pipeline_s64 | h32_pipeline | 1 | 64 | 32 | 0.000031 | 0.000000 | 0.000000 | 0.99999988 | PASS |
 | wy_pipeline_s4 | wy_pipeline | 1 | 4 | 48 | 0.000031 | 0.000004 | 0.000015 | 0.99999440 | PASS |
 | wy_pipeline_s65 | wy_pipeline | 1 | 65 | 48 | 0.000107 | 0.000009 | 0.000038 | 0.99996358 | PASS |
 | wy_mma_fla_s64 | wy_mma_fla | 1 | 64 | 48 | 0.000122 | 0.000010 | 0.000044 | 0.99996173 | PASS |
@@ -71,5 +85,5 @@ python tests/test_gated_delta_attention.py \
 
 Result: same full rows pass for the local generated artifact.
 
-For v3 release artifacts, rerun the same command against the HF Jobs artifact
+For v4 release artifacts, rerun the same command against the HF Jobs artifact
 before updating the installed-artifact claim.

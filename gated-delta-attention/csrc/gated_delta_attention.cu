@@ -917,25 +917,31 @@ __global__ void gated_deltanet_chunk_smem_kernel(
   }
 }
 
-__global__ void qwen36_lin_split_qkv_broadcast_kernel(
+__global__ void lin_split_qkv_broadcast_h_kernel(
     const __nv_bfloat16* __restrict__ conv_out,
     __nv_bfloat16* __restrict__ q48,
     __nv_bfloat16* __restrict__ k48,
     __nv_bfloat16* __restrict__ v48,
-    int S)
+    int S,
+    int num_v_heads,
+    int num_k_heads,
+    int head_dim)
 {
   const int idx = blockIdx.x * kSplitThreads + threadIdx.x;
-  const int total = S * 48 * kHD;
+  const int total = S * num_v_heads * head_dim;
   if (idx >= total) return;
 
-  const int t = idx % kHD;
-  const int h = (idx / kHD) % 48;
-  const int s = idx / (48 * kHD);
-  const int src_h = h / 3;
-  const size_t row = static_cast<size_t>(s) * 10240;
-  q48[idx] = conv_out[row + src_h * kHD + t];
-  k48[idx] = conv_out[row + 2048 + src_h * kHD + t];
-  v48[idx] = conv_out[row + 4096 + h * kHD + t];
+  const int t = idx % head_dim;
+  const int h = (idx / head_dim) % num_v_heads;
+  const int s = idx / (num_v_heads * head_dim);
+  const int broadcast = num_v_heads / num_k_heads;
+  const int src_h = h / broadcast;
+  const int qk_width = num_k_heads * head_dim;
+  const int row_width = (2 * num_k_heads + num_v_heads) * head_dim;
+  const size_t row = static_cast<size_t>(s) * row_width;
+  q48[idx] = conv_out[row + src_h * head_dim + t];
+  k48[idx] = conv_out[row + qk_width + src_h * head_dim + t];
+  v48[idx] = conv_out[row + 2 * qk_width + h * head_dim + t];
 }
 
 __global__ void qwen36_lin_split_qkv_gqa_kernel(
@@ -1041,6 +1047,7 @@ __global__ void qwen36_gdn_chunk_from_conv_smem_kernel(
     __nv_bfloat16* __restrict__ out_,
     int S,
     int num_v_heads,
+    int num_k_heads,
     int a_stride,
     int b_stride,
     bool use_qk_l2norm)
@@ -1066,12 +1073,15 @@ __global__ void qwen36_gdn_chunk_from_conv_smem_kernel(
   }
   __syncthreads();
 
-  const int src_h = h / 3;
+  const int broadcast = num_v_heads / num_k_heads;
+  const int src_h = h / broadcast;
+  const int qk_width = num_k_heads * HD;
+  const int row_width = (2 * num_k_heads + num_v_heads) * HD;
   for (int s = 0; s < S; ++s) {
-    const size_t row = static_cast<size_t>(s) * 10240;
+    const size_t row = static_cast<size_t>(s) * row_width;
     const size_t out_off = ((size_t)s * num_v_heads + h) * HD + t;
     qs[t] = static_cast<float>(conv_out[row + src_h * HD + t]);
-    ks[t] = static_cast<float>(conv_out[row + 2048 + src_h * HD + t]);
+    ks[t] = static_cast<float>(conv_out[row + qk_width + src_h * HD + t]);
     __syncthreads();
 
     if (use_qk_l2norm) {
@@ -1118,7 +1128,7 @@ __global__ void qwen36_gdn_chunk_from_conv_smem_kernel(
     }
 
     const float v_t =
-        static_cast<float>(conv_out[row + 4096 + h * HD + t]);
+        static_cast<float>(conv_out[row + 2 * qk_width + h * HD + t]);
     const float delta = (v_t - kv_mem) * beta_t;
 
     #pragma unroll 16
@@ -1555,16 +1565,31 @@ void qwen36_lin_split_qkv_broadcast_bf16(
     int S,
     cudaStream_t stream)
 {
+  lin_split_qkv_broadcast_h_bf16(
+      conv_out, q48, k48, v48, S, 48, 16, kHD, stream);
+}
+
+void lin_split_qkv_broadcast_h_bf16(
+    const void* conv_out,
+    void*       q,
+    void*       k,
+    void*       v,
+    int S,
+    int num_v_heads,
+    int num_k_heads,
+    int head_dim,
+    cudaStream_t stream)
+{
   if (S <= 0) return;
-  const int total = S * 48 * kHD;
+  const int total = S * num_v_heads * head_dim;
   dim3 grid((total + kSplitThreads - 1) / kSplitThreads);
   dim3 block(kSplitThreads);
-  qwen36_lin_split_qkv_broadcast_kernel<<<grid, block, 0, stream>>>(
+  lin_split_qkv_broadcast_h_kernel<<<grid, block, 0, stream>>>(
       reinterpret_cast<const __nv_bfloat16*>(conv_out),
-      reinterpret_cast<__nv_bfloat16*>(q48),
-      reinterpret_cast<__nv_bfloat16*>(k48),
-      reinterpret_cast<__nv_bfloat16*>(v48),
-      S);
+      reinterpret_cast<__nv_bfloat16*>(q),
+      reinterpret_cast<__nv_bfloat16*>(k),
+      reinterpret_cast<__nv_bfloat16*>(v),
+      S, num_v_heads, num_k_heads, head_dim);
 }
 
 void qwen36_lin_split_qkv_gqa_bf16(
@@ -1670,7 +1695,31 @@ void qwen36_gdn_chunk_from_conv_smem_bf16(
     bool use_qk_l2norm,
     cudaStream_t stream)
 {
+  gdn_chunk_from_conv_smem_h_bf16(
+      conv_out, a, b, neg_exp_A_log, dt_bias, state, out,
+      S, num_v_heads, 16, kHD, num_v_heads, num_v_heads,
+      use_qk_l2norm, stream);
+}
+
+void gdn_chunk_from_conv_smem_h_bf16(
+    const void* conv_out,
+    const void* a,
+    const void* b,
+    const float* neg_exp_A_log,
+    const float* dt_bias,
+    void*       state,
+    void*       out,
+    int S,
+    int num_v_heads,
+    int num_k_heads,
+    int head_dim,
+    int a_stride,
+    int b_stride,
+    bool use_qk_l2norm,
+    cudaStream_t stream)
+{
   if (S <= 0 || num_v_heads <= 0) return;
+  if (head_dim != kHD) return;
   dim3 grid(num_v_heads, 1);
   dim3 block(kHD);
   constexpr size_t kSmemBytes =
@@ -1692,7 +1741,7 @@ void qwen36_gdn_chunk_from_conv_smem_bf16(
       dt_bias,
       reinterpret_cast<__nv_bfloat16*>(state),
       reinterpret_cast<__nv_bfloat16*>(out),
-      S, num_v_heads, num_v_heads, num_v_heads, use_qk_l2norm);
+      S, num_v_heads, num_k_heads, a_stride, b_stride, use_qk_l2norm);
 }
 
 void qwen36_gdn_chunk_from_conv_smem_strided_bf16(
@@ -1732,7 +1781,7 @@ void qwen36_gdn_chunk_from_conv_smem_strided_bf16(
       dt_bias,
       reinterpret_cast<__nv_bfloat16*>(state),
       reinterpret_cast<__nv_bfloat16*>(out),
-      S, num_v_heads, a_stride, b_stride, use_qk_l2norm);
+      S, num_v_heads, 16, a_stride, b_stride, use_qk_l2norm);
 }
 
 void gated_deltanet_chunk_smem_qwen36_bf16(

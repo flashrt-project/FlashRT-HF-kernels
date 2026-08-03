@@ -101,6 +101,39 @@ void check_conv_out(torch::Tensor const& conv_out) {
               "conv_out must have shape (S,10240)");
 }
 
+void check_head_profile(int64_t num_v_heads, int64_t num_k_heads,
+                        int64_t head_dim) {
+  TORCH_CHECK(num_v_heads > 0 && num_k_heads > 0,
+              "num_v_heads and num_k_heads must be positive");
+  TORCH_CHECK(num_v_heads % num_k_heads == 0,
+              "num_v_heads must be divisible by num_k_heads");
+  TORCH_CHECK(head_dim == 128,
+              "this kernel currently requires head_dim=128");
+}
+
+void check_conv_out_h(torch::Tensor const& conv_out, int64_t num_v_heads,
+                      int64_t num_k_heads, int64_t head_dim) {
+  check_head_profile(num_v_heads, num_k_heads, head_dim);
+  check_bf16(conv_out, "conv_out");
+  const int64_t width = (2 * num_k_heads + num_v_heads) * head_dim;
+  TORCH_CHECK(conv_out.dim() == 2 && conv_out.size(1) == width,
+              "conv_out must have shape (S,", width, ")");
+}
+
+void check_heads_h(torch::Tensor const& t, const char* name, int64_t S,
+                   int64_t num_heads) {
+  check_bf16(t, name);
+  TORCH_CHECK(t.sizes() == torch::IntArrayRef({S, num_heads}),
+              name, " must have shape (S,", num_heads, ")");
+}
+
+void check_qkv_h(torch::Tensor const& t, const char* name, int64_t S,
+                 int64_t num_heads, int64_t head_dim) {
+  check_bf16(t, name);
+  TORCH_CHECK(t.sizes() == torch::IntArrayRef({S, num_heads, head_dim}),
+              name, " must have shape (S,", num_heads, ",", head_dim, ")");
+}
+
 void check_q16(torch::Tensor const& t, const char* name, int64_t S) {
   check_bf16(t, name);
   TORCH_CHECK(t.sizes() == torch::IntArrayRef({S, 16, 128}),
@@ -400,6 +433,33 @@ void lin_split_qkv_broadcast_bf16(torch::Tensor const& conv_out,
 #endif
 }
 
+void lin_split_qkv_broadcast_h_bf16(torch::Tensor const& conv_out,
+                                    torch::Tensor& q,
+                                    torch::Tensor& k,
+                                    torch::Tensor& v,
+                                    int64_t num_v_heads,
+                                    int64_t num_k_heads,
+                                    int64_t head_dim) {
+  check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim);
+  const auto S = conv_out.size(0);
+  check_qkv_h(q, "q", S, num_v_heads, head_dim);
+  check_qkv_h(k, "k", S, num_v_heads, head_dim);
+  check_qkv_h(v, "v", S, num_v_heads, head_dim);
+  same_device(conv_out, q, "conv_out", "q");
+  same_device(conv_out, k, "conv_out", "k");
+  same_device(conv_out, v, "conv_out", "v");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(conv_out.device());
+  auto stream = at::cuda::getCurrentCUDAStream(conv_out.get_device()).stream();
+  flash_rt::kernels::lin_split_qkv_broadcast_h_bf16(
+      conv_out.data_ptr(), q.data_ptr(), k.data_ptr(), v.data_ptr(),
+      static_cast<int>(S), static_cast<int>(num_v_heads),
+      static_cast<int>(num_k_heads), static_cast<int>(head_dim), stream);
+#else
+  TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
+#endif
+}
+
 void lin_split_qkv_gqa_bf16(torch::Tensor const& conv_out,
                             torch::Tensor& q16,
                             torch::Tensor& k16,
@@ -482,6 +542,41 @@ void gdn_gating_bf16(torch::Tensor const& a, torch::Tensor const& b,
 #endif
 }
 
+void gdn_gating_h_bf16(torch::Tensor const& a, torch::Tensor const& b,
+                       torch::Tensor const& neg_exp_A_log,
+                       torch::Tensor const& dt_bias,
+                       torch::Tensor& g_out,
+                       torch::Tensor& beta_out,
+                       int64_t num_heads) {
+  TORCH_CHECK(num_heads > 0, "num_heads must be positive");
+  const auto S = a.size(0);
+  check_heads_h(a, "a", S, num_heads);
+  check_heads_h(b, "b", S, num_heads);
+  check_heads_h(g_out, "g_out", S, num_heads);
+  check_heads_h(beta_out, "beta_out", S, num_heads);
+  check_f32(neg_exp_A_log, "neg_exp_A_log");
+  check_f32(dt_bias, "dt_bias");
+  TORCH_CHECK(neg_exp_A_log.sizes() == torch::IntArrayRef({num_heads}),
+              "neg_exp_A_log must have shape (num_heads)");
+  TORCH_CHECK(dt_bias.sizes() == torch::IntArrayRef({num_heads}),
+              "dt_bias must have shape (num_heads)");
+  same_device(a, b, "a", "b");
+  same_device(a, neg_exp_A_log, "a", "neg_exp_A_log");
+  same_device(a, dt_bias, "a", "dt_bias");
+  same_device(a, g_out, "a", "g_out");
+  same_device(a, beta_out, "a", "beta_out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(a.device());
+  auto stream = at::cuda::getCurrentCUDAStream(a.get_device()).stream();
+  flash_rt::kernels::qwen36_gdn_gating_bf16(
+      a.data_ptr(), b.data_ptr(), neg_exp_A_log.data_ptr<float>(),
+      dt_bias.data_ptr<float>(), g_out.data_ptr(), beta_out.data_ptr(),
+      static_cast<int>(S), static_cast<int>(num_heads), stream);
+#else
+  TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
+#endif
+}
+
 void gdn_gating_strided_bf16(torch::Tensor const& a, torch::Tensor const& b,
                              torch::Tensor const& neg_exp_A_log,
                              torch::Tensor const& dt_bias,
@@ -517,6 +612,50 @@ void gdn_gating_strided_bf16(torch::Tensor const& a, torch::Tensor const& b,
 #endif
 }
 
+void gdn_gating_strided_h_bf16(torch::Tensor const& a, torch::Tensor const& b,
+                               torch::Tensor const& neg_exp_A_log,
+                               torch::Tensor const& dt_bias,
+                               torch::Tensor& g_out,
+                               torch::Tensor& beta_out,
+                               int64_t num_heads,
+                               int64_t a_stride,
+                               int64_t b_stride) {
+  TORCH_CHECK(num_heads > 0, "num_heads must be positive");
+  TORCH_CHECK(a_stride >= num_heads && b_stride >= num_heads,
+              "a_stride and b_stride must be at least num_heads");
+  const auto S = g_out.size(0);
+  check_heads_h(g_out, "g_out", S, num_heads);
+  check_heads_h(beta_out, "beta_out", S, num_heads);
+  check_bf16(a, "a");
+  check_bf16(b, "b");
+  TORCH_CHECK(a.numel() >= (S - 1) * a_stride + num_heads,
+              "a does not contain S rows at a_stride");
+  TORCH_CHECK(b.numel() >= (S - 1) * b_stride + num_heads,
+              "b does not contain S rows at b_stride");
+  check_f32(neg_exp_A_log, "neg_exp_A_log");
+  check_f32(dt_bias, "dt_bias");
+  TORCH_CHECK(neg_exp_A_log.sizes() == torch::IntArrayRef({num_heads}),
+              "neg_exp_A_log must have shape (num_heads)");
+  TORCH_CHECK(dt_bias.sizes() == torch::IntArrayRef({num_heads}),
+              "dt_bias must have shape (num_heads)");
+  same_device(g_out, a, "g_out", "a");
+  same_device(g_out, b, "g_out", "b");
+  same_device(g_out, neg_exp_A_log, "g_out", "neg_exp_A_log");
+  same_device(g_out, dt_bias, "g_out", "dt_bias");
+  same_device(g_out, beta_out, "g_out", "beta_out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(g_out.device());
+  auto stream = at::cuda::getCurrentCUDAStream(g_out.get_device()).stream();
+  flash_rt::kernels::qwen36_gdn_gating_strided_bf16(
+      a.data_ptr(), b.data_ptr(), neg_exp_A_log.data_ptr<float>(),
+      dt_bias.data_ptr<float>(), g_out.data_ptr(), beta_out.data_ptr(),
+      static_cast<int>(S), static_cast<int>(num_heads),
+      static_cast<int>(a_stride), static_cast<int>(b_stride), stream);
+#else
+  TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
+#endif
+}
+
 void gdn_chunk_from_conv_smem_bf16(torch::Tensor const& conv_out,
                                    torch::Tensor const& a,
                                    torch::Tensor const& b,
@@ -541,6 +680,53 @@ void gdn_chunk_from_conv_smem_bf16(torch::Tensor const& conv_out,
       neg_exp_A_log.data_ptr<float>(), dt_bias.data_ptr<float>(),
       state.data_ptr(), out.data_ptr(), static_cast<int>(S), 48,
       use_qk_l2norm, stream);
+#else
+  TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
+#endif
+}
+
+void gdn_chunk_from_conv_smem_h_bf16(torch::Tensor const& conv_out,
+                                     torch::Tensor const& a,
+                                     torch::Tensor const& b,
+                                     torch::Tensor const& neg_exp_A_log,
+                                     torch::Tensor const& dt_bias,
+                                     torch::Tensor& state,
+                                     torch::Tensor& out,
+                                     int64_t num_v_heads,
+                                     int64_t num_k_heads,
+                                     int64_t head_dim,
+                                     bool use_qk_l2norm) {
+  check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim);
+  const auto S = conv_out.size(0);
+  check_heads_h(a, "a", S, num_v_heads);
+  check_heads_h(b, "b", S, num_v_heads);
+  check_f32(neg_exp_A_log, "neg_exp_A_log");
+  check_f32(dt_bias, "dt_bias");
+  TORCH_CHECK(neg_exp_A_log.sizes() == torch::IntArrayRef({num_v_heads}),
+              "neg_exp_A_log must have shape (num_v_heads)");
+  TORCH_CHECK(dt_bias.sizes() == torch::IntArrayRef({num_v_heads}),
+              "dt_bias must have shape (num_v_heads)");
+  check_bf16(state, "state");
+  TORCH_CHECK(state.sizes() ==
+                  torch::IntArrayRef({num_v_heads, head_dim, head_dim}),
+              "state must have shape (num_v_heads,head_dim,head_dim)");
+  check_qkv_h(out, "out", S, num_v_heads, head_dim);
+  same_device(conv_out, a, "conv_out", "a");
+  same_device(conv_out, b, "conv_out", "b");
+  same_device(conv_out, neg_exp_A_log, "conv_out", "neg_exp_A_log");
+  same_device(conv_out, dt_bias, "conv_out", "dt_bias");
+  same_device(conv_out, state, "conv_out", "state");
+  same_device(conv_out, out, "conv_out", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(conv_out.device());
+  auto stream = at::cuda::getCurrentCUDAStream(conv_out.get_device()).stream();
+  flash_rt::kernels::gdn_chunk_from_conv_smem_h_bf16(
+      conv_out.data_ptr(), a.data_ptr(), b.data_ptr(),
+      neg_exp_A_log.data_ptr<float>(), dt_bias.data_ptr<float>(),
+      state.data_ptr(), out.data_ptr(), static_cast<int>(S),
+      static_cast<int>(num_v_heads), static_cast<int>(num_k_heads),
+      static_cast<int>(head_dim), static_cast<int>(num_v_heads),
+      static_cast<int>(num_v_heads), use_qk_l2norm, stream);
 #else
   TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
 #endif
@@ -843,11 +1029,15 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("gated_delta_chunk_smem_bf16(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor! state, Tensor! out, bool use_qk_l2norm=True) -> ()");
   ops.def("gated_delta_recurrent_sequence_bf16(Tensor q, Tensor k, Tensor v, Tensor g, Tensor beta, Tensor! state, Tensor! out, bool use_qk_l2norm=True) -> ()");
   ops.def("lin_split_qkv_broadcast_bf16(Tensor conv_out, Tensor! q48, Tensor! k48, Tensor! v48) -> ()");
+  ops.def("lin_split_qkv_broadcast_h_bf16(Tensor conv_out, Tensor! q, Tensor! k, Tensor! v, int num_v_heads, int num_k_heads, int head_dim=128) -> ()");
   ops.def("lin_split_qkv_gqa_bf16(Tensor conv_out, Tensor! q16, Tensor! k16, Tensor! v48) -> ()");
   ops.def("split_q_gate_bf16(Tensor q_proj, Tensor! q_pre, Tensor! gate) -> ()");
   ops.def("gdn_gating_bf16(Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! g_out, Tensor! beta_out) -> ()");
+  ops.def("gdn_gating_h_bf16(Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! g_out, Tensor! beta_out, int num_heads) -> ()");
   ops.def("gdn_gating_strided_bf16(Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! g_out, Tensor! beta_out, int a_stride, int b_stride) -> ()");
+  ops.def("gdn_gating_strided_h_bf16(Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! g_out, Tensor! beta_out, int num_heads, int a_stride, int b_stride) -> ()");
   ops.def("gdn_chunk_from_conv_smem_bf16(Tensor conv_out, Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! state, Tensor! out, bool use_qk_l2norm=True) -> ()");
+  ops.def("gdn_chunk_from_conv_smem_h_bf16(Tensor conv_out, Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! state, Tensor! out, int num_v_heads, int num_k_heads, int head_dim=128, bool use_qk_l2norm=True) -> ()");
   ops.def("gdn_wy_norm_cumsum_pack_qk_bf16(Tensor q16, Tensor k16, Tensor g, Tensor! q16_l2, Tensor! k16_l2, Tensor! q_pack_hv, Tensor! k_pack_hk, Tensor! g_cumsum) -> ()");
   ops.def("gdn_wy_kkt_b64_bf16(Tensor k16_l2, Tensor beta, Tensor g_cumsum, Tensor! A) -> ()");
   ops.def("gdn_wy_solve_tril_b64_f32(Tensor A, Tensor! Ai, int S) -> ()");
@@ -869,11 +1059,15 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("gated_delta_chunk_smem_bf16", torch::kCUDA, &gated_delta_chunk_smem_bf16);
   ops.impl("gated_delta_recurrent_sequence_bf16", torch::kCUDA, &gated_delta_recurrent_sequence_bf16);
   ops.impl("lin_split_qkv_broadcast_bf16", torch::kCUDA, &lin_split_qkv_broadcast_bf16);
+  ops.impl("lin_split_qkv_broadcast_h_bf16", torch::kCUDA, &lin_split_qkv_broadcast_h_bf16);
   ops.impl("lin_split_qkv_gqa_bf16", torch::kCUDA, &lin_split_qkv_gqa_bf16);
   ops.impl("split_q_gate_bf16", torch::kCUDA, &split_q_gate_bf16);
   ops.impl("gdn_gating_bf16", torch::kCUDA, &gdn_gating_bf16);
+  ops.impl("gdn_gating_h_bf16", torch::kCUDA, &gdn_gating_h_bf16);
   ops.impl("gdn_gating_strided_bf16", torch::kCUDA, &gdn_gating_strided_bf16);
+  ops.impl("gdn_gating_strided_h_bf16", torch::kCUDA, &gdn_gating_strided_h_bf16);
   ops.impl("gdn_chunk_from_conv_smem_bf16", torch::kCUDA, &gdn_chunk_from_conv_smem_bf16);
+  ops.impl("gdn_chunk_from_conv_smem_h_bf16", torch::kCUDA, &gdn_chunk_from_conv_smem_h_bf16);
   ops.impl("gdn_wy_norm_cumsum_pack_qk_bf16", torch::kCUDA, &gdn_wy_norm_cumsum_pack_qk_bf16);
   ops.impl("gdn_wy_kkt_b64_bf16", torch::kCUDA, &gdn_wy_kkt_b64_bf16);
   ops.impl("gdn_wy_solve_tril_b64_f32", torch::kCUDA, &gdn_wy_solve_tril_b64_f32);

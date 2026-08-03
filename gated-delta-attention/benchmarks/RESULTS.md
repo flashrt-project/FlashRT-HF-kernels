@@ -1,6 +1,23 @@
 # Results
 
-Built-artifact benchmark results are pending for v3.
+Built-artifact benchmark results are pending for v4.
+
+## Generic H32/H16 fused producer + chunk
+
+Local source-extension benchmark on RTX 5090, PyTorch `2.9.1+cu128`. Both
+paths reset the same BF16 recurrent state. `staged native` invokes the same
+package's native split, gating, and shared-memory chunk kernels separately;
+the fused path reads `conv_out/a/b` directly. Correctness is bit-identical.
+
+| S | Fused native us | Staged native us | Speedup | Exact |
+| ---: | ---: | ---: | ---: | --- |
+| 1 | 12.315 | 16.392 | 1.33x | yes |
+| 4 | 51.230 | 55.191 | 1.08x | yes |
+| 64 | 755.921 | 754.430 | 1.00x | yes |
+
+The long-sequence row is retained as a no-regression coverage point, not a
+speedup claim. Regenerate these rows from the v4 built artifact before making
+artifact-level performance claims.
 
 The table below is a local source-extension triage benchmark on
 `NVIDIA GeForce RTX 5090`, CUDA `12.8`, PyTorch `2.9.1+cu128`. It compares the

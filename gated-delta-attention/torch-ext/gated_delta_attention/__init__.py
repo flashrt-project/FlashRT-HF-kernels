@@ -36,6 +36,32 @@ def _check_conv_out(conv_out) -> None:
         raise RuntimeError("conv_out must have shape (S,10240)")
 
 
+def _check_head_profile(num_v_heads: int, num_k_heads: int, head_dim: int) -> None:
+    if num_v_heads <= 0 or num_k_heads <= 0:
+        raise RuntimeError("num_v_heads and num_k_heads must be positive")
+    if num_v_heads % num_k_heads:
+        raise RuntimeError("num_v_heads must be divisible by num_k_heads")
+    if head_dim != 128:
+        raise RuntimeError("this kernel currently requires head_dim=128")
+
+
+def _check_conv_out_h(conv_out, num_v_heads: int, num_k_heads: int, head_dim: int) -> None:
+    _check_head_profile(num_v_heads, num_k_heads, head_dim)
+    width = (2 * num_k_heads + num_v_heads) * head_dim
+    if conv_out.dim() != 2 or conv_out.shape[1] != width:
+        raise RuntimeError(f"conv_out must have shape (S,{width})")
+
+
+def _check_heads_h(x, S: int, H: int, name: str) -> None:
+    if x.shape != (S, H):
+        raise RuntimeError(f"{name} must have shape (S,{H})")
+
+
+def _check_qkv_h(x, S: int, H: int, D: int, name: str) -> None:
+    if x.shape != (S, H, D):
+        raise RuntimeError(f"{name} must have shape (S,{H},{D})")
+
+
 def _check_q16(x, S: int, name: str) -> None:
     if x.shape != (S, 16, 128):
         raise RuntimeError(f"{name} must have shape (S,16,128)")
@@ -136,6 +162,16 @@ def _split_broadcast_fake(conv_out, q48, k48, v48) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("lin_split_qkv_broadcast_h_bf16"))
+def _split_broadcast_h_fake(conv_out, q, k, v, num_v_heads: int, num_k_heads: int, head_dim: int = 128) -> None:
+    _check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim)
+    S = conv_out.shape[0]
+    _check_qkv_h(q, S, num_v_heads, head_dim, "q")
+    _check_qkv_h(k, S, num_v_heads, head_dim, "k")
+    _check_qkv_h(v, S, num_v_heads, head_dim, "v")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("lin_split_qkv_gqa_bf16"))
 def _split_gqa_fake(conv_out, q16, k16, v48) -> None:
     _check_conv_out(conv_out)
@@ -168,9 +204,31 @@ def _gating_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("gdn_gating_h_bf16"))
+def _gating_h_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out, num_heads: int) -> None:
+    S = a.shape[0]
+    for tensor, name in ((a, "a"), (b, "b"), (g_out, "g_out"), (beta_out, "beta_out")):
+        _check_heads_h(tensor, S, num_heads, name)
+    if neg_exp_A_log.shape != (num_heads,) or dt_bias.shape != (num_heads,):
+        raise RuntimeError("neg_exp_A_log/dt_bias must have shape (num_heads)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("gdn_gating_strided_bf16"))
 def _gating_strided_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out, a_stride: int, b_stride: int) -> None:
     _gating_fake(g_out, beta_out, neg_exp_A_log, dt_bias, g_out, beta_out)
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_gating_strided_h_bf16"))
+def _gating_strided_h_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out, num_heads: int, a_stride: int, b_stride: int) -> None:
+    S = g_out.shape[0]
+    _check_heads_h(g_out, S, num_heads, "g_out")
+    _check_heads_h(beta_out, S, num_heads, "beta_out")
+    if neg_exp_A_log.shape != (num_heads,) or dt_bias.shape != (num_heads,):
+        raise RuntimeError("neg_exp_A_log/dt_bias must have shape (num_heads)")
+    if a_stride < num_heads or b_stride < num_heads:
+        raise RuntimeError("a_stride and b_stride must be at least num_heads")
     return None
 
 
@@ -185,6 +243,20 @@ def _chunk_from_conv_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, us
     if state.shape != (48, 128, 128):
         raise RuntimeError("state must have shape (48,128,128)")
     _check_v48(out, S, "out")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_chunk_from_conv_smem_h_bf16"))
+def _chunk_from_conv_h_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, num_v_heads: int, num_k_heads: int, head_dim: int = 128, use_qk_l2norm: bool = True) -> None:
+    _check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim)
+    S = conv_out.shape[0]
+    _check_heads_h(a, S, num_v_heads, "a")
+    _check_heads_h(b, S, num_v_heads, "b")
+    if neg_exp_A_log.shape != (num_v_heads,) or dt_bias.shape != (num_v_heads,):
+        raise RuntimeError("neg_exp_A_log/dt_bias must have shape (num_v_heads)")
+    if state.shape != (num_v_heads, head_dim, head_dim):
+        raise RuntimeError("state must have shape (num_v_heads,head_dim,head_dim)")
+    _check_qkv_h(out, S, num_v_heads, head_dim, "out")
     return None
 
 
@@ -504,6 +576,31 @@ def lin_split_qkv_broadcast_bf16(
     return q48, k48, v48
 
 
+def lin_split_qkv_broadcast_h_bf16(
+    conv_out: torch.Tensor,
+    num_v_heads: int,
+    num_k_heads: int,
+    head_dim: int = 128,
+    *,
+    q: Optional[torch.Tensor] = None,
+    k: Optional[torch.Tensor] = None,
+    v: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split ``[Q(Hk), K(Hk), V(Hv)]`` and broadcast Q/K to ``Hv``."""
+    S = conv_out.shape[0]
+    shape = (S, int(num_v_heads), int(head_dim))
+    if q is None:
+        q = torch.empty(shape, device=conv_out.device, dtype=conv_out.dtype)
+    if k is None:
+        k = torch.empty_like(q)
+    if v is None:
+        v = torch.empty_like(q)
+    ops.lin_split_qkv_broadcast_h_bf16(
+        conv_out, q, k, v, int(num_v_heads), int(num_k_heads), int(head_dim)
+    )
+    return q, k, v
+
+
 def lin_split_qkv_gqa_bf16(
     conv_out: torch.Tensor,
     *,
@@ -554,6 +651,27 @@ def gdn_gating_bf16(
     return g_out, beta_out
 
 
+def gdn_gating_h_bf16(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    neg_exp_A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    *,
+    num_heads: Optional[int] = None,
+    g_out: Optional[torch.Tensor] = None,
+    beta_out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    num_heads = int(a.shape[1] if num_heads is None else num_heads)
+    if g_out is None:
+        g_out = torch.empty_like(a)
+    if beta_out is None:
+        beta_out = torch.empty_like(a)
+    ops.gdn_gating_h_bf16(
+        a, b, neg_exp_A_log, dt_bias, g_out, beta_out, num_heads
+    )
+    return g_out, beta_out
+
+
 def gdn_gating_strided_bf16(
     a: torch.Tensor,
     b: torch.Tensor,
@@ -574,6 +692,30 @@ def gdn_gating_strided_bf16(
     return g_out, beta_out
 
 
+def gdn_gating_strided_h_bf16(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    neg_exp_A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    *,
+    rows: int,
+    num_heads: int,
+    a_stride: int,
+    b_stride: int,
+    g_out: Optional[torch.Tensor] = None,
+    beta_out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if g_out is None:
+        g_out = torch.empty((rows, num_heads), device=a.device, dtype=a.dtype)
+    if beta_out is None:
+        beta_out = torch.empty_like(g_out)
+    ops.gdn_gating_strided_h_bf16(
+        a, b, neg_exp_A_log, dt_bias, g_out, beta_out,
+        int(num_heads), int(a_stride), int(b_stride)
+    )
+    return g_out, beta_out
+
+
 def gdn_chunk_from_conv_smem_bf16(
     conv_out: torch.Tensor,
     a: torch.Tensor,
@@ -588,6 +730,33 @@ def gdn_chunk_from_conv_smem_bf16(
     if out is None:
         out = torch.empty((conv_out.shape[0], 48, 128), device=conv_out.device, dtype=conv_out.dtype)
     ops.gdn_chunk_from_conv_smem_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, bool(use_qk_l2norm))
+    return out
+
+
+def gdn_chunk_from_conv_smem_h_bf16(
+    conv_out: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    neg_exp_A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    state: torch.Tensor,
+    *,
+    num_v_heads: int,
+    num_k_heads: int,
+    head_dim: int = 128,
+    use_qk_l2norm: bool = True,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty(
+            (conv_out.shape[0], num_v_heads, head_dim),
+            device=conv_out.device,
+            dtype=conv_out.dtype,
+        )
+    ops.gdn_chunk_from_conv_smem_h_bf16(
+        conv_out, a, b, neg_exp_A_log, dt_bias, state, out,
+        int(num_v_heads), int(num_k_heads), int(head_dim), bool(use_qk_l2norm)
+    )
     return out
 
 
@@ -795,11 +964,15 @@ __all__ = [
     "gated_delta_chunk_smem_bf16",
     "gated_delta_recurrent_sequence_bf16",
     "lin_split_qkv_broadcast_bf16",
+    "lin_split_qkv_broadcast_h_bf16",
     "lin_split_qkv_gqa_bf16",
     "split_q_gate_bf16",
     "gdn_gating_bf16",
+    "gdn_gating_h_bf16",
     "gdn_gating_strided_bf16",
+    "gdn_gating_strided_h_bf16",
     "gdn_chunk_from_conv_smem_bf16",
+    "gdn_chunk_from_conv_smem_h_bf16",
     "gdn_wy_norm_cumsum_pack_qk_bf16",
     "gdn_wy_kkt_b64_bf16",
     "gdn_wy_solve_tril_b64_f32",

@@ -52,6 +52,9 @@ SHAPES = {
     "split_s4": ("split", 1, 4, 48),
     "gating_s4": ("gating", 1, 4, 48),
     "chunk_from_conv_s4": ("chunk_from_conv", 1, 4, 48),
+    "h32_pipeline_s1": ("h32_pipeline", 1, 1, 32),
+    "h32_pipeline_s4": ("h32_pipeline", 1, 4, 32),
+    "h32_pipeline_s64": ("h32_pipeline", 1, 64, 32),
     "wy_pipeline_s4": ("wy_pipeline", 1, 4, 48),
     "wy_pipeline_s65": ("wy_pipeline", 1, 65, 48),
     "wy_mma_fla_s64": ("wy_mma_fla", 1, 64, 48),
@@ -141,6 +144,15 @@ class SourceOps:
         self._ops.lin_split_qkv_gqa_bf16(conv_out, q, k, v)
         return q, k, v
 
+    def split_broadcast_h(self, conv_out, num_v_heads, num_k_heads, head_dim=D):
+        q = torch.empty((conv_out.shape[0], num_v_heads, head_dim), device=conv_out.device, dtype=conv_out.dtype)
+        k = torch.empty_like(q)
+        v = torch.empty_like(q)
+        self._ops.lin_split_qkv_broadcast_h_bf16(
+            conv_out, q, k, v, num_v_heads, num_k_heads, head_dim
+        )
+        return q, k, v
+
     def split_q_gate(self, q_proj):
         q_pre = torch.empty((q_proj.shape[0], 24, 256), device=q_proj.device, dtype=q_proj.dtype)
         gate = torch.empty((q_proj.shape[0], 24 * 256), device=q_proj.device, dtype=q_proj.dtype)
@@ -159,9 +171,32 @@ class SourceOps:
         self._ops.gdn_gating_strided_bf16(a, b, neg, dt, g, beta, a_stride, b_stride)
         return g, beta
 
+    def gating_h(self, a, b, neg, dt, num_heads):
+        g = torch.empty_like(a)
+        beta = torch.empty_like(a)
+        self._ops.gdn_gating_h_bf16(a, b, neg, dt, g, beta, num_heads)
+        return g, beta
+
+    def gating_strided_h(self, a, b, neg, dt, rows, num_heads, a_stride, b_stride):
+        g = torch.empty((rows, num_heads), device=a.device, dtype=a.dtype)
+        beta = torch.empty_like(g)
+        self._ops.gdn_gating_strided_h_bf16(
+            a, b, neg, dt, g, beta, num_heads, a_stride, b_stride
+        )
+        return g, beta
+
     def chunk_from_conv(self, conv_out, a, b, neg, dt, state, use_qk_l2norm=True):
         out = torch.empty((conv_out.shape[0], 48, D), device=conv_out.device, dtype=conv_out.dtype)
         self._ops.gdn_chunk_from_conv_smem_bf16(conv_out, a, b, neg, dt, state, out, use_qk_l2norm)
+        return out
+
+    def chunk_from_conv_h(self, conv_out, a, b, neg, dt, state, num_v_heads, num_k_heads, head_dim=D, use_qk_l2norm=True, out=None):
+        if out is None:
+            out = torch.empty((conv_out.shape[0], num_v_heads, head_dim), device=conv_out.device, dtype=conv_out.dtype)
+        self._ops.gdn_chunk_from_conv_smem_h_bf16(
+            conv_out, a, b, neg, dt, state, out,
+            num_v_heads, num_k_heads, head_dim, use_qk_l2norm
+        )
         return out
 
     def wy_pipeline(self, q16, k16, v48, g, beta, state):
@@ -265,6 +300,11 @@ class InstalledOps:
     def split_gqa(self, conv_out):
         return self._mod.lin_split_qkv_gqa_bf16(conv_out)
 
+    def split_broadcast_h(self, conv_out, num_v_heads, num_k_heads, head_dim=D):
+        return self._mod.lin_split_qkv_broadcast_h_bf16(
+            conv_out, num_v_heads, num_k_heads, head_dim
+        )
+
     def split_q_gate(self, q_proj):
         return self._mod.split_q_gate_bf16(q_proj)
 
@@ -276,9 +316,27 @@ class InstalledOps:
             a, b, neg, dt, rows=rows, a_stride=a_stride, b_stride=b_stride
         )
 
+    def gating_h(self, a, b, neg, dt, num_heads):
+        return self._mod.gdn_gating_h_bf16(
+            a, b, neg, dt, num_heads=num_heads
+        )
+
+    def gating_strided_h(self, a, b, neg, dt, rows, num_heads, a_stride, b_stride):
+        return self._mod.gdn_gating_strided_h_bf16(
+            a, b, neg, dt, rows=rows, num_heads=num_heads,
+            a_stride=a_stride, b_stride=b_stride
+        )
+
     def chunk_from_conv(self, conv_out, a, b, neg, dt, state, use_qk_l2norm=True):
         return self._mod.gdn_chunk_from_conv_smem_bf16(
             conv_out, a, b, neg, dt, state, use_qk_l2norm=use_qk_l2norm
+        )
+
+    def chunk_from_conv_h(self, conv_out, a, b, neg, dt, state, num_v_heads, num_k_heads, head_dim=D, use_qk_l2norm=True, out=None):
+        return self._mod.gdn_chunk_from_conv_smem_h_bf16(
+            conv_out, a, b, neg, dt, state,
+            num_v_heads=num_v_heads, num_k_heads=num_k_heads,
+            head_dim=head_dim, use_qk_l2norm=use_qk_l2norm, out=out
         )
 
     def wy_pipeline(self, q16, k16, v48, g, beta, state):
@@ -431,6 +489,19 @@ def make_conv_inputs(S: int, seed: int):
     return conv_out, a, b, neg, dt, state
 
 
+def make_conv_inputs_h(S: int, Hv: int, Hk: int, seed: int):
+    gen = torch.Generator(device="cuda")
+    gen.manual_seed(seed)
+    width = (2 * Hk + Hv) * D
+    conv_out = (torch.randn((S, width), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    a = (torch.randn((S, Hv), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    b = (torch.randn((S, Hv), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    neg = (torch.randn((Hv,), device="cuda", generator=gen).abs() * -0.02).float()
+    dt = (torch.randn((Hv,), device="cuda", generator=gen) * 0.02).float()
+    state = (torch.randn((Hv, D, D), device="cuda", generator=gen) * 0.02).to(torch.bfloat16)
+    return conv_out, a, b, neg, dt, state
+
+
 def ref_split_broadcast(conv_out):
     S = conv_out.shape[0]
     x = conv_out.view(S, 10240)
@@ -440,6 +511,20 @@ def ref_split_broadcast(conv_out):
     q48 = q16.repeat_interleave(3, dim=1).contiguous()
     k48 = k16.repeat_interleave(3, dim=1).contiguous()
     return q48, k48, v48.contiguous()
+
+
+def ref_split_broadcast_h(conv_out, Hv: int, Hk: int):
+    S = conv_out.shape[0]
+    qk_width = Hk * D
+    q = conv_out[:, :qk_width].view(S, Hk, D)
+    k = conv_out[:, qk_width : 2 * qk_width].view(S, Hk, D)
+    v = conv_out[:, 2 * qk_width :].view(S, Hv, D)
+    repeat = Hv // Hk
+    return (
+        q.repeat_interleave(repeat, dim=1).contiguous(),
+        k.repeat_interleave(repeat, dim=1).contiguous(),
+        v.contiguous(),
+    )
 
 
 def ref_split_gqa(conv_out):
@@ -489,6 +574,62 @@ def run_sequence_graph(ops) -> None:
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
     torch.testing.assert_close(state, state_expected, rtol=0, atol=0)
+
+
+def run_h32_graph(ops) -> None:
+    S, Hv, Hk = 64, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 434343)
+    state = initial.clone()
+    out = torch.empty((S, Hv, D), device="cuda", dtype=torch.bfloat16)
+    expected = ops.chunk_from_conv_h(
+        conv, a, b, neg, dt, state, Hv, Hk, out=out
+    ).clone()
+    expected_state = state.clone()
+
+    state.copy_(initial)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        state.copy_(initial)
+        ops.chunk_from_conv_h(conv, a, b, neg, dt, state, Hv, Hk, out=out)
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
+    first_out = out.clone()
+    first_state = state.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, first_out, rtol=0, atol=0)
+    torch.testing.assert_close(state, first_state, rtol=0, atol=0)
+
+
+def run_h32_contract_checks(ops) -> None:
+    S, Hv, Hk = 4, 32, 16
+    conv, a, b, neg, dt, state = make_conv_inputs_h(S, Hv, Hk, 444444)
+    try:
+        ops.gating_h(a, b, neg.to(torch.bfloat16), dt, Hv)
+    except RuntimeError as exc:
+        if "float32" not in str(exc):
+            raise
+    else:
+        raise AssertionError("BF16 neg_exp_A_log must be rejected")
+
+    bad_conv = conv[:, :-1].contiguous()
+    try:
+        ops.split_broadcast_h(bad_conv, Hv, Hk)
+    except RuntimeError as exc:
+        if "8192" not in str(exc):
+            raise
+    else:
+        raise AssertionError("invalid conv width must be rejected")
+
+    try:
+        ops.split_broadcast_h(conv, 32, 12)
+    except RuntimeError as exc:
+        if "divisible" not in str(exc):
+            raise
+    else:
+        raise AssertionError("non-integral Q/K broadcast must be rejected")
 
 
 def run_case(ops, name: str) -> Row:
@@ -589,6 +730,41 @@ def run_case(ops, name: str) -> Row:
         state_max, _, _, _ = metrics(state_work, ref_state)
         if state_max > 0.00390625:
             raise AssertionError(f"{name} state mismatch: {state_max}")
+    if kind == "h32_pipeline":
+        Hv, Hk = 32, 16
+        conv_out, a, b, neg, dt, state = make_conv_inputs_h(S, Hv, Hk, 14000 + S)
+        q, k, v = ops.split_broadcast_h(conv_out, Hv, Hk)
+        q_ref, k_ref, v_ref = ref_split_broadcast_h(conv_out, Hv, Hk)
+        torch.testing.assert_close(q, q_ref, rtol=0, atol=0)
+        torch.testing.assert_close(k, k_ref, rtol=0, atol=0)
+        torch.testing.assert_close(v, v_ref, rtol=0, atol=0)
+
+        g, beta = ops.gating_h(a, b, neg, dt, Hv)
+        g_ref, beta_ref = ref_gating(a, b, neg, dt)
+        a_pad = torch.zeros((S, 40), device="cuda", dtype=torch.bfloat16)
+        b_pad = torch.zeros_like(a_pad)
+        a_pad[:, :Hv] = a
+        b_pad[:, :Hv] = b
+        gs, betas = ops.gating_strided_h(
+            a_pad.flatten(), b_pad.flatten(), neg, dt, S, Hv, 40, 40
+        )
+        torch.testing.assert_close(g, g_ref, rtol=0, atol=0.001953125)
+        torch.testing.assert_close(beta, beta_ref, rtol=0, atol=0)
+        torch.testing.assert_close(gs, g, rtol=0, atol=0)
+        torch.testing.assert_close(betas, beta, rtol=0, atol=0)
+
+        state_work = state.clone()
+        got = ops.chunk_from_conv_h(conv_out, a, b, neg, dt, state_work, Hv, Hk)
+        staged_state = state.clone()
+        staged = ops.chunk(
+            q, k, v, g, beta, staged_state, smem=True
+        )
+        torch.testing.assert_close(got, staged, rtol=0, atol=0)
+        torch.testing.assert_close(state_work, staged_state, rtol=0, atol=0)
+        ref, ref_state = ref_chunk(q_ref, k_ref, v_ref, g_ref, beta_ref, state)
+        state_max, _, _, _ = metrics(state_work, ref_state)
+        if state_max > 0.00390625:
+            raise AssertionError(f"{name} state mismatch: {state_max}")
     if kind in {"wy_pipeline", "wy_mma_fla"}:
         conv_out, a, b, neg, dt, state = make_conv_inputs(S, 13000 + S)
         q16, k16, v48 = ref_split_gqa(conv_out)
@@ -645,8 +821,10 @@ def main() -> int:
         raise AssertionError("gated-delta-attention correctness failed")
     if args.mode == "full":
         run_sequence_graph(ops)
+        run_h32_graph(ops)
+        run_h32_contract_checks(ops)
     print(f"PASS gated-delta-attention {args.backend} mode={args.mode}: "
-          f"{len(rows)} checks" + (" + sequence CUDA Graph" if args.mode == "full" else ""))
+          f"{len(rows)} checks" + (" + sequence/H32 CUDA Graph + H32 fail-fast" if args.mode == "full" else ""))
     return 0
 
 

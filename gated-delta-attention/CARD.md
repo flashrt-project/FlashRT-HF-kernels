@@ -13,9 +13,9 @@ tags:
 # Gated Delta Attention
 
 BF16 Gated DeltaNet recurrent/chunk/WY kernels from FlashRT, packaged for
-Hugging Face Kernel Hub. The v3 public profile covers Qwen3.6-style
-linear-attention decode recurrence, prefill WY building blocks, and the
-native CUDA FLA-style MMA prefill path.
+Hugging Face Kernel Hub. The v4 API adds a model-neutral parameterized
+`Hv/Hk` producer and fused recurrent prefill path. Validated profiles include
+`Hv/Hk/D=48/16/128` and `32/16/128`.
 
 ## Available functions
 
@@ -25,11 +25,15 @@ native CUDA FLA-style MMA prefill path.
 - `gated_delta_chunk_bf16`
 - `gated_delta_chunk_smem_bf16`
 - `lin_split_qkv_broadcast_bf16`
+- `lin_split_qkv_broadcast_h_bf16`
 - `lin_split_qkv_gqa_bf16`
 - `split_q_gate_bf16`
 - `gdn_gating_bf16`
+- `gdn_gating_h_bf16`
 - `gdn_gating_strided_bf16`
+- `gdn_gating_strided_h_bf16`
 - `gdn_chunk_from_conv_smem_bf16`
+- `gdn_chunk_from_conv_smem_h_bf16`
 - `gdn_wy_norm_cumsum_pack_qk_bf16`
 - `gdn_wy_kkt_b64_bf16`
 - `gdn_wy_solve_tril_b64_f32`
@@ -47,13 +51,27 @@ native CUDA FLA-style MMA prefill path.
 ```python
 from kernels import get_kernel
 
-gdn = get_kernel("flashrt/gated-delta-attention", version=3, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=4, trust_remote_code=True)
 out = gdn.gated_delta_recurrent_bf16(q, k, v, g, beta, state)
 ```
 
 The WY helpers use the Qwen3.6 profile: `conv_out=(S,10240)`,
 Q/K heads `16`, value heads `48`, head dimension `128`, and 64-token WY
 blocks.
+
+The generic H32 producer profile uses `conv_out=(S,8192)`, Q/K heads `16`,
+value heads `32`, and head dimension `128`. Q/K are broadcast `16 -> 32`.
+Per-head `neg_exp_A_log` and `dt_bias` must remain FP32.
+
+```python
+S, Hv, Hk, D = 64, 32, 16, 128
+q, k, v = gdn.lin_split_qkv_broadcast_h_bf16(conv_out, Hv, Hk)
+g, beta = gdn.gdn_gating_h_bf16(a, b, neg_exp_A_log, dt_bias)
+out = gdn.gdn_chunk_from_conv_smem_h_bf16(
+    conv_out, a, b, neg_exp_A_log, dt_bias, state,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+```
 
 The FLA-style path keeps the hot prefill chain in CUDA kernels:
 
