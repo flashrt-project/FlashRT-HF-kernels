@@ -418,7 +418,11 @@ def run_blockwise_case(
         tile=(
             "mma_sm89_block128"
             if torch.cuda.get_device_capability(0) == (8, 9)
-            else "cutlass_sm120_block128"
+            else (
+                "simt_portable_block128"
+                if torch.cuda.get_device_capability(0) == (11, 0)
+                else "cutlass_sm120_block128"
+            )
         ),
         max_abs=max_abs,
         mean_abs=mean_abs,
