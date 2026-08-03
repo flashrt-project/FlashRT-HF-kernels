@@ -81,11 +81,11 @@ __global__ void fp8_conv3d_ncdhw_res_kernel(
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   int total = N * Co * T_new * H * W;
   if (idx >= total) return;
-  int co = idx % Co;
-  int t = (idx / Co) % T_new;
-  int h = (idx / (Co * T_new)) % H;
-  int w_out = (idx / (Co * T_new * H)) % W;
-  int b = idx / (Co * T_new * H * W);
+  int w_out = idx % W;
+  int h = (idx / W) % H;
+  int t = (idx / (W * H)) % T_new;
+  int co = (idx / (W * H * T_new)) % Co;
+  int b = idx / (W * H * T_new * Co);
   float acc = 0.0f;
   for (int kt = 0; kt < 3; ++kt)
     for (int kr = 0; kr < 3; ++kr)
