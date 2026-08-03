@@ -28,6 +28,7 @@
     !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
 #include "cutlass_sm110_fp8_gemm.cuh"
 #endif
+#include "portable_fp8_blockwise_simt.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -36,6 +37,16 @@ namespace {
 using KernelFn = int (*)(const void*, const void*, void*, int, int, int, float, cudaStream_t);
 using Sm110KernelFn = int (*)(void*, void*, void*, int, int, int, float, float,
                               cudaStream_t);
+
+bool is_sm120(torch::Tensor const& t) {
+#if defined(CUDA_KERNEL)
+  auto* props = at::cuda::getDeviceProperties(t.get_device());
+  return props->major == 12 && props->minor == 0;
+#else
+  (void)t;
+  return false;
+#endif
+}
 
 void check_cuda_contiguous(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.is_cuda(), name, " must be a CUDA tensor");
@@ -321,12 +332,8 @@ void fp8_blockwise_linear_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto* props = at::cuda::getDeviceProperties(input.get_device());
-  TORCH_CHECK((props->major == 8 && props->minor == 9) ||
-                  (props->major == 12 && props->minor == 0),
-              "fp8_blockwise_linear_bf16 requires SM89 or SM120; got SM",
-              props->major, props->minor);
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  if (props->major == 8) {
+  if (props->major == 8 && props->minor == 9) {
 #if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY) || \
     defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM89 blockwise kernels are not present in this source-test build");
@@ -363,7 +370,7 @@ void fp8_blockwise_linear_bf16(
     }
     TORCH_CHECK(rc == 0, "SM89 blockwise FP8 linear failed with rc=", rc);
 #endif
-  } else {
+  } else if (is_sm120(input)) {
 #if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
     defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM120 blockwise kernel is not present in this source-test build");
@@ -374,6 +381,12 @@ void fp8_blockwise_linear_bf16(
         checked_positive_int(K, "K"), input_scale.data_ptr<float>(),
         weight_scale.data_ptr<float>(), stream);
 #endif
+  } else {
+    flash_rt::gemm::fp8_block128_gemm_simt_bf16out(
+        input.data_ptr(), weight.data_ptr(), out.data_ptr(),
+        checked_positive_int(M, "M"), checked_positive_int(N, "N"),
+        checked_positive_int(K, "K"), input_scale.data_ptr<float>(),
+        weight_scale.data_ptr<float>(), stream);
   }
 #else
   TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
