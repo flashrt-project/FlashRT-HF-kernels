@@ -38,16 +38,6 @@ using KernelFn = int (*)(const void*, const void*, void*, int, int, int, float, 
 using Sm110KernelFn = int (*)(void*, void*, void*, int, int, int, float, float,
                               cudaStream_t);
 
-bool is_sm120(torch::Tensor const& t) {
-#if defined(CUDA_KERNEL)
-  auto* props = at::cuda::getDeviceProperties(t.get_device());
-  return props->major == 12 && props->minor == 0;
-#else
-  (void)t;
-  return false;
-#endif
-}
-
 void check_cuda_contiguous(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.is_cuda(), name, " must be a CUDA tensor");
   TORCH_CHECK(tensor.is_contiguous(), name, " must be contiguous");
@@ -370,7 +360,7 @@ void fp8_blockwise_linear_bf16(
     }
     TORCH_CHECK(rc == 0, "SM89 blockwise FP8 linear failed with rc=", rc);
 #endif
-  } else if (is_sm120(input)) {
+  } else if (props->major == 12 && props->minor == 0) {
 #if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
     defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM120 blockwise kernel is not present in this source-test build");
