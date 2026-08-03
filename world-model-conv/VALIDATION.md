@@ -50,6 +50,9 @@ CUDA 13.2, comparing the SIMT path against an FP32 eager convolution reference:
 
 - `fp8_conv3d_v18_ncdhw_res_bf16out`: max abs err 0.0, cosine 0.99999994
 - `fp8_causal_conv3d_ndhwc_bf16`: max abs err 0.0, cosine 0.99999994
+- `fp8_conv2d_3x3_nhwc_bf16`: max abs err 0.0, cosine 1.0
+- `fp8_conv2d_3x3_ncdhw_bf16`: max abs err 0.0, cosine 0.99999994
 - `nvfp4_causal_conv3d_ndhwc_bf16`: max abs err 0.0, cosine 1.0
+- `nvfp4_causal_conv3d_residual_ncdhw_bf16`: max abs err 3.9e-3 (BF16 residual add rounding), cosine 0.99999
 
 The SIMT kernels are bit-faithful to the FP32 convolution reference on Thor.
