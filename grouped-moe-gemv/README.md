@@ -34,7 +34,12 @@ allocation-free CUDA Graph capture.
 from kernels import get_kernel
 import torch
 
-moe = get_kernel("flashrt/grouped-moe-gemv", version=2)
+try:
+    moe = get_kernel(
+        "flashrt/grouped-moe-gemv", version=2, trust_remote_code=True
+    )
+except TypeError:  # kernels==0.12.x compatibility
+    moe = get_kernel("flashrt/grouped-moe-gemv", version=2)
 
 M, TOP_K, E, N, K = 7, 8, 8, 1024, 2048
 x = torch.randn(M, K, device="cuda", dtype=torch.bfloat16)
