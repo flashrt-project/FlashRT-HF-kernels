@@ -81,4 +81,6 @@ include = ["csrc"]
 src = [
     "csrc/portable_fp8_blockwise_simt.cu",
     "csrc/portable_fp8_blockwise_simt.cuh",
+    "csrc/portable_fp8_swiglu_simt.cu",
+    "csrc/portable_fp8_swiglu_simt.cuh",
 ]

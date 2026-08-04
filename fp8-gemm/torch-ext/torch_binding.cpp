@@ -30,6 +30,7 @@
 #include "cutlass_sm110_fp8_gemm.cuh"
 #endif
 #include "portable_fp8_blockwise_simt.cuh"
+#include "portable_fp8_swiglu_simt.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -426,23 +427,34 @@ void fp8_blockwise_swiglu_quantize_fp8(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto* props = at::cuda::getDeviceProperties(input.get_device());
-  TORCH_CHECK(props->major == 8 && props->minor == 9,
-              "fp8_blockwise_swiglu_quantize_fp8 requires SM89; got SM",
-              props->major, props->minor);
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  if (props->major == 11 && props->minor == 0) {
+    int rc = flash_rt::gemm::fp8_blockwise_swiglu_quantize_simt(
+        input.data_ptr(), gate_up_weight.data_ptr(),
+        input_scale.data_ptr<float>(), gate_up_weight_scale.data_ptr<float>(),
+        output.data_ptr(), output_scale.data_ptr<float>(),
+        checked_positive_int(M, "M"), checked_positive_int(N, "N"),
+        checked_positive_int(K, "K"), stream);
+    TORCH_CHECK(rc == 0,
+                "fp8_blockwise_swiglu_quantize_fp8 SIMT fallback failed rc=", rc);
+  } else {
+    TORCH_CHECK(props->major == 8 && props->minor == 9,
+                "fp8_blockwise_swiglu_quantize_fp8 requires SM89; got SM",
+                props->major, props->minor);
 #if defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY) || \
     defined(FLASHRT_FP8_GEMM_SOURCE_SM110_ONLY)
-  TORCH_CHECK(false, "SM89 fused producer is not present in this source-test build");
+    TORCH_CHECK(false, "SM89 fused producer is not present in this source-test build");
 #else
-  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  int rc = flash_rt::gemm::block128_sm89::
-      fp8_bs_geglu_silu_fold_sm89_32x128_w4_s1(
-          input.data_ptr(), gate_up_weight.data_ptr(),
-          checked_positive_int(M, "M"), checked_positive_int(N, "N"),
-          checked_positive_int(K, "K"), input_scale.data_ptr<float>(),
-          gate_up_weight_scale.data_ptr<float>(), output.data_ptr(),
-          output_scale.data_ptr<float>(), stream);
-  TORCH_CHECK(rc == 0, "SM89 fused SwiGLU FP8 producer failed with rc=", rc);
+    int rc = flash_rt::gemm::block128_sm89::
+        fp8_bs_geglu_silu_fold_sm89_32x128_w4_s1(
+            input.data_ptr(), gate_up_weight.data_ptr(),
+            checked_positive_int(M, "M"), checked_positive_int(N, "N"),
+            checked_positive_int(K, "K"), input_scale.data_ptr<float>(),
+            gate_up_weight_scale.data_ptr<float>(), output.data_ptr(),
+            output_scale.data_ptr<float>(), stream);
+    TORCH_CHECK(rc == 0, "SM89 fused SwiGLU FP8 producer failed with rc=", rc);
 #endif
+  }
 #else
   TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
 #endif
