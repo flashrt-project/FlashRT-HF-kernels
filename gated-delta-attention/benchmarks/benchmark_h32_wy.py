@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -48,17 +49,26 @@ def make_workspace(S: int, Hv: int, Hk: int, D: int, device: str):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--backend", choices=("source", "installed"), default="source")
+    parser.add_argument("--artifact")
     parser.add_argument("--sequences", default="64,65,128,256")
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument("--json-out")
     args = parser.parse_args()
 
     tests = Path(__file__).resolve().parents[1] / "tests"
     sys.path.insert(0, str(tests))
-    from test_gated_delta_attention import load_source_ops
+    from test_gated_delta_attention import load_installed_ops, load_source_ops
 
-    raw = load_source_ops()._ops
+    if args.backend == "source":
+        raw = load_source_ops()._ops
+    else:
+        if not args.artifact:
+            raise ValueError("--artifact is required for installed backend")
+        raw = load_installed_ops(args.artifact)._mod.ops
     D, Hk = 128, 16
+    results = []
     for S in (int(v) for v in args.sequences.split(",")):
         rows = {}
         for Hv in (32, 48):
@@ -95,7 +105,18 @@ def main() -> None:
             rows[Hv] = time_us(launch, args.warmup, args.iterations)
         ratio = rows[32] / rows[48]
         per_head = (rows[32] / 32) / (rows[48] / 48)
+        results.append({
+            "sequence": S,
+            "h32_us": rows[32],
+            "h48_native_us": rows[48],
+            "h32_h48_ratio": ratio,
+            "h32_h48_per_head_ratio": per_head,
+        })
         print(f"S={S} h32_us={rows[32]:.3f} h48_native_us={rows[48]:.3f} raw_ratio={ratio:.3f} per_head_ratio={per_head:.3f}")
+    if args.json_out:
+        output = Path(args.json_out)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(results, indent=2) + "\n")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,8 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <array>
+#include <atomic>
 #include <limits>
 
 #if defined(CUDA_KERNEL)
@@ -18,6 +20,8 @@
 namespace {
 
 constexpr int64_t kPageSize = 128;
+constexpr int kMaxCachedCudaDevices = 64;
+std::array<std::atomic<int>, kMaxCachedCudaDevices> g_cached_sm_counts{};
 
 struct XqaShape {
   int64_t num_q_heads;
@@ -171,11 +175,21 @@ void xqa_bf16_fp8kv(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(q.device());
   if (sm_count <= 0) {
-    cudaDeviceProp prop{};
     const int device = q.get_device();
-    TORCH_CHECK(cudaGetDeviceProperties(&prop, device) == cudaSuccess,
-                "cudaGetDeviceProperties failed");
-    sm_count = prop.multiProcessorCount;
+    TORCH_CHECK(device >= 0 && device < kMaxCachedCudaDevices,
+                "CUDA device index exceeds the XQA property cache");
+    int cached_sm_count =
+        g_cached_sm_counts[device].load(std::memory_order_relaxed);
+    if (cached_sm_count <= 0) {
+      TORCH_CHECK(
+          cudaDeviceGetAttribute(&cached_sm_count,
+                                 cudaDevAttrMultiProcessorCount,
+                                 device) == cudaSuccess,
+          "failed to resolve CUDA multiprocessor count");
+      g_cached_sm_counts[device].store(
+          cached_sm_count, std::memory_order_relaxed);
+    }
+    sm_count = cached_sm_count;
   }
   auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
   if (shape.head_dim == 256) {

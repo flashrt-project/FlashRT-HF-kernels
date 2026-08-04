@@ -133,21 +133,31 @@ def workspace(q, k, kv_seq):
     sem = torch.zeros(max(256, sem_count), device=q.device, dtype=torch.int32)
     scratch = torch.empty(256 << 20, device=q.device, dtype=torch.uint8)
     out = torch.empty_like(q)
-    return page_table, seq_lens, mask, sem, scratch, out, pages * PAGE, head_dim
+    sm_count = torch.cuda.get_device_properties(q.device).multi_processor_count
+    return (
+        page_table, seq_lens, mask, sem, scratch, out, pages * PAGE, head_dim,
+        sm_count,
+    )
 
 
-def wrapper_call(wrapper, q, k, v, ws):
-    page_table, seq_lens, mask, sem, scratch, out, max_seq, head_dim = ws
+def wrapper_call(wrapper, q, k, v, ws, *, static_config: bool = True):
+    page_table, seq_lens, mask, sem, scratch, out, max_seq, head_dim, sm_count = ws
+    call_sm_count = sm_count if static_config else 0
+    stride_page = PAGE * k.shape[2] * head_dim if static_config else 0
+    stride_token = k.shape[2] * head_dim if static_config else 0
+    stride_head = head_dim if static_config else 0
     if isinstance(wrapper, SourceOps):
         wrapper._ops.xqa_bf16_fp8kv(
             q, k, v, page_table, seq_lens, mask, out, sem, scratch,
-            max_seq, 1.0, 1.0, True, 0,
-            PAGE * k.shape[2] * head_dim, k.shape[2] * head_dim, head_dim,
+            max_seq, 1.0, 1.0, True, call_sm_count,
+            stride_page, stride_token, stride_head,
         )
         return out
     return wrapper.xqa_bf16_fp8kv(
         q, k, v, page_table, seq_lens, mask, out=out, semaphores=sem,
-        scratch=scratch, max_seq_len=max_seq,
+        scratch=scratch, max_seq_len=max_seq, sm_count=call_sm_count,
+        k_stride_page=stride_page, k_stride_token=stride_token,
+        k_stride_head=stride_head,
     )
 
 
@@ -194,12 +204,15 @@ def main() -> int:
         qh, kvh, hd = CONFIGS[config]
         q, k, v = make_inputs(config, q_seq, kv_seq, 7000 + q_seq + kv_seq)
         ws = workspace(q, k, kv_seq)
-        page_table, seq_lens, mask, sem, scratch, out, max_seq, _ = ws
+        page_table, seq_lens, mask, sem, scratch, out, max_seq, _, _ = ws
         raw = lambda: native.xqa(
             q, k, v, page_table, seq_lens, mask, out, sem, scratch,
             max_seq, 1.0, 1.0, True,
         )
         wrapped = lambda: wrapper_call(wrapper, q, k, v, ws)
+        wrapped_default = lambda: wrapper_call(
+            wrapper, q, k, v, ws, static_config=False
+        )
 
         qd, kd, vd, attn_mask = sdpa_inputs(q, k, v, kv_seq)
         sdpa_out = torch.empty_like(q)
@@ -224,6 +237,9 @@ def main() -> int:
         max_abs, mean_abs, p99_abs, cosine = metrics(got, ref)
         native_us = time_us(raw, args.warmup, args.iters)
         wrapper_us = time_us(wrapped, args.warmup, args.iters)
+        wrapper_default_us = time_us(
+            wrapped_default, args.warmup, args.iters
+        )
         eager_us = time_us(sdpa_equivalent, args.warmup, args.iters)
         compile_us = time_us(compiled_equivalent, args.warmup, args.iters)
         sdpa_us = time_us(sdpa_predequant, args.warmup, args.iters)
@@ -232,6 +248,7 @@ def main() -> int:
         )
         accepted = (
             wrapper_us - native_us <= max(0.75, native_us * 0.05)
+            and wrapper_default_us - native_us <= max(0.75, native_us * 0.05)
             and wrapper_us <= min(eager_us, compile_us) * 0.98
             and cosine >= 0.999
             and mean_abs <= 0.0025
@@ -246,7 +263,9 @@ def main() -> int:
             "kv_seq": kv_seq,
             "native_us": native_us,
             "wrapper_us": wrapper_us,
+            "wrapper_default_us": wrapper_default_us,
             "wrapper_native": wrapper_us / native_us,
+            "wrapper_default_native": wrapper_default_us / native_us,
             "equivalent_eager_sdpa_us": eager_us,
             "equivalent_compile_sdpa_us": compile_us,
             "diagnostic_predequant_sdpa_us": sdpa_us,
@@ -260,6 +279,7 @@ def main() -> int:
         rows.append(row)
         print(
             f"{name}: native={native_us:.3f}us wrapper={wrapper_us:.3f}us "
+            f"default={wrapper_default_us:.3f}us "
             f"equiv_compile={compile_us:.3f}us predequant_sdpa={sdpa_us:.3f}us "
             f"cos={cosine:.8f} accepted={accepted}"
         )
