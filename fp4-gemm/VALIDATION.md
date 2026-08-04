@@ -81,3 +81,19 @@ The Tensor wrapper was compared against the same native FlashRT launchers on
 Thor with 20 warmup and 100 measured iterations. For production auto-dispatch
 across the six model shapes, wrapper/native latency ratio had median `1.019`
 and maximum `1.086`. Correctness was exact (`max_abs=mean_abs=p99_abs=0`).
+
+## SM110 portable SIMT fallback (Thor real hardware)
+
+On NVIDIA Thor (`sm_110a`) the SM120-only fused-epilogue GEMMs and the
+warp-split GEMV route to `portable_fp4_gemm_simt` (compiled for `sm_110a`):
+
+- `fp4_w4a4_gemv_warpsplit_bf16`
+- `nvfp4_gemm_residual_bf16`
+- `nvfp4_gemm_bias_gelu_bf16`
+- `nvfp4_gemm_bias_gelu_nvfp4`
+- `nvfp4_gemm_streamk_bf16`
+- `nvfp4_gemm_streamk_bias_bf16`
+
+Validated on Thor with PyTorch 2.9.1+cu130 / CUDA 13.2: all six ops launch,
+produce finite BF16/FP4 output, and match the FP32 reference within the BF16
+contract. SM120 keeps the CUTLASS fused-epilogue path.

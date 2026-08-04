@@ -55,3 +55,25 @@ The direct entry is byte-exact against the package's established
 BF16-to-FP16 plus FP16-producer contract. The native timing is reported as a
 performance reference only because that producer uses a distinct quantization
 strategy.
+
+## NVIDIA Thor SM110 Results (installed artifact, 2026-08-04)
+
+Measured against `/data/test_thor/fp4-gemm` (installed artifact) on Thor
+`sm_110a`, torch `2.9.1+cu130`. `nvfp4_gemm_bf16` routes SM110 through the
+dedicated CUTLASS `sm110_gemm_dispatch` path (not the SIMT fallback), so the
+production GEMM is fast on Thor. Reference = PyTorch fp32 GEMM over the same
+dequantized FP4/SFA+FP4/SFB inputs.
+
+| Workload `(M,N,K)` | FlashRT us | Eager us | Compile us | vs eager | Max abs | Cosine |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| pi0.5 action gate/up `(51,16384,2048)` | 38.710 | 2400.608 | 2117.904 | 62.0x | 0.0 | 1.000000 |
+| pi0.5 action down `(51,2048,8192)` | 18.074 | 1330.918 | 1268.806 | 73.6x | 0.0 | 1.000000 |
+| GROOT DiT QKV `(51,4608,1536)` | 12.752 | 545.200 | 500.822 | 42.8x | 0.0 | 1.000000 |
+| GROOT backbone gate/up `(277,16384,2048)` | 79.242 | 7006.390 | 6748.576 | 88.4x | 0.0 | 1.000000 |
+| Cosmos Edge action `(64,9216,2048)` | 21.398 | 1446.109 | 1312.918 | 67.6x | 0.0 | 1.000000 |
+| LingBot action gate/up `(105,16384,2048)` | 31.331 | 2947.763 | 2856.307 | 94.1x | 0.0 | 1.000000 |
+
+The SM110 CUTLASS GEMM is 42-94x faster than the dequantized PyTorch reference
+with bitwise-equal output. The portable SIMT fallbacks (`nvfp4_gemm_linear_simt`
+et al.) remain the compatibility path for fused-epilogue ops without an SM110
+CUTLASS implementation and are exercised by the on-device correctness suite.

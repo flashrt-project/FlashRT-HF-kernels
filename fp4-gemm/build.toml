@@ -63,3 +63,15 @@ src = [
   "csrc/gemm/fp4/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cu",
   "csrc/gemm/fp4/cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cuh",
 ]
+
+[kernel.fp4_gemm_portable]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["11.0a"]
+cuda-flags = ["--expt-relaxed-constexpr", "-O3"]
+src = [
+  "csrc/gemm/fp4/portable_fp4_gemm_simt.cu",
+  "csrc/gemm/fp4/portable_fp4_gemm_simt.cuh",
+]
