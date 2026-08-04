@@ -71,3 +71,16 @@ src = [
     "csrc/cutlass_sm120_block128_fp8_gemm.cu",
     "csrc/cutlass_sm120_block128_fp8_gemm.cuh",
 ]
+
+[kernel.fp8_gemm_portable]
+backend = "cuda"
+cuda-capabilities = ["11.0a"]
+cuda-minver = "12.8"
+depends = ["torch"]
+include = ["csrc"]
+src = [
+    "csrc/portable_fp8_blockwise_simt.cu",
+    "csrc/portable_fp8_blockwise_simt.cuh",
+    "csrc/portable_fp8_swiglu_simt.cu",
+    "csrc/portable_fp8_swiglu_simt.cuh",
+]

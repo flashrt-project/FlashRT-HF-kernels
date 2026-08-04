@@ -171,11 +171,13 @@ def load_source_ops() -> SourceOps:
         cuda_sources = [
             str(PACKAGE / "csrc" / "fp8_block128_gemm_mma_sm89.cu"),
             str(PACKAGE / "csrc" / "fp8_gemv_m1_sm89.cu"),
+            str(PACKAGE / "csrc" / "portable_fp8_blockwise_simt.cu"),
         ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM89_ONLY"
     elif capability == (11, 0):
         cuda_sources = [
             str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu"),
+            str(PACKAGE / "csrc" / "portable_fp8_blockwise_simt.cu"),
         ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY"
     else:
@@ -184,6 +186,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_ldmatrix_sm120.cu"),
             str(PACKAGE / "csrc" / "cutlass_sm120_block128_fp8_gemm.cu"),
+            str(PACKAGE / "csrc" / "portable_fp8_blockwise_simt.cu"),
         ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM120_ONLY"
     load(
@@ -415,7 +418,11 @@ def run_blockwise_case(
         tile=(
             "mma_sm89_block128"
             if torch.cuda.get_device_capability(0) == (8, 9)
-            else "cutlass_sm120_block128"
+            else (
+                "simt_portable_block128"
+                if torch.cuda.get_device_capability(0) == (11, 0)
+                else "cutlass_sm120_block128"
+            )
         ),
         max_abs=max_abs,
         mean_abs=mean_abs,
@@ -427,6 +434,47 @@ def run_blockwise_case(
             "p99_abs<=0.015625 cosine>=0.9999"
         ),
         passed=passed,
+    )
+
+
+def run_blockwise_simt_case(ops) -> None:
+    """Force the portable SIMT blockwise fallback and compare to the native path."""
+    m, k, n = (51, 1536, 1536)
+    gen = torch.Generator(device="cuda").manual_seed(9153)
+    x = (torch.randn((m, k), device="cuda", generator=gen) * 0.4).to(
+        torch.float8_e4m3fn
+    )
+    w = (torch.randn((n, k), device="cuda", generator=gen) * 0.4).to(
+        torch.float8_e4m3fn
+    )
+    input_scale = torch.rand(
+        (m, k // 128), device="cuda", generator=gen, dtype=torch.float32
+    ).mul_(0.02).add_(0.005)
+    weight_scale = torch.rand(
+        (n // 128, k // 128),
+        device="cuda",
+        generator=gen,
+        dtype=torch.float32,
+    ).mul_(0.02).add_(0.005)
+
+    native = ops.fp8_blockwise_linear_bf16(x, w, input_scale, weight_scale)
+    torch.cuda.synchronize()
+    os.environ["FLASHRT_FORCE_SIMT"] = "1"
+    try:
+        simt = ops.fp8_blockwise_linear_bf16(x, w, input_scale, weight_scale)
+    finally:
+        del os.environ["FLASHRT_FORCE_SIMT"]
+    torch.cuda.synchronize()
+    max_abs, mean_abs, p99_abs, cos = compare(simt, native)
+    assert (
+        max_abs <= 0.0625
+        and mean_abs <= 0.003
+        and p99_abs <= 0.015625
+        and cos >= 0.9999
+    ), (max_abs, mean_abs, p99_abs, cos)
+    print(
+        f"PASS blockwise SIMT parity max={max_abs:.7f} mean={mean_abs:.7f} "
+        f"p99={p99_abs:.7f} cos={cos:.8f}"
     )
 
 
@@ -533,7 +581,7 @@ def main() -> None:
             )
             for variant in (1, 2, 3)
         )
-    if capability in {(8, 9), (12, 0)}:
+    if capability in {(8, 9), (11, 0), (12, 0)}:
         blockwise_shapes = [
             ("blockwise_decode", (1, 1024, 1024)),
             ("blockwise_action", (51, 1536, 1536)),
@@ -549,6 +597,8 @@ def main() -> None:
             run_blockwise_case(ops, name, shape)
             for name, shape in blockwise_shapes
         )
+        if capability in {(8, 9), (12, 0)}:
+            run_blockwise_simt_case(ops)
         run_blockwise_compile_case(ops)
     if capability == (8, 9):
         for m, n, k in [
