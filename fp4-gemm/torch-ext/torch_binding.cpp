@@ -19,6 +19,7 @@
 #include "gemm/fp4/fp4_w4a4_mma_warpsplit_sm120.cuh"
 #endif
 #include "gemm/fp4/sm110_dispatch.cuh"
+#include "gemm/fp4/portable_fp4_gemm_simt.cuh"
 #include "quantize/quantize_fp4_sfa.cuh"
 #include "registration.h"
 #include "torch_binding.h"
@@ -155,20 +156,29 @@ void fp4_w4a4_gemv_warpsplit_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
   auto const* props = current_device_properties(a_packed);
-  TORCH_CHECK(props->major == 12 && props->minor == 0,
-              "the warp-split GEMV is an SM120 kernel; got SM",
-              props->major, props->minor);
-#if defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  TORCH_CHECK(false, "SM120 FP4 GEMM source is not present in this build");
-#else
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
-  const int rc = flash_rt::gemm::fp4_w4a4_mma_sm120_warpsplit_bf16out(
-      a_packed.data_ptr(), b_packed.data_ptr(), out.data_ptr(),
-      checked_int(shape.n, "N"), checked_int(shape.k, "K"),
-      sfa.data_ptr(), sfb.data_ptr(), static_cast<float>(alpha),
-      static_cast<int>(warps), static_cast<int>(stages), stream);
-  TORCH_CHECK(rc == 0, "fp4_w4a4_gemv_warpsplit_bf16 failed with rc=", rc);
+  if (props->major == 11 && props->minor == 0) {
+    const int rc = flash_rt::gemm::nvfp4_gemm_linear_simt(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
+    TORCH_CHECK(rc == 0,
+                "fp4_w4a4_gemv_warpsplit_bf16 SIMT fallback failed rc=", rc);
+  } else {
+    TORCH_CHECK(props->major == 12 && props->minor == 0,
+                "the warp-split GEMV is an SM120 kernel; got SM",
+                props->major, props->minor);
+#if defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
+    TORCH_CHECK(false, "SM120 FP4 GEMM source is not present in this build");
+#else
+    const int rc = flash_rt::gemm::fp4_w4a4_mma_sm120_warpsplit_bf16out(
+        a_packed.data_ptr(), b_packed.data_ptr(), out.data_ptr(),
+        checked_int(shape.n, "N"), checked_int(shape.k, "K"),
+        sfa.data_ptr(), sfb.data_ptr(), static_cast<float>(alpha),
+        static_cast<int>(warps), static_cast<int>(stages), stream);
+    TORCH_CHECK(rc == 0, "fp4_w4a4_gemv_warpsplit_bf16 failed with rc=", rc);
 #endif
+  }
 #else
   TORCH_CHECK(false, "fp4-gemm was not built with CUDA support");
 #endif
@@ -249,15 +259,25 @@ void nvfp4_gemm_residual_bf16(
   check_same_device(a_packed, out, "a_packed", "out");
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
-  require_sm120(a_packed, "nvfp4_gemm_residual_bf16");
+  auto const* props = current_device_properties(a_packed);
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  if (props->major == 11 && props->minor == 0) {
+    const int rc = flash_rt::gemm::nvfp4_gemm_residual_simt(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        residual.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
+        checked_int(shape.n, "N"), checked_int(shape.k, "K"),
+        static_cast<float>(alpha), stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_residual_bf16 SIMT fallback failed rc=", rc);
+  } else {
+    require_sm120(a_packed, "nvfp4_gemm_residual_bf16");
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_residual_sm120_bf16out(
-      a_packed.data_ptr(), b_packed.data_ptr(), residual.data_ptr(),
-      out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
-      checked_int(shape.k, "K"), sfa.data_ptr(), sfb.data_ptr(),
-      static_cast<float>(alpha), stream);
+    flash_rt::gemm::fp4_w4a16_gemm_residual_sm120_bf16out(
+        a_packed.data_ptr(), b_packed.data_ptr(), residual.data_ptr(),
+        out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), sfa.data_ptr(), sfb.data_ptr(),
+        static_cast<float>(alpha), stream);
 #endif
+  }
 #endif
 }
 
@@ -280,15 +300,25 @@ void nvfp4_gemm_bias_gelu_bf16(
   check_same_device(a_packed, out, "a_packed", "out");
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
-  require_sm120(a_packed, "nvfp4_gemm_bias_gelu_bf16");
+  auto const* props = current_device_properties(a_packed);
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  if (props->major == 11 && props->minor == 0) {
+    const int rc = flash_rt::gemm::nvfp4_gemm_bias_gelu_simt(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
+        checked_int(shape.n, "N"), checked_int(shape.k, "K"),
+        static_cast<float>(alpha), stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_gelu_bf16 SIMT fallback failed rc=", rc);
+  } else {
+    require_sm120(a_packed, "nvfp4_gemm_bias_gelu_bf16");
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_bf16out_sm120(
-      a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
-      bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
-      checked_int(shape.n, "N"), checked_int(shape.k, "K"),
-      static_cast<float>(alpha), stream);
+    flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_bf16out_sm120(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
+        checked_int(shape.n, "N"), checked_int(shape.k, "K"),
+        static_cast<float>(alpha), stream);
 #endif
+  }
 #endif
 }
 
@@ -318,15 +348,25 @@ void nvfp4_gemm_bias_gelu_nvfp4(
   check_same_device(a_packed, out_sfa, "a_packed", "out_sfa");
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
-  require_sm120(a_packed, "nvfp4_gemm_bias_gelu_nvfp4");
+  auto const* props = current_device_properties(a_packed);
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  if (props->major == 11 && props->minor == 0) {
+    const int rc = flash_rt::gemm::nvfp4_gemm_bias_gelu_fp4_simt(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        bias.data_ptr(), out_packed.data_ptr(), out_sfa.data_ptr(),
+        checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_gelu_nvfp4 SIMT fallback failed rc=", rc);
+  } else {
+    require_sm120(a_packed, "nvfp4_gemm_bias_gelu_nvfp4");
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_fp4out_sm120(
-      a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
-      bias.data_ptr(), out_packed.data_ptr(), out_sfa.data_ptr(),
-      checked_int(shape.m, "M"), checked_int(shape.n, "N"),
-      checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
+    flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_fp4out_sm120(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        bias.data_ptr(), out_packed.data_ptr(), out_sfa.data_ptr(),
+        checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
 #endif
+  }
 #endif
 }
 
@@ -344,14 +384,23 @@ void nvfp4_gemm_streamk_bf16(
   check_same_device(a_packed, out, "a_packed", "out");
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
-  require_sm120(a_packed, "nvfp4_gemm_streamk_bf16");
+  auto const* props = current_device_properties(a_packed);
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  if (props->major == 11 && props->minor == 0) {
+    const int rc = flash_rt::gemm::nvfp4_gemm_linear_simt(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_streamk_bf16 SIMT fallback failed rc=", rc);
+  } else {
+    require_sm120(a_packed, "nvfp4_gemm_streamk_bf16");
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
-      a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
-      out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
-      checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
+    flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
 #endif
+  }
 #endif
 }
 
@@ -374,15 +423,25 @@ void nvfp4_gemm_streamk_bias_bf16(
   check_same_device(a_packed, out, "a_packed", "out");
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
-  require_sm120(a_packed, "nvfp4_gemm_streamk_bias_bf16");
+  auto const* props = current_device_properties(a_packed);
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  if (props->major == 11 && props->minor == 0) {
+    const int rc = flash_rt::gemm::nvfp4_gemm_bias_simt(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
+        checked_int(shape.n, "N"), checked_int(shape.k, "K"),
+        static_cast<float>(alpha), stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_streamk_bias_bf16 SIMT fallback failed rc=", rc);
+  } else {
+    require_sm120(a_packed, "nvfp4_gemm_streamk_bias_bf16");
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
-      a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
-      bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
-      checked_int(shape.n, "N"), checked_int(shape.k, "K"),
-      static_cast<float>(alpha), stream);
+    flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
+        bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
+        checked_int(shape.n, "N"), checked_int(shape.k, "K"),
+        static_cast<float>(alpha), stream);
 #endif
+  }
 #endif
 }
 
