@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, sys
+import argparse, importlib, sys
 from pathlib import Path
 import torch
 
@@ -59,6 +59,9 @@ def run(ops):
         (64, 64, 64, 2, 3),
         (64, 128, 256, 2, 3),
         (64, 1024, 2048, 1, 2),
+        # 35B-A3B prefill expert gate/up and down projections.
+        (64, 1024, 2048, 2, 4),
+        (64, 2048, 512, 2, 4),
     ]
     for tr, n, k, tiles, experts in cases:
         rows = tr * tiles
@@ -126,6 +129,18 @@ def run(ops):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    p.add_argument("--backend", choices=("source", "installed"), default="source")
+    p.add_argument("--artifact")
     p.add_argument("--registration-include")
     a = p.parse_args()
-    run(load_source_ops(a.registration_include))
+    if a.backend == "source":
+        loaded = load_source_ops(a.registration_include)
+    else:
+        if a.artifact:
+            sys.path.insert(0, a.artifact)
+        try:
+            loaded = importlib.import_module("grouped_moe_gemm")
+        finally:
+            if a.artifact:
+                sys.path.remove(a.artifact)
+    run(loaded)

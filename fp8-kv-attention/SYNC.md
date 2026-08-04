@@ -13,5 +13,5 @@ Public package changes:
 - Python/C++ boundary exposes Tensor APIs and shape checks instead of FlashRT
   serving-internal pointer APIs.
 
-When syncing from FlashRT, preserve the validated v2 shape contracts unless the Hub
+When syncing from FlashRT, preserve the validated v3 shape contracts unless the Hub
 package version is bumped and validation is expanded.

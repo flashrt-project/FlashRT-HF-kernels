@@ -29,6 +29,7 @@ REGISTRATION_INCLUDE = (
 PAGE = 128
 CONFIGS = {
     "qwen36": (24, 4, 256),
+    "gqa16_kv2": (16, 2, 256),
     "qwen3_vl": (32, 8, 128),
     "gqa32_kv16": (32, 16, 128),
     "cosmos_edge": (16, 8, 128),
@@ -37,6 +38,10 @@ CONFIGS = {
 SHAPES = {
     "qwen36_decode_128": ("qwen36", 1, 128),
     "qwen36_verify8_4096": ("qwen36", 8, 4096),
+    "gqa16_kv2_decode_128": ("gqa16_kv2", 1, 128),
+    "gqa16_kv2_decode_1024": ("gqa16_kv2", 1, 1024),
+    "gqa16_kv2_verify4_4096": ("gqa16_kv2", 4, 4096),
+    "gqa16_kv2_verify8_32768": ("gqa16_kv2", 8, 32768),
     "qwen3_vl_decode_1024": ("qwen3_vl", 1, 1024),
     "qwen3_vl_verify4_4096": ("qwen3_vl", 4, 4096),
     "qwen3_vl_verify8_32768": ("qwen3_vl", 8, 32768),
@@ -169,6 +174,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "xqa_mha_configured.cu"),
             str(PACKAGE / "csrc" / "xqa_bf16_fp8kv.cu"),
             str(PACKAGE / "csrc" / "xqa_mha_d128.cu"),
+            str(PACKAGE / "csrc" / "xqa_mha_d256_g8.cu"),
         ],
         extra_include_paths=[
             str(PACKAGE / "csrc"),
@@ -302,8 +308,8 @@ def run_shape(ops, name: str, config: str, q_seq: int, kv_seq: int) -> Metrics:
     )
 
 
-def run_h32_kv16_graph(ops) -> None:
-    q, k, v = make_inputs("gqa32_kv16", 4, 4096, seed=424242)
+def run_profile_graph(ops, config: str, seed: int) -> None:
+    q, k, v = make_inputs(config, 4, 4096, seed=seed)
     q_seq, q_heads, head_dim = q.shape
     kv_heads, pages = k.shape[2], k.shape[0]
     page_table = torch.arange(pages, device="cuda", dtype=torch.int32).view(1, pages)
@@ -331,8 +337,8 @@ def run_h32_kv16_graph(ops) -> None:
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
 
 
-def run_h32_kv16_compile(ops) -> None:
-    q, k, v = make_inputs("gqa32_kv16", 4, 4096, seed=424243)
+def run_profile_compile(ops, config: str, seed: int) -> None:
+    q, k, v = make_inputs(config, 4, 4096, seed=seed)
     q_seq, q_heads, head_dim = q.shape
     kv_heads, pages = k.shape[2], k.shape[0]
     page_table = torch.arange(pages, device="cuda", dtype=torch.int32).view(1, pages)
@@ -394,11 +400,13 @@ def main() -> int:
     if not all(r.passed for r in rows):
         raise AssertionError("fp8-kv-attention correctness failed")
     if args.mode == "full":
-        run_h32_kv16_graph(ops)
+        run_profile_graph(ops, "gqa32_kv16", 424242)
+        run_profile_graph(ops, "gqa16_kv2", 424244)
         if args.backend == "installed":
-            run_h32_kv16_compile(ops)
+            run_profile_compile(ops, "gqa32_kv16", 424243)
+            run_profile_compile(ops, "gqa16_kv2", 424245)
     print(f"PASS fp8-kv-attention {args.backend} mode={args.mode}: {len(rows)} checks" +
-          (" + H32/KV16 CUDA Graph" +
+          (" + H32/KV16 and H16/KV2 CUDA Graph" +
            (" + torch.compile(fullgraph=True)" if args.backend == "installed" else "")
            if args.mode == "full" else ""))
     return 0
