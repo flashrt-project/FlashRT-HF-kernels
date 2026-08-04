@@ -1,6 +1,24 @@
 # Results
 
-Built-artifact benchmark results are pending for v4.
+Built-artifact benchmark results are pending for v5.
+
+## H32/H16 WY prefill
+
+RTX 5090 source-extension triage, PyTorch `2.9.1+cu128`. Both rows use the
+same seven native WY stages, static workspaces, fixed-order reductions, and
+the same state-reset copy. H48 is the package's established native entry;
+H32 uses the new parameterized entry.
+
+| S | H32 WY us | H48 native WY us | H32 / H48 |
+| ---: | ---: | ---: | ---: |
+| 64 | 106.120 | 122.928 | 0.863 |
+| 65 | 112.477 | 131.137 | 0.858 |
+| 128 | 145.583 | 174.526 | 0.834 |
+| 256 | 215.260 | 281.859 | 0.764 |
+
+The prior serial 64x64 triangular solve took 2.18-2.43 ms by itself. Version
+5 replaces it with a 64-thread shared-memory fixed-order solve; the complete
+H32 pipeline is 20.6x faster at S=64 while preserving the reference metrics.
 
 ## Generic H32/H16 fused producer + chunk
 
@@ -17,24 +35,8 @@ the fused path reads `conv_out/a/b` directly. Correctness is bit-identical.
 
 The fused chunk computes each per-token/head gate scalar once in thread 0 and
 broadcasts it through shared memory; all 128 lanes no longer repeat the same
-transcendentals. Regenerate these rows from the v4 built artifact before
+transcendentals. Regenerate these rows from the v5 built artifact before
 making artifact-level performance claims.
-
-The table below is a local source-extension triage benchmark on
-`NVIDIA GeForce RTX 5090`, CUDA `12.8`, PyTorch `2.9.1+cu128`. It compares the
-same package's baseline WY CUDA fallback path against the new v3 FLA-style
-native CUDA MMA prefill path. It is not a HF Jobs artifact benchmark and should
-be regenerated after upload.
-
-Both paths include the same static state reset copy before each timed replay,
-so the comparison is apples-to-apples within this package.
-
-| S | Baseline WY fallback us | FLA MMA WY us | Speedup |
-| ---: | ---: | ---: | ---: |
-| 64 | 2495.942 | 1489.869 | 1.68x |
-| 128 | 3559.574 | 1582.773 | 2.25x |
-| 512 | 10511.024 | 2768.136 | 3.80x |
-| 1024 | 19554.431 | 4174.474 | 4.68x |
 
 ## Full recurrent sequence entry
 

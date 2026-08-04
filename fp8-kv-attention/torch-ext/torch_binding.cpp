@@ -30,6 +30,8 @@ bool supported_shape(XqaShape const& shape) {
           shape.head_dim == 256) ||
          (shape.num_q_heads == 32 && shape.num_kv_heads == 8 &&
           shape.head_dim == 128) ||
+         (shape.num_q_heads == 32 && shape.num_kv_heads == 16 &&
+          shape.head_dim == 128) ||
          (shape.num_q_heads == 16 && shape.num_kv_heads == 8 &&
           shape.head_dim == 128);
 }
@@ -111,7 +113,7 @@ void xqa_bf16_fp8kv(
   XqaShape shape{};
   const int64_t q_seq = q_seq_len_from_shape(q, &shape);
   TORCH_CHECK(q_seq > 0 && q_seq <= 32,
-              "v1 XQA package supports 1 <= q_seq <= 32 speculative/decode rows");
+              "XQA package supports 1 <= q_seq <= 32 speculative/decode rows");
 
   check_fp8_e4m3(k_cache, "k_cache");
   check_fp8_e4m3(v_cache, "v_cache");
@@ -122,7 +124,7 @@ void xqa_bf16_fp8kv(
               "unsupported XQA shape: q_heads=", shape.num_q_heads,
               ", kv_heads=", shape.num_kv_heads,
               ", head_dim=", shape.head_dim,
-              "; supported configurations are 24/4/256, 32/8/128, and 16/8/128");
+              "; supported configurations are 24/4/256, 32/8/128, 32/16/128, and 16/8/128");
   TORCH_CHECK(k_cache.size(1) == kPageSize &&
                   k_cache.size(3) == shape.head_dim,
               "k_cache/v_cache page or head dimension does not match q");

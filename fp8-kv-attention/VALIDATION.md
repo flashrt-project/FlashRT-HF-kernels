@@ -6,7 +6,7 @@ Validation target:
 - Source extension: `tests/test_fp8_kv_attention.py`
 - Correctness metrics: max abs, mean abs, p99 abs, cosine similarity
 - Reference: PyTorch BF16/FP8-dequant attention with the same XQA speculative
-  mask and `1 / sqrt(256)` QK scaling
+  mask and head-dimension QK scaling
 
 Required gate before publishing:
 
@@ -48,6 +48,13 @@ Rows:
 | decode_1024 | 1 | 1024 | 0.000061 | 0.000005 | 0.000031 | 0.99999523 | PASS |
 | verify4_1024 | 4 | 1024 | 0.000061 | 0.000005 | 0.000031 | 0.99999517 | PASS |
 | verify8_4096 | 8 | 4096 | 0.000031 | 0.000003 | 0.000015 | 0.99999541 | PASS |
+| gqa32_kv16_decode_128 | 1 | 128 | 0.000122 | 0.000014 | 0.000122 | 0.99999535 | PASS |
+| gqa32_kv16_decode_1024 | 1 | 1024 | 0.000061 | 0.000008 | 0.000031 | 0.99999201 | PASS |
+| gqa32_kv16_verify4_4096 | 4 | 4096 | 0.000031 | 0.000004 | 0.000015 | 0.99999201 | PASS |
+| gqa32_kv16_verify8_32768 | 8 | 32768 | 0.000015 | 0.000001 | 0.000008 | 0.99999171 | PASS |
+
+The full gate also captures and replays the `32/16/128`, q-seq 4,
+context-4096 path and requires bit-identical output.
 
 ## Generated Pyproject Build Smoke
 

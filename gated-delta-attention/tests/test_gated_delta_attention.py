@@ -61,6 +61,12 @@ SHAPES = {
     "wy_mma_fla_s64": ("wy_mma_fla", 1, 64, 48),
     "wy_mma_fla_s65": ("wy_mma_fla", 1, 65, 48),
     "wy_mma_fla_s128": ("wy_mma_fla", 1, 128, 48),
+    "wy_mma_fla_h32_s1": ("wy_mma_fla_h32", 1, 1, 32),
+    "wy_mma_fla_h32_s17": ("wy_mma_fla_h32", 1, 17, 32),
+    "wy_mma_fla_h32_s64": ("wy_mma_fla_h32", 1, 64, 32),
+    "wy_mma_fla_h32_s65": ("wy_mma_fla_h32", 1, 65, 32),
+    "wy_mma_fla_h32_s128": ("wy_mma_fla_h32", 1, 128, 32),
+    "wy_mma_fla_h32_s256": ("wy_mma_fla_h32", 1, 256, 32),
 }
 MODES = {
     "smoke": ["recurrent_h4"],
@@ -251,6 +257,30 @@ class SourceOps:
         self._ops.gdn_wy_output_o_b64_mma_fla_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, out, scale)
         return out
 
+    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads):
+        S, C = q.shape[0], (q.shape[0] + 63) // 64
+        q_l2, k_l2 = torch.empty_like(q), torch.empty_like(k)
+        q_pack = torch.empty((C, num_v_heads, 64, D), device=q.device, dtype=q.dtype)
+        k_pack = torch.empty((C, num_k_heads, 64, D), device=q.device, dtype=q.dtype)
+        g_cumsum = torch.empty_like(g)
+        A = torch.empty((C, num_v_heads, 64, 64), device=q.device, dtype=torch.float32)
+        Ai = torch.empty_like(A)
+        Ai_pack = torch.empty_like(A, dtype=torch.bfloat16)
+        pack = torch.empty((C, num_v_heads, 64, D), device=q.device, dtype=q.dtype)
+        w_pack, u_pack = torch.empty_like(pack), torch.empty_like(pack)
+        h0 = torch.empty((C, num_v_heads, D, D), device=q.device, dtype=q.dtype)
+        v_new = torch.empty_like(v)
+        v_new_pack, k_pack_hv = torch.empty_like(pack), torch.empty_like(pack)
+        out = torch.empty_like(v)
+        self._ops.gdn_wy_norm_cumsum_pack_qk_h_bf16(q, k, g, q_l2, k_l2, q_pack, k_pack, g_cumsum, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, A, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_solve_tril_b64_h_f32(A, Ai, S, num_v_heads)
+        self._ops.gdn_wy_cast_ai_h_f32_to_bf16(Ai, Ai_pack, S, num_v_heads)
+        self._ops.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(k_l2, v, beta, g_cumsum, Ai_pack, w_pack, u_pack, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_chunk_h_b64_mma_fla_h_bf16(k_l2, w_pack, u_pack, g_cumsum, state, h0, v_new, v_new_pack, k_pack_hv, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_output_o_b64_mma_fla_h_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, out, num_v_heads, num_k_heads, D, D ** -0.5)
+        return out
+
 
 class InstalledOps:
     def __init__(self, mod) -> None:
@@ -360,6 +390,17 @@ class InstalledOps:
         return self._mod.gdn_wy_output_o_b64_mma_fla_bf16(
             q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, scale=D ** -0.5
         )
+
+    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads):
+        q_l2, k_l2, q_pack, _, g_cumsum = self._mod.gdn_wy_norm_cumsum_pack_qk_h_bf16(
+            q, k, g, num_v_heads=num_v_heads, num_k_heads=num_k_heads
+        )
+        A = self._mod.gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
+        Ai = self._mod.gdn_wy_solve_tril_b64_h_f32(A, q.shape[0], num_v_heads=num_v_heads)
+        Ai_pack = self._mod.gdn_wy_cast_ai_h_f32_to_bf16(Ai, q.shape[0], num_v_heads=num_v_heads)
+        w_pack, u_pack = self._mod.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(k_l2, v, beta, g_cumsum, Ai_pack, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
+        h0, _, v_new_pack, k_pack_hv = self._mod.gdn_wy_chunk_h_b64_mma_fla_h_bf16(k_l2, w_pack, u_pack, g_cumsum, state, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
+        return self._mod.gdn_wy_output_o_b64_mma_fla_h_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, num_v_heads=num_v_heads, num_k_heads=num_k_heads, scale=D ** -0.5)
 
 
 def _arch_list() -> str:
@@ -606,12 +647,54 @@ def run_h32_graph(ops) -> None:
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
     torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
+
+
+def run_h32_wy_graph(ops) -> None:
+    S, Hv, Hk = 65, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 454545)
+    width = Hk * D
+    q = conv[:, :width].view(S, Hk, D).contiguous()
+    k = conv[:, width : 2 * width].view(S, Hk, D).contiguous()
+    v = conv[:, 2 * width :].view(S, Hv, D).contiguous()
+    g, beta = ref_gating(a, b, neg, dt)
+
+    state = initial.clone()
+    expected = ops.wy_mma_fla_h(q, k, v, g, beta, state, Hv, Hk).clone()
+    expected_state = state.clone()
+    state.copy_(initial)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        state.copy_(initial)
+        out = ops.wy_mma_fla_h(q, k, v, g, beta, state, Hv, Hk)
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
     first_out = out.clone()
     first_state = state.clone()
     graph.replay()
     torch.cuda.synchronize()
     torch.testing.assert_close(out, first_out, rtol=0, atol=0)
     torch.testing.assert_close(state, first_state, rtol=0, atol=0)
+
+
+def run_h32_wy_compile(ops) -> None:
+    S, Hv, Hk = 17, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 454546)
+    width = Hk * D
+    q = conv[:, :width].view(S, Hk, D).contiguous()
+    k = conv[:, width : 2 * width].view(S, Hk, D).contiguous()
+    v = conv[:, 2 * width :].view(S, Hv, D).contiguous()
+    g, beta = ref_gating(a, b, neg, dt)
+
+    eager_state = initial.clone()
+    expected = ops.wy_mma_fla_h(q, k, v, g, beta, eager_state, Hv, Hk).clone()
+    compiled_state = initial.clone()
+    compiled = torch.compile(ops.wy_mma_fla_h, fullgraph=True)
+    got = compiled(q, k, v, g, beta, compiled_state, Hv, Hk)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(got, expected, rtol=0, atol=0)
+    torch.testing.assert_close(compiled_state, eager_state, rtol=0, atol=0)
 
 
 def run_h32_contract_checks(ops) -> None:
@@ -792,6 +875,24 @@ def run_case(ops, name: str) -> Row:
         state_tol = 0.015625
         if state_max > state_tol:
             raise AssertionError(f"{name} state mismatch: {state_max}")
+    if kind == "wy_mma_fla_h32":
+        Hv, Hk = 32, 16
+        conv_out, a, b, neg, dt, state = make_conv_inputs_h(
+            S, Hv, Hk, 15000 + S
+        )
+        width = Hk * D
+        q = conv_out[:, :width].view(S, Hk, D).contiguous()
+        k = conv_out[:, width : 2 * width].view(S, Hk, D).contiguous()
+        v = conv_out[:, 2 * width :].view(S, Hv, D).contiguous()
+        g, beta = ref_gating(a, b, neg, dt)
+        state_work = state.clone()
+        got = ops.wy_mma_fla_h(q, k, v, g, beta, state_work, Hv, Hk)
+        qh = q.repeat_interleave(Hv // Hk, dim=1).contiguous()
+        kh = k.repeat_interleave(Hv // Hk, dim=1).contiguous()
+        ref, ref_state = ref_chunk(qh, kh, v, g, beta, state)
+        state_max, _, _, _ = metrics(state_work, ref_state)
+        if state_max > 0.015625:
+            raise AssertionError(f"{name} state mismatch: {state_max}")
     max_abs, mean_abs, p99_abs, cos = metrics(got, ref)
     if kind == "sequence":
         passed = (
@@ -800,7 +901,7 @@ def run_case(ops, name: str) -> Row:
             and p99_abs <= 0.000030517578125
             and cos >= 0.99999
         )
-    elif kind == "wy_mma_fla":
+    elif kind in {"wy_mma_fla", "wy_mma_fla_h32"}:
         passed = max_abs <= 0.001 and mean_abs <= 0.0001 and p99_abs <= 0.0005 and cos >= 0.9999
     else:
         passed = max_abs <= 0.015625 and mean_abs <= 0.0015 and cos >= 0.999
@@ -833,9 +934,15 @@ def main() -> int:
     if args.mode == "full":
         run_sequence_graph(ops)
         run_h32_graph(ops)
+        run_h32_wy_graph(ops)
         run_h32_contract_checks(ops)
+        if args.backend == "installed":
+            run_h32_wy_compile(ops)
     print(f"PASS gated-delta-attention {args.backend} mode={args.mode}: "
-          f"{len(rows)} checks" + (" + sequence/H32 CUDA Graph + H32 fail-fast" if args.mode == "full" else ""))
+          f"{len(rows)} checks" +
+          (" + sequence/H32/WY CUDA Graph + H32 fail-fast" +
+           (" + torch.compile(fullgraph=True)" if args.backend == "installed" else "")
+           if args.mode == "full" else ""))
     return 0
 
 

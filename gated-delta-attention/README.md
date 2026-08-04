@@ -41,8 +41,16 @@ The package supports two validated linear-attention producer profiles:
 - `gdn_wy_chunk_h_b64_mma_fla_bf16(k16_l2, w_pack, u_pack, g_cumsum, state, ...)`
 - `gdn_wy_output_o_b64_mma_fla_bf16(q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, ...)`
 - `gdn_wy_output_o_b64_mma_fla_rawk_bf16(q_pack_hv, k16_l2, v_pack, h0, g_cumsum, ...)`
+- `gdn_wy_norm_cumsum_pack_qk_h_bf16(q, k, g, num_v_heads, num_k_heads, ...)`
+- `gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, num_v_heads, num_k_heads, ...)`
+- `gdn_wy_solve_tril_b64_h_f32(A, S, num_v_heads, ...)`
+- `gdn_wy_cast_ai_h_f32_to_bf16(Ai, S, num_v_heads, ...)`
+- `gdn_wy_recompute_wu_b64_mma_fla_h_bf16(...)`
+- `gdn_wy_chunk_h_b64_mma_fla_h_bf16(...)`
+- `gdn_wy_output_o_b64_mma_fla_h_bf16(...)`
+- `gdn_wy_output_o_b64_mma_fla_rawk_h_bf16(...)`
 
-The v4 API covers both decode recurrence and linear-attention prefill/WY
+The v5 API covers both decode recurrence and linear-attention prefill/WY
 building blocks. It does not package generic FlashAttention.
 
 `gated_delta_recurrent_sequence_bf16` scans `(S,H,128)` in one SM120
@@ -60,7 +68,7 @@ Blackwell CUDA capabilities.
 from kernels import get_kernel
 import torch
 
-gdn = get_kernel("flashrt/gated-delta-attention", version=4, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=5, trust_remote_code=True)
 
 B, H, D = 1, 48, 128
 q = torch.randn(B, H, D, device="cuda", dtype=torch.bfloat16)
@@ -88,6 +96,32 @@ q, k, v = gdn.lin_split_qkv_broadcast_h_bf16(conv_out, Hv, Hk)
 g, beta = gdn.gdn_gating_h_bf16(a, b, neg_exp_A_log, dt_bias)
 out = gdn.gdn_chunk_from_conv_smem_h_bf16(
     conv_out, a, b, neg_exp_A_log, dt_bias, state,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+
+# H32/H16 WY prefill uses the same native stages with model-neutral head args.
+q16 = conv_out[:, : Hk * D].view(S, Hk, D).contiguous()
+k16 = conv_out[:, Hk * D : 2 * Hk * D].view(S, Hk, D).contiguous()
+q_l2, k_l2, q_pack, _, g_cumsum = (
+    gdn.gdn_wy_norm_cumsum_pack_qk_h_bf16(
+        q16, k16, g, num_v_heads=Hv, num_k_heads=Hk
+    )
+)
+A = gdn.gdn_wy_kkt_b64_h_bf16(
+    k_l2, beta, g_cumsum, num_v_heads=Hv, num_k_heads=Hk
+)
+Ai = gdn.gdn_wy_solve_tril_b64_h_f32(A, S, num_v_heads=Hv)
+Ai_pack = gdn.gdn_wy_cast_ai_h_f32_to_bf16(Ai, S, num_v_heads=Hv)
+w_pack, u_pack = gdn.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(
+    k_l2, v, beta, g_cumsum, Ai_pack,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+h0, _, v_pack, k_pack = gdn.gdn_wy_chunk_h_b64_mma_fla_h_bf16(
+    k_l2, w_pack, u_pack, g_cumsum, state,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+out = gdn.gdn_wy_output_o_b64_mma_fla_h_bf16(
+    q_pack, k_pack, v_pack, h0, g_cumsum,
     num_v_heads=Hv, num_k_heads=Hk,
 )
 ```

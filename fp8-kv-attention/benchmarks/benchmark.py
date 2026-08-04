@@ -40,6 +40,9 @@ WORKLOADS = {
     "cosmos_edge_decode_1024": ("cosmos_edge", 1, 1024),
     "cosmos_edge_verify8_4096": ("cosmos_edge", 8, 4096),
     "cosmos_edge_verify8_32768": ("cosmos_edge", 8, 32768),
+    "gqa32_kv16_decode_1024": ("gqa32_kv16", 1, 1024),
+    "gqa32_kv16_verify8_4096": ("gqa32_kv16", 8, 4096),
+    "gqa32_kv16_verify8_32768": ("gqa32_kv16", 8, 32768),
 }
 MODES = {
     "smoke": ["qwen3_vl_decode_1024"],
@@ -47,6 +50,7 @@ MODES = {
         "qwen36_verify8_4096",
         "qwen3_vl_verify8_4096",
         "cosmos_edge_verify8_4096",
+        "gqa32_kv16_verify8_4096",
     ],
     "full": list(WORKLOADS),
 }

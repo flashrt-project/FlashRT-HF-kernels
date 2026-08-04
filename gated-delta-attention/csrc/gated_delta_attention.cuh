@@ -370,5 +370,55 @@ void qwen36_gdn_wy_output_o_b64_bf16(
     int S,
     cudaStream_t stream);
 
+// Additive head-parameterized WY entry points. The current production
+// profiles are (num_v_heads,num_k_heads,head_dim)=(48,16,128) and
+// (32,16,128); keeping the profile explicit prevents model-specific names
+// from leaking into the public package API.
+void gdn_wy_norm_cumsum_pack_qk_h_bf16(
+    const void* q,
+    const void* k,
+    const void* g,
+    void* q_l2,
+    void* k_l2,
+    void* q_pack_hv,
+    void* k_pack_hk,
+    void* g_cumsum,
+    int S,
+    int num_v_heads,
+    int num_k_heads,
+    int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_kkt_b64_h_bf16(
+    const void* k_l2, const void* beta, const void* g_cumsum, void* A,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_solve_tril_b64_h_f32(
+    const void* A, void* Ai, int S, int num_v_heads,
+    cudaStream_t stream);
+
+void gdn_wy_cast_ai_h_f32_to_bf16(
+    const void* Ai, void* Ai_pack, int S, int num_v_heads,
+    cudaStream_t stream);
+
+void gdn_wy_recompute_wu_b64_h_bf16(
+    const void* k_l2, const void* v, const void* beta,
+    const void* g_cumsum, const void* Ai, void* w, void* u,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_chunk_h_b64_h_bf16(
+    const void* k_l2, const void* u, const void* w,
+    const void* g_cumsum, void* state, void* h0, void* v_new,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_output_o_b64_h_bf16(
+    const void* q_l2, const void* k_l2, const void* v_new,
+    const void* h0, const void* g_cumsum, void* out,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
+    cudaStream_t stream);
+
 }  // namespace kernels
 }  // namespace flash_rt
