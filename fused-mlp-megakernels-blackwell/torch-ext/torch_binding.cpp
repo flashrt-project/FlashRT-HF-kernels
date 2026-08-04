@@ -2,6 +2,8 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <cstdlib>
+
 #if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -14,6 +16,7 @@
 #if defined(CUDA_KERNEL)
 extern "C" int flashrt_megakernel_geglu_fp16(
     void*, void*, void*, void*, void*, int, int, int, cudaStream_t);
+#include "portable_geglu_simt.cuh"
 #endif
 
 namespace {
@@ -63,12 +66,23 @@ void fp16_geglu_fused_out(
   TORCH_CHECK(capability == 100 || capability == 103 || capability == 110,
               "fp16_geglu_fused_out requires SM100, SM103, or SM110");
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
-  int rc = flashrt_megakernel_geglu_fp16(
-      input.data_ptr(), gate_weight.data_ptr(), up_weight.data_ptr(),
-      gate_scratch.data_ptr(), output.data_ptr(),
-      static_cast<int>(input.size(0)), static_cast<int>(gate_weight.size(0)),
-      static_cast<int>(input.size(1)), stream);
-  TORCH_CHECK(rc == 0, "FlashRT FP16 GeGLU megakernel failed with status ", rc);
+  const int M = static_cast<int>(input.size(0));
+  const int N = static_cast<int>(gate_weight.size(0));
+  const int K = static_cast<int>(input.size(1));
+  const bool force_simt = std::getenv("FLASHRT_FORCE_SIMT") != nullptr;
+  if (force_simt || (properties->major == 11 && properties->minor == 0)) {
+    // sm_110a (Thor): the SM100 CUTLASS megakernel's tcgen05/TMA descriptor
+    // paths assert at runtime, so route to the portable SIMT reference.
+    int rc = flashrt::megakernel::geglu_fused_fp16_simt(
+        input.data_ptr(), gate_weight.data_ptr(), up_weight.data_ptr(),
+        gate_scratch.data_ptr(), output.data_ptr(), M, N, K, stream);
+    TORCH_CHECK(rc == 0, "FP16 GeGLU SIMT fallback failed with status ", rc);
+  } else {
+    int rc = flashrt_megakernel_geglu_fp16(
+        input.data_ptr(), gate_weight.data_ptr(), up_weight.data_ptr(),
+        gate_scratch.data_ptr(), output.data_ptr(), M, N, K, stream);
+    TORCH_CHECK(rc == 0, "FlashRT FP16 GeGLU megakernel failed with status ", rc);
+  }
 #else
   TORCH_CHECK(false, "CUDA support was not built");
 #endif
