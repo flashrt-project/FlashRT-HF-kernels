@@ -181,12 +181,19 @@ __global__ void output_o_kernel(
     // Load sQ: q_pack[i_t, i_h, 0..63, k_base..k_base+64]
     if (tid < kBT) {
       int row = tid;
+      const int t_global = i_t * kBT + row;
       const __nv_bfloat16* src = q_pack
           + ((size_t)i_t * H + i_h) * kBT * kK
           + row * kK + k_base;
       #pragma unroll
       for (int q = 0; q < kBK / 8; ++q)
-        cp_async_16(&sQ[row * kBK + q * 8], &src[q * 8]);
+        if (t_global < S)
+          cp_async_16(&sQ[row * kBK + q * 8], &src[q * 8]);
+        else {
+          #pragma unroll
+          for (int j = 0; j < 8; ++j)
+            sQ[row * kBK + q * 8 + j] = __float2bfloat16(0.f);
+        }
     }
     // Load sK. The packed entry consumes k_pack_hv[i_t, i_h, row, k].
     // The rawk entry reads k_l2[t, kh, k] directly and avoids the chunk_h

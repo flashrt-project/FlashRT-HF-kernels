@@ -257,10 +257,12 @@ class SourceOps:
         self._ops.gdn_wy_output_o_b64_mma_fla_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, out, scale)
         return out
 
-    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads):
+    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads, poison_tail=False):
         S, C = q.shape[0], (q.shape[0] + 63) // 64
         q_l2, k_l2 = torch.empty_like(q), torch.empty_like(k)
         q_pack = torch.empty((C, num_v_heads, 64, D), device=q.device, dtype=q.dtype)
+        if poison_tail:
+            q_pack.fill_(float("nan"))
         k_pack = torch.empty((C, num_k_heads, 64, D), device=q.device, dtype=q.dtype)
         g_cumsum = torch.empty_like(g)
         A = torch.empty((C, num_v_heads, 64, 64), device=q.device, dtype=torch.float32)
@@ -391,9 +393,17 @@ class InstalledOps:
             q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, scale=D ** -0.5
         )
 
-    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads):
+    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads, poison_tail=False):
+        C = (q.shape[0] + 63) // 64
+        q_pack = None
+        if poison_tail:
+            q_pack = torch.full(
+                (C, num_v_heads, 64, D), float("nan"),
+                device=q.device, dtype=q.dtype,
+            )
         q_l2, k_l2, q_pack, _, g_cumsum = self._mod.gdn_wy_norm_cumsum_pack_qk_h_bf16(
-            q, k, g, num_v_heads=num_v_heads, num_k_heads=num_k_heads
+            q, k, g, num_v_heads=num_v_heads, num_k_heads=num_k_heads,
+            q_pack_hv=q_pack,
         )
         A = self._mod.gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
         Ai = self._mod.gdn_wy_solve_tril_b64_h_f32(A, q.shape[0], num_v_heads=num_v_heads)
@@ -697,6 +707,27 @@ def run_h32_wy_compile(ops) -> None:
     torch.testing.assert_close(compiled_state, eager_state, rtol=0, atol=0)
 
 
+def run_h32_wy_poisoned_tail(ops) -> None:
+    S, Hv, Hk = 1, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 454547)
+    width = Hk * D
+    q = conv[:, :width].view(S, Hk, D).contiguous()
+    k = conv[:, width : 2 * width].view(S, Hk, D).contiguous()
+    v = conv[:, 2 * width :].view(S, Hv, D).contiguous()
+    g, beta = ref_gating(a, b, neg, dt)
+    state = initial.clone()
+    got = ops.wy_mma_fla_h(
+        q, k, v, g, beta, state, Hv, Hk, poison_tail=True
+    )
+    qh = q.repeat_interleave(Hv // Hk, dim=1).contiguous()
+    kh = k.repeat_interleave(Hv // Hk, dim=1).contiguous()
+    ref, ref_state = ref_chunk(qh, kh, v, g, beta, initial)
+    torch.testing.assert_close(got, ref, rtol=0, atol=0.001)
+    torch.testing.assert_close(state, ref_state, rtol=0, atol=0.015625)
+    if not torch.isfinite(got).all():
+        raise AssertionError("H32 WY output must ignore poisoned packed-Q tail")
+
+
 def run_h32_contract_checks(ops) -> None:
     S, Hv, Hk = 4, 32, 16
     conv, a, b, neg, dt, state = make_conv_inputs_h(S, Hv, Hk, 444444)
@@ -935,12 +966,13 @@ def main() -> int:
         run_sequence_graph(ops)
         run_h32_graph(ops)
         run_h32_wy_graph(ops)
+        run_h32_wy_poisoned_tail(ops)
         run_h32_contract_checks(ops)
         if args.backend == "installed":
             run_h32_wy_compile(ops)
     print(f"PASS gated-delta-attention {args.backend} mode={args.mode}: "
           f"{len(rows)} checks" +
-          (" + sequence/H32/WY CUDA Graph + H32 fail-fast" +
+          (" + sequence/H32/WY CUDA Graph + poisoned-tail/H32 fail-fast" +
            (" + torch.compile(fullgraph=True)" if args.backend == "installed" else "")
            if args.mode == "full" else ""))
     return 0
