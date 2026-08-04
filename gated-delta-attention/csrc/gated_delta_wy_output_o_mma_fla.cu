@@ -359,12 +359,19 @@ __global__ void output_o_kernel(
   // Load sV: v_pack[i_t, i_h, 0..63, v_base..v_base+64]
   if (tid < kBT) {
     int row = tid;
+    const int t_global = i_t * kBT + row;
     const __nv_bfloat16* src = v_pack
         + ((size_t)i_t * H + i_h) * kBT * kV
         + row * kV + v_base;
     #pragma unroll
     for (int q = 0; q < kBV / 8; ++q)
-      cp_async_16(&sV[row * kBV + q * 8], &src[q * 8]);
+      if (t_global < S)
+        cp_async_16(&sV[row * kBV + q * 8], &src[q * 8]);
+      else {
+        #pragma unroll
+        for (int j = 0; j < 8; ++j)
+          sV[row * kBV + q * 8 + j] = __float2bfloat16(0.f);
+      }
   }
   cp_async_commit();
   cp_async_wait<0>();

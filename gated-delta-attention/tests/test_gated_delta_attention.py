@@ -273,6 +273,8 @@ class SourceOps:
         h0 = torch.empty((C, num_v_heads, D, D), device=q.device, dtype=q.dtype)
         v_new = torch.empty_like(v)
         v_new_pack, k_pack_hv = torch.empty_like(pack), torch.empty_like(pack)
+        if poison_tail:
+            v_new_pack.fill_(float("nan"))
         out = torch.empty_like(v)
         self._ops.gdn_wy_norm_cumsum_pack_qk_h_bf16(q, k, g, q_l2, k_l2, q_pack, k_pack, g_cumsum, num_v_heads, num_k_heads, D)
         self._ops.gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, A, num_v_heads, num_k_heads, D)
@@ -409,7 +411,17 @@ class InstalledOps:
         Ai = self._mod.gdn_wy_solve_tril_b64_h_f32(A, q.shape[0], num_v_heads=num_v_heads)
         Ai_pack = self._mod.gdn_wy_cast_ai_h_f32_to_bf16(Ai, q.shape[0], num_v_heads=num_v_heads)
         w_pack, u_pack = self._mod.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(k_l2, v, beta, g_cumsum, Ai_pack, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
-        h0, _, v_new_pack, k_pack_hv = self._mod.gdn_wy_chunk_h_b64_mma_fla_h_bf16(k_l2, w_pack, u_pack, g_cumsum, state, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
+        v_new_pack = None
+        if poison_tail:
+            v_new_pack = torch.full(
+                (C, num_v_heads, 64, D), float("nan"),
+                device=q.device, dtype=q.dtype,
+            )
+        h0, _, v_new_pack, k_pack_hv = self._mod.gdn_wy_chunk_h_b64_mma_fla_h_bf16(
+            k_l2, w_pack, u_pack, g_cumsum, state,
+            num_v_heads=num_v_heads, num_k_heads=num_k_heads,
+            v_new_pack=v_new_pack,
+        )
         return self._mod.gdn_wy_output_o_b64_mma_fla_h_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, num_v_heads=num_v_heads, num_k_heads=num_k_heads, scale=D ** -0.5)
 
 
