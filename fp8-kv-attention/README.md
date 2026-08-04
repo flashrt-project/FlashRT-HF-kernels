@@ -57,6 +57,8 @@ seq_lens = torch.tensor([[pages * 128]], device=q.device, dtype=torch.int32)
 mask = attn.causal_spec_mask(q.shape[0], device=q.device)
 semaphores, scratch = attn.allocate_workspace(q_seq=q.shape[0], device=q.device)
 out = torch.empty_like(q)
+props = torch.cuda.get_device_properties(q.device)
+kv_heads, head_dim = k_cache.shape[2], k_cache.shape[3]
 
 attn.xqa_bf16_fp8kv(
     q,
@@ -68,8 +70,16 @@ attn.xqa_bf16_fp8kv(
     out=out,
     semaphores=semaphores,
     scratch=scratch,
+    sm_count=props.multi_processor_count,
+    k_stride_page=128 * kv_heads * head_dim,
+    k_stride_token=kv_heads * head_dim,
+    k_stride_head=head_dim,
 )
 ```
+
+If `sm_count=0`, the native wrapper resolves it once per CUDA device and
+caches the result. Static runtimes should pass it explicitly before CUDA Graph
+capture so the first captured call performs no device-property query.
 
 ## Provenance
 

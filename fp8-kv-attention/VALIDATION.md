@@ -23,6 +23,13 @@ The package must pass all rows with:
 Installed-artifact validation should be rerun in a Torch version supported by
 the Kernel Hub artifact matrix.
 
+The installed full gate additionally requires:
+
+- bit-identical CUDA Graph replay for `32Q/16KV/D128`;
+- `torch.compile(fullgraph=True)` parity with the eager public wrapper;
+- both explicit static launch metadata and the cached default `sm_count=0`
+  path within 5% or 0.75 us of the raw native binding.
+
 Builder note:
 
 - The generated setuptools path expects `DEBUG` to be numeric (`0` or `1`).

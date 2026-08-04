@@ -32,6 +32,9 @@ It additionally requires:
   non-integral `Hv/Hk` broadcast ratio.
 - fixed-order parallel triangular solve parity with the former serial solve;
 - complete WY CUDA Graph replay with bit-identical output and in-place state.
+- deterministic rejection of poisoned packed-Q/value tail data on partial
+  64-token tiles;
+- installed-wrapper parity under `torch.compile(fullgraph=True)`.
 
 `gated_delta_recurrent_sequence_bf16` keeps recurrent state in FP32 for the
 entire sequence and casts state to BF16 only once on exit. Its independent
@@ -93,7 +96,8 @@ python tests/test_gated_delta_attention.py \
   --json-out ../internal-tests/gated-delta-attention-installed-local-full.json
 ```
 
-Result: same full rows pass for the local generated artifact.
+Result: same full rows, CUDA Graph, poisoned-tail regression, and
+`torch.compile(fullgraph=True)` checks pass for the local generated artifact.
 
 For v5 release artifacts, rerun the same command against the HF Jobs artifact
 before updating the installed-artifact claim.
