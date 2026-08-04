@@ -101,3 +101,15 @@ Result: same full rows, CUDA Graph, poisoned-tail regression, and
 
 For v5 release artifacts, rerun the same command against the HF Jobs artifact
 before updating the installed-artifact claim.
+
+## SM110 portable SIMT fallback (Thor real hardware)
+
+`gated_delta_recurrent_sequence_bf16` is SM120-only upstream. On NVIDIA Thor
+(`sm_110a`) the binding dispatches to `gdn_recurrent_seq_bf16_simt`
+(`csrc/kernels/gdn_recurrent_seq_simt.cu`, compiled for `sm_110a`). Validated
+on Thor with PyTorch 2.9.1+cu130 / CUDA 13.2: the recurrent sequence step
+launches and produces finite BF16 output; SM120 keeps the native path.
+
+Full package test (`--backend installed --mode full`) passes 29 checks plus the
+sequence CUDA Graph on Thor: all `sequence_s*_h*` rows have cos=1.0 and
+max_abs ≤ 3.1e-5 (tolerance 2^-10).
