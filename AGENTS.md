@@ -56,40 +56,47 @@ Before pushing a package change that should rebuild Hub artifacts:
 4. Run `check-config` from each changed package directory using the exact
    upstream builder revision in that package's `flake.lock`. A stale local
    builder that rejects a newly supported dependency is not authoritative.
-5. Keep `build/`, `result/`, `dist/`, wheels, `__pycache__/`, and
+5. For every `[torch-noarch]` package, reproduce the builder's final copied
+   layout and import it before using HF Jobs:
+   `python scripts/validate_noarch_layout.py <package> --backend cuda` (and
+   `--backend rocm` when applicable). This is a mandatory paid-build gate. It
+   catches sibling Python packages and other files that exist under
+   `torch-ext/` but are omitted because the noarch builder copies only
+   `torch-ext/<general.name as module>/`.
+6. Keep `build/`, `result/`, `dist/`, wheels, `__pycache__/`, and
    `internal-tests/` outputs untracked. `scripts/prebuild_check.py` is expected
    to fail until ignored local build artifacts are removed or the check is run
    in a clean clone.
-6. Use `.github/workflows/build-kernels-hf-jobs.yml` for release packaging and
+7. Use `.github/workflows/build-kernels-hf-jobs.yml` for release packaging and
    upload. Add any newly changed package to the workflow path filters,
    dispatch options, and normal matrix before relying on push-triggered builds.
    These lists must match except for packages such as FA2 with a dedicated job.
-7. HF Jobs must run under the `liangsu9988` HF account/namespace. Before
+8. HF Jobs must run under the `liangsu9988` HF account/namespace. Before
    pushing release-triggering package changes, confirm the repository secret
    `HF_TOKEN` is a valid token for `liangsu9988` or another token with both HF
    Jobs access and `flashrt/<package>` kernel publishing rights. If the token is
    missing, expired, or belongs to the wrong account, the workflow fails before
    compilation with `HTTP 401: {"error":"Invalid username or password."}`.
-8. After HF Jobs uploads artifacts, read `general.version` from `build.toml`
+9. After HF Jobs uploads artifacts, read `general.version` from `build.toml`
    and verify by loading through `get_kernel("flashrt/<package>", version=N,
    trust_remote_code=True)` in a matching PyTorch/CUDA environment. Rerun
    installed-artifact correctness; never assume every package is v1.
-9. Run `.github/workflows/mirror-kernels-legacy-model.yml` for every new or
+10. Run `.github/workflows/mirror-kernels-legacy-model.yml` for every new or
    rebuilt package, then verify both the Kernel Hub `v1` ref and the legacy
    model-repo `v1` ref. A successful source upload without compiled build
    variants is not a release.
-10. Use the current upstream builder matrix for normal releases. Do not claim
+11. Use the current upstream builder matrix for normal releases. Do not claim
     compatibility with retired Torch versions by renaming artifact directories.
     `torch.stable-abi` is valid only after `kernel-builder check-abi
     --torch-stable-abi` passes and the binding uses only stable ABI headers.
-11. Treat every CUDA capability as a source-level contract. A release artifact
+12. Treat every CUDA capability as a source-level contract. A release artifact
     for a new capability must come from a matching target in `build.toml` and a
     native backend that has passed correctness and performance gates on that
     device. Never use a builder `--force-capability` option, rename an artifact
     directory, or compile an SM120-only implementation for SM110 as release
     evidence. One package may contain separate architecture-specific targets
     and source lists behind the same stable Tensor API.
-12. For architecture-specific additions, compare against the strongest existing
+13. For architecture-specific additions, compare against the strongest existing
     backend on that device. Keep a correct but losing implementation explicit
     and opt-in; do not let it replace cuDNN, cuBLASLt, or an already-qualified
     FlashRT package in automatic dispatch.
