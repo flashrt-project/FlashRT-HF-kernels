@@ -11,6 +11,7 @@
 #include "gated_delta_attention.cuh"
 #include "gated_delta_wy_bf16.cuh"
 #include "kernels/gdn_recurrent_seq_sm120.cuh"
+#include "kernels/gdn_recurrent_seq_simt.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -421,17 +422,28 @@ void gated_delta_recurrent_sequence_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(q.device());
   auto* props = at::cuda::getDeviceProperties(q.get_device());
-  TORCH_CHECK(props->major == 12 && props->minor == 0,
-              "gated_delta_recurrent_sequence_bf16 requires SM120; got SM",
-              props->major, props->minor);
   auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
-  const int rc = flash_rt::kernels::gdn_recurrent_seq_sm120_bf16(
-      q.data_ptr(), k.data_ptr(), v.data_ptr(), g.data_ptr(), beta.data_ptr(),
-      state.data_ptr(), out.data_ptr(), static_cast<int>(q.size(0)),
-      static_cast<int>(q.size(1)), static_cast<int>(q.size(2)),
-      use_qk_l2norm, stream);
-  TORCH_CHECK(rc == 0,
-              "gated_delta_recurrent_sequence_bf16 failed with rc=", rc);
+  if (props->major == 11 && props->minor == 0) {
+    const int rc = flash_rt::kernels::gdn_recurrent_seq_bf16_simt(
+        q.data_ptr(), k.data_ptr(), v.data_ptr(), g.data_ptr(), beta.data_ptr(),
+        state.data_ptr(), out.data_ptr(), static_cast<int>(q.size(0)),
+        static_cast<int>(q.size(1)), static_cast<int>(q.size(2)),
+        use_qk_l2norm, stream);
+    TORCH_CHECK(rc == 0,
+                "gated_delta_recurrent_sequence_bf16 SIMT fallback failed rc=",
+                rc);
+  } else {
+    TORCH_CHECK(props->major == 12 && props->minor == 0,
+                "gated_delta_recurrent_sequence_bf16 requires SM120; got SM",
+                props->major, props->minor);
+    const int rc = flash_rt::kernels::gdn_recurrent_seq_sm120_bf16(
+        q.data_ptr(), k.data_ptr(), v.data_ptr(), g.data_ptr(), beta.data_ptr(),
+        state.data_ptr(), out.data_ptr(), static_cast<int>(q.size(0)),
+        static_cast<int>(q.size(1)), static_cast<int>(q.size(2)),
+        use_qk_l2norm, stream);
+    TORCH_CHECK(rc == 0,
+                "gated_delta_recurrent_sequence_bf16 failed with rc=", rc);
+  }
 #else
   TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
 #endif

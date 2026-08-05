@@ -47,3 +47,14 @@ src = [
   "csrc/kernels/gdn_recurrent_seq_sm120.cu",
   "csrc/kernels/gdn_recurrent_seq_sm120.cuh",
 ]
+
+[kernel.gdn_recurrent_sequence_simt]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["11.0a"]
+src = [
+  "csrc/kernels/gdn_recurrent_seq_simt.cu",
+  "csrc/kernels/gdn_recurrent_seq_simt.cuh",
+]
