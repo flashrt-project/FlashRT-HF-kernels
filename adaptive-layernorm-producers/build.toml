@@ -5,7 +5,8 @@ version = 1
 backends = ["cuda"]
 
 [general.cuda]
-minver = "12.8"
+minver = "13"
+maxver = "13"
 
 [general.hub]
 repo-id = "flashrt/adaptive-layernorm-producers"
