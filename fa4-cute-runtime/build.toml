@@ -1,0 +1,13 @@
+[general]
+name = "fa4-cute-runtime"
+backends = ["cuda"]
+python-depends = ["einops", "tvm-ffi"]
+license = "BSD-3-Clause"
+version = 1
+
+[general.hub]
+repo-id = "flashrt/fa4-cute-runtime"
+
+[general.cuda]
+minver = "13"
+python-depends = ["nvidia-cutlass-dsl"]

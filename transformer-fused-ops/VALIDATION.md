@@ -10,6 +10,12 @@ References are deterministic PyTorch eager equivalents. Current source gate
 covers RMS-gated-SiLU, SiLU/sigmoid multiply, embedding lookup, partial RoPE,
 argmax/spec accept, NexN2 split helpers, router top-k, and MoE weighted gather.
 
+On SM110 the same full gate additionally covers the GROOT N1.7 vector family:
+FP16 RMSNorm/LayerNorm, fused LayerNorm-to-FP8 staged equality, split-half
+RoPE, static FP8 quantization, in-place residual add, and GQA head expansion.
+The production rows include `M=41`, `S=277`, hidden dimensions `128/1536`,
+and a CUDA-Graph-safe static-buffer contract.
+
 MoE weighted-sum rows cover `(tokens, topk, hidden, stride)` values
 `(1,1,128,128)`, `(3,4,320,384)`, and `(17,8,2048,2112)`, including padded
 expert-row strides. The reference gathers the same routed rows and accumulates

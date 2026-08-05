@@ -42,7 +42,10 @@ SHAPES = {
 SM110_SHAPES = {
     "pi05_action_gate_up": (51, 16384, 2048),
     "pi05_action_down": (51, 2048, 8192),
-    "groot_dit_qkv": (51, 4608, 1536),
+    "groot_n17_dit_qkv": (41, 4608, 1536),
+    "groot_n17_dit_ffn_up": (41, 6144, 1536),
+    "groot_n17_dit_ffn_down": (41, 1536, 6144),
+    "groot_legacy_dit_qkv": (51, 4608, 1536),
     "groot_backbone_gate_up": (277, 16384, 2048),
     "cosmos_edge_action": (64, 9216, 2048),
     "lingbot_action_gate_up": (105, 16384, 2048),
@@ -104,6 +107,16 @@ class SourceOps:
 
     def nvfp4_gemm_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=0):
         self._ops.nvfp4_gemm_bf16(a, b, sfa, sfb, out, float(alpha), int(variant))
+
+    def nvfp4_gemm_bias_bf16(self, a, b, sfa, sfb, bias, out):
+        self._ops.nvfp4_gemm_bias_bf16(a, b, sfa, sfb, bias, out)
+
+    def nvfp4_gemm_bias_residual_bf16(
+        self, a, b, sfa, sfb, bias, residual, out
+    ):
+        self._ops.nvfp4_gemm_bias_residual_bf16(
+            a, b, sfa, sfb, bias, residual, out
+        )
 
     def nvfp4_gemm_residual_bf16(self, a, b, sfa, sfb, residual, out, alpha=1.0):
         self._ops.nvfp4_gemm_residual_bf16(
@@ -178,6 +191,18 @@ class InstalledOps:
             variant=int(variant),
         )
 
+    def nvfp4_gemm_bias_bf16(self, a, b, sfa, sfb, bias, out):
+        self._module.nvfp4_gemm_bias_bf16(
+            a, b, sfa, sfb, bias, out=out
+        )
+
+    def nvfp4_gemm_bias_residual_bf16(
+        self, a, b, sfa, sfb, bias, residual, out
+    ):
+        self._module.nvfp4_gemm_bias_residual_bf16(
+            a, b, sfa, sfb, bias, residual, out=out
+        )
+
     def nvfp4_gemm_residual_bf16(self, a, b, sfa, sfb, residual, out, alpha=1.0):
         self._module.nvfp4_gemm_residual_bf16(
             a, b, sfa, sfb, residual, alpha=float(alpha), out=out
@@ -232,6 +257,8 @@ def load_source_ops() -> SourceOps:
     if capability == (11, 0):
         gemm_sources = [
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_w4a16_gemm_sm100.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_bias_bf16_sm100.cu"),
+            str(PACKAGE / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "sm110_dispatch.cu"),
         ]
         source_define = "-DFLASHRT_FP4_GEMM_SOURCE_SM110_ONLY"
@@ -263,6 +290,7 @@ def load_source_ops() -> SourceOps:
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "-DCUDA_KERNEL",
+            "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
             *([source_define] if source_define else []),
         ],
         verbose=False,
@@ -449,6 +477,57 @@ def run_epilogue_case(ops, name: str, shape: tuple[int, int, int]):
     return rows
 
 
+def run_sm110_epilogue_case(ops, name: str, shape: tuple[int, int, int]):
+    m, n, k = shape
+    a, b, sfa, sfb, a_deq, b_deq = prepare_quantized_full(ops, m, n, k)
+    matmul = a_deq.float() @ b_deq.float().T
+    bias = (torch.randn(n, device="cuda") * 0.02).to(torch.bfloat16)
+    residual = torch.randn((m, n), device="cuda", dtype=torch.bfloat16)
+    rows = []
+
+    out = torch.empty_like(residual)
+    ops.nvfp4_gemm_bias_bf16(a, b, sfa, sfb, bias, out)
+    expected_bias = (matmul + bias.float().view(1, -1)).to(torch.bfloat16)
+    rows.append(result_row(
+        name, shape, "nvfp4_gemm_bias_bf16", out, expected_bias
+    ))
+
+    before = residual.clone()
+    ops.nvfp4_gemm_bias_residual_bf16(
+        a, b, sfa, sfb, bias, residual, residual
+    )
+    expected_residual = (
+        matmul + bias.float().view(1, -1) + before.float()
+    ).to(torch.bfloat16)
+    rows.append(result_row(
+        name, shape, "nvfp4_gemm_bias_residual_bf16",
+        residual, expected_residual,
+    ))
+
+    out_packed, out_sfa = ops.alloc_fp4(m, n)
+    ops.nvfp4_gemm_bias_gelu_nvfp4(
+        a, b, sfa, sfb, bias, out_packed, out_sfa
+    )
+    out_deq = torch.empty((m, n), device="cuda", dtype=torch.float16)
+    ops.dequantize_fp4_sfa_fp16(out_packed, out_sfa, out_deq, False)
+    expected_gelu = torch.nn.functional.gelu(
+        matmul + bias.float().view(1, -1), approximate="tanh"
+    ).to(torch.bfloat16)
+    staged_packed, staged_sfa = ops.alloc_fp4(m, n)
+    ops.quantize_fp4_sfa_bf16(
+        expected_gelu, staged_packed, staged_sfa, False
+    )
+    staged_deq = torch.empty_like(out_deq)
+    ops.dequantize_fp4_sfa_fp16(
+        staged_packed, staged_sfa, staged_deq, False
+    )
+    rows.append(result_row(
+        name, shape, "nvfp4_gemm_bias_gelu_nvfp4",
+        out_deq, staged_deq, fp4_output=True,
+    ))
+    return rows
+
+
 def check_installed_compile(ops: InstalledOps) -> dict[str, object]:
     a_packed, b_packed, sfa, sfb, _ = prepare_quantized(ops, 128, 128, 128)
 
@@ -546,6 +625,15 @@ def main() -> int:
     if args.mode == "full" and capability != (11, 0):
         for name, shape in EPILOGUE_SHAPES.items():
             results.extend(run_epilogue_case(ops, name, shape))
+    if capability == (11, 0) and args.mode in {"full", "thor-models"}:
+        for name in (
+            "groot_n17_dit_qkv",
+            "groot_n17_dit_ffn_up",
+            "groot_n17_dit_ffn_down",
+        ):
+            results.extend(run_sm110_epilogue_case(
+                ops, name, SM110_SHAPES[name]
+            ))
     compile_check = None
     bf16_quantizer_check = check_bf16_quantizer(ops)
     if args.backend == "installed" and args.mode == "full":

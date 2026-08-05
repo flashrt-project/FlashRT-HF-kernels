@@ -1,0 +1,24 @@
+[general]
+name = "masked-mha-runtime"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "13"
+
+[general.hub]
+repo-id = "flashrt/masked-mha-runtime"
+
+[torch]
+include = ["csrc"]
+src = ["torch-ext/torch_binding.cpp"]
+
+[kernel.masked_mha_runtime]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "13"
+cuda-capabilities = ["11.0a"]
+cuda-flags = ["-O3", "--use_fast_math"]
+src = ["csrc/attention_mha_masked.cu", "csrc/attention_mha_masked.cuh"]

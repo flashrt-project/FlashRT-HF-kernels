@@ -1,6 +1,8 @@
 #include "gemm/fp4/sm110_dispatch.cuh"
 
 #include "gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cuh"
+#include "gemm/fp4/cutlass_fp4_gemm_bias_bf16_sm100.cuh"
+#include "quantize/quantize_fp4_sfa_bf16.cuh"
 
 namespace flash_rt::hub {
 namespace {
@@ -30,7 +32,16 @@ void launch_sm110(
 }
 
 struct Sm110DispatchRegistration {
-  Sm110DispatchRegistration() { sm110_gemm_dispatch = &launch_sm110; }
+  Sm110DispatchRegistration() {
+    sm110_gemm_dispatch = &launch_sm110;
+    sm110_gemm_bias_dispatch = &fp4::cutlass_fp4_gemm_bias_bf16;
+    sm110_gemm_bias_residual_dispatch =
+        &fp4::cutlass_fp4_gemm_bias_res_bf16;
+    sm110_gemm_bias_gelu_fp4_dispatch =
+        &fp4::cutlass_fp4_gemm_bias_gelu_fp4out_bf16;
+    sm110_quantize_bf16_dispatch =
+        &fp4::quantize_fp4_dynamic_sfa_bf16_vec;
+  }
 };
 
 Sm110DispatchRegistration registration;

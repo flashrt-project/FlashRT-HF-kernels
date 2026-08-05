@@ -2,10 +2,8 @@
   description = "Flake for FlashRT FP4 GEMM kernels";
 
   inputs = {
-    # Based on huggingface/kernels@e9152aa with only the stale CUTLASS 4.5.2
-    # fixed-output hash updated. Return to upstream after the hash fix lands.
-    kernel-builder.url =
-      "github:LiangSu8899/kernels/d720fa90fb9cd92d1bc60a9dc5c55bef2aafabb8";
+    # huggingface/kernels#741: CUTLASS 4.4.2 plus the corrected 4.5.2 hash.
+    kernel-builder.url = "github:huggingface/kernels/870e825d881664e39f9287a27a74ef63ff3c545e";
   };
 
   outputs =

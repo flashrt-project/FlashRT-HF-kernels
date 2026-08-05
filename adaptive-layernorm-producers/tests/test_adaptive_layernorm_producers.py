@@ -17,6 +17,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[2]
 PACKAGE = ROOT / "adaptive-layernorm-producers"
+DEFAULT_CUTLASS_INCLUDE = ROOT.parent / "official" / "FlashRT" / "third_party" / "cutlass" / "include"
 REGISTRATION_INCLUDE = (
     ROOT.parent
     / "kernels"
@@ -85,6 +86,15 @@ class SourceOps:
         self._ops.layer_norm_no_affine_quant_fp8_static_bf16(x, act_scale, float(eps), out)
         return out
 
+    def layer_norm_no_affine_quant_nvfp4_swizzled_bf16(
+        self, x, eps=1e-5, packed=None, sf_swizzled=None
+    ):
+        packed, sf_swizzled = _nvfp4_out(x, packed, sf_swizzled)
+        self._ops.layer_norm_no_affine_quant_nvfp4_swizzled_bf16(
+            x, float(eps), packed, sf_swizzled
+        )
+        return packed, sf_swizzled
+
     def adaln_modulation6_bf16(self, adaln_params, layer_modulation, out=None):
         expected = (
             adaln_params.shape[0],
@@ -100,6 +110,14 @@ class SourceOps:
             adaln_params, layer_modulation, *out
         )
         return out
+
+    def reference_adaln_fp4(self, x, scale, shift, eps, packed, sf):
+        self._ops._reference_adaln_fp4(x, scale, shift, float(eps), packed, sf)
+        return packed, sf
+
+    def reference_ln_fp4(self, x, eps, packed, sf):
+        self._ops._reference_ln_fp4(x, float(eps), packed, sf)
+        return packed, sf
 
 
 def _preload_cublaslt() -> None:
@@ -123,9 +141,23 @@ def load_source_ops() -> SourceOps:
 
     if not REGISTRATION_INCLUDE.is_dir():
         raise RuntimeError(f"missing kernel-builder registration include: {REGISTRATION_INCLUDE}")
+    cutlass_include = Path(
+        os.environ.get("FLASHRT_CUTLASS_INCLUDE", str(DEFAULT_CUTLASS_INCLUDE))
+    )
+    if not cutlass_include.is_dir():
+        raise RuntimeError(f"missing CUTLASS include path: {cutlass_include}")
     _preload_cublaslt()
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _current_arch_list())
     namespace = "adaptive_layernorm_producers_test"
+    sm110_sources = []
+    if torch.cuda.get_device_capability(0) == (11, 0):
+        sm110_sources = [
+            str(PACKAGE / "csrc" / "dit_norm_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "sm110_fp4_dispatch.cu"),
+            str(ROOT.parent / "official" / "FlashRT" / "csrc" / "kernels" / "dit_bf16.cu"),
+            str(ROOT / "fp4-gemm" / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
+            str(PACKAGE / "tests" / "sm110_reference_binding.cpp"),
+        ]
     load(
         name=namespace,
         sources=[
@@ -134,10 +166,18 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "ada_layer_norm_fp8_ptok.cu"),
             str(PACKAGE / "csrc" / "dit_layer_norm_fp8.cu"),
             str(PACKAGE / "csrc" / "adaln_modulation6.cu"),
+            *sm110_sources,
         ],
-        extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
+        extra_include_paths=[
+            str(PACKAGE / "csrc"), str(cutlass_include),
+            str(ROOT / "fp4-gemm" / "csrc" / "quantize"),
+            str(REGISTRATION_INCLUDE),
+        ],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
-        extra_cuda_cflags=["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL"],
+        extra_cuda_cflags=[
+            "-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL",
+            "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+        ],
         verbose=False,
     )
     return SourceOps(namespace)
@@ -222,6 +262,29 @@ def f32_to_fp4_e2m1(x: float) -> int:
     return sign | 0x7
 
 
+def f32_to_fp4_e2m1_sm110(x: float) -> int:
+    """Match #163's native SM110 FP4 producer bucket boundaries."""
+    sign = 0x8 if x < 0 else 0
+    ax = abs(x)
+    if ax <= 0.25:
+        mantissa = 0
+    elif ax <= 0.75:
+        mantissa = 1
+    elif ax <= 1.25:
+        mantissa = 2
+    elif ax <= 1.75:
+        mantissa = 3
+    elif ax <= 2.5:
+        mantissa = 4
+    elif ax <= 3.5:
+        mantissa = 5
+    elif ax <= 5.0:
+        mantissa = 6
+    else:
+        mantissa = 7
+    return sign | mantissa
+
+
 def f32_to_ue4m3_ceil(x: float) -> int:
     if x <= 0.0:
         return 0
@@ -250,7 +313,9 @@ def ue4m3_to_f32(v: int) -> float:
     return math.ldexp(1.0 + mant / 8.0, exp)
 
 
-def ref_nvfp4(modulated: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def ref_nvfp4(
+    modulated: torch.Tensor, *, sm110_contract: bool = False
+) -> tuple[torch.Tensor, torch.Tensor]:
     rows, dim = modulated.shape
     assert dim % 16 == 0
     packed = torch.zeros((rows, dim // 2), dtype=torch.uint8)
@@ -262,7 +327,16 @@ def ref_nvfp4(modulated: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         block_scales: list[float] = []
         for block in range(n_blocks):
             amax = float(cpu[row, block * 16 : (block + 1) * 16].abs().max().item())
-            ue = f32_to_ue4m3_ceil(amax / 6.0)
+            desired = max(amax / 6.0, 1e-12)
+            if sm110_contract:
+                ue = int(
+                    torch.tensor(desired, dtype=torch.float32)
+                    .to(torch.float8_e4m3fn)
+                    .view(torch.uint8)
+                    .item()
+                )
+            else:
+                ue = f32_to_ue4m3_ceil(desired)
             rb = row // 128
             ri = row % 128
             cb = block // 4
@@ -274,8 +348,9 @@ def ref_nvfp4(modulated: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
             i = p * 2
             s0 = block_scales[i // 16]
             s1 = block_scales[(i + 1) // 16]
-            lo = f32_to_fp4_e2m1(float(cpu[row, i].item()) / s0 if s0 > 0 else 0.0)
-            hi = f32_to_fp4_e2m1(float(cpu[row, i + 1].item()) / s1 if s1 > 0 else 0.0)
+            convert = f32_to_fp4_e2m1_sm110 if sm110_contract else f32_to_fp4_e2m1
+            lo = convert(float(cpu[row, i].item()) / s0 if s0 > 0 else 0.0)
+            hi = convert(float(cpu[row, i + 1].item()) / s1 if s1 > 0 else 0.0)
             packed[row, p] = (hi << 4) | (lo & 0x0F)
     return packed, sf
 
@@ -359,9 +434,45 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
         got_packed, got_sf = ops.ada_layer_norm_quant_nvfp4_swizzled_bf16(
             x, scale, shift, eps, packed=packed, sf_swizzled=sf
         )
-        exp_packed, exp_sf = ref_nvfp4(mod)
+        sm110_contract = torch.cuda.get_device_capability(0) == (11, 0)
+        if sm110_contract and hasattr(ops, "reference_adaln_fp4"):
+            exp_packed = torch.empty_like(packed)
+            exp_sf = torch.zeros_like(sf)
+            ops.reference_adaln_fp4(
+                x, scale, shift, eps, exp_packed, exp_sf
+            )
+        else:
+            exp_packed, exp_sf = ref_nvfp4(
+                mod, sm110_contract=sm110_contract
+            )
         assert_exact(f"{label}/nvfp4_packed", got_packed, exp_packed)
         assert_exact(f"{label}/nvfp4_sf", got_sf, exp_sf)
+
+        if torch.cuda.get_device_capability(0) == (11, 0):
+            packed.zero_()
+            sf.zero_()
+            got_ln_packed, got_ln_sf = (
+                ops.layer_norm_no_affine_quant_nvfp4_swizzled_bf16(
+                    x, eps, packed=packed, sf_swizzled=sf
+                )
+            )
+            if hasattr(ops, "reference_ln_fp4"):
+                exp_ln_packed = torch.empty_like(packed)
+                exp_ln_sf = torch.zeros_like(sf)
+                ops.reference_ln_fp4(
+                    x, eps, exp_ln_packed, exp_ln_sf
+                )
+            else:
+                exp_ln_packed, exp_ln_sf = ref_nvfp4(
+                    ref_layer_norm_no_affine(x, eps), sm110_contract=True
+                )
+            assert_exact(
+                f"{label}/no_affine_nvfp4_packed", got_ln_packed,
+                exp_ln_packed,
+            )
+            assert_exact(
+                f"{label}/no_affine_nvfp4_sf", got_ln_sf, exp_ln_sf
+            )
 
         packed.zero_()
         sf.zero_()
@@ -392,7 +503,8 @@ def run(args) -> None:
 
     modulation_shapes = {
         "boundary": (1, 1, 48),
-        "groot_dit": (1, 51, 1536),
+        "groot_n17_dit": (1, 41, 1536),
+        "groot_legacy_dit": (1, 51, 1536),
         "motus": (1, 360, 3072),
         "video_long": (2, 2520, 3072),
     }

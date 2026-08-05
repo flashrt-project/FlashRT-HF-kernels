@@ -24,6 +24,14 @@
 #include "torch_binding.h"
 
 flash_rt::hub::Sm110GemmDispatch flash_rt::hub::sm110_gemm_dispatch = nullptr;
+flash_rt::hub::Sm110GemmBiasDispatch
+    flash_rt::hub::sm110_gemm_bias_dispatch = nullptr;
+flash_rt::hub::Sm110GemmBiasResidualDispatch
+    flash_rt::hub::sm110_gemm_bias_residual_dispatch = nullptr;
+flash_rt::hub::Sm110GemmBiasGeluFp4Dispatch
+    flash_rt::hub::sm110_gemm_bias_gelu_fp4_dispatch = nullptr;
+flash_rt::hub::Sm110QuantizeBf16Dispatch
+    flash_rt::hub::sm110_quantize_bf16_dispatch = nullptr;
 
 namespace {
 
@@ -231,6 +239,77 @@ void fp4_w4a16_linear_bf16(
 #endif
 }
 
+void nvfp4_gemm_bias_bf16(
+    torch::Tensor const& a_packed,
+    torch::Tensor const& b_packed,
+    torch::Tensor const& sfa,
+    torch::Tensor const& sfb,
+    torch::Tensor const& bias,
+    torch::Tensor& out) {
+  auto shape = check_fp4_gemm_inputs(a_packed, b_packed, sfa, sfb);
+  check_bf16_cuda(bias, "bias");
+  check_bf16_cuda(out, "out");
+  TORCH_CHECK(bias.dim() == 1 && bias.numel() == shape.n,
+              "bias must have shape (N,)");
+  TORCH_CHECK(out.sizes() == torch::IntArrayRef({shape.m, shape.n}),
+              "out must have shape (M, N)");
+  check_same_device(a_packed, bias, "a_packed", "bias");
+  check_same_device(a_packed, out, "a_packed", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(a_packed.device());
+  auto const* props = current_device_properties(a_packed);
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              "nvfp4_gemm_bias_bf16 currently requires SM110; got SM",
+              props->major, props->minor);
+  TORCH_CHECK(flash_rt::hub::sm110_gemm_bias_dispatch != nullptr,
+              "SM110 fused-bias FP4 GEMM source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  const int rc = flash_rt::hub::sm110_gemm_bias_dispatch(
+      a_packed.data_ptr(), sfa.data_ptr(), b_packed.data_ptr(), sfb.data_ptr(),
+      bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
+      checked_int(shape.n, "N"), checked_int(shape.k, "K"), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_bf16 failed with rc=", rc);
+#endif
+}
+
+void nvfp4_gemm_bias_residual_bf16(
+    torch::Tensor const& a_packed,
+    torch::Tensor const& b_packed,
+    torch::Tensor const& sfa,
+    torch::Tensor const& sfb,
+    torch::Tensor const& bias,
+    torch::Tensor const& residual,
+    torch::Tensor& out) {
+  auto shape = check_fp4_gemm_inputs(a_packed, b_packed, sfa, sfb);
+  check_bf16_cuda(bias, "bias");
+  check_bf16_cuda(residual, "residual");
+  check_bf16_cuda(out, "out");
+  TORCH_CHECK(bias.dim() == 1 && bias.numel() == shape.n,
+              "bias must have shape (N,)");
+  TORCH_CHECK(residual.sizes() == torch::IntArrayRef({shape.m, shape.n}),
+              "residual must have shape (M, N)");
+  TORCH_CHECK(out.sizes() == residual.sizes(), "out must match residual");
+  check_same_device(a_packed, bias, "a_packed", "bias");
+  check_same_device(a_packed, residual, "a_packed", "residual");
+  check_same_device(a_packed, out, "a_packed", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(a_packed.device());
+  auto const* props = current_device_properties(a_packed);
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              "nvfp4_gemm_bias_residual_bf16 currently requires SM110; got SM",
+              props->major, props->minor);
+  TORCH_CHECK(flash_rt::hub::sm110_gemm_bias_residual_dispatch != nullptr,
+              "SM110 bias-residual FP4 GEMM source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  const int rc = flash_rt::hub::sm110_gemm_bias_residual_dispatch(
+      a_packed.data_ptr(), sfa.data_ptr(), b_packed.data_ptr(), sfb.data_ptr(),
+      bias.data_ptr(), residual.data_ptr(), out.data_ptr(),
+      checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+      checked_int(shape.k, "K"), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_residual_bf16 failed with rc=", rc);
+#endif
+}
+
 void nvfp4_gemm_residual_bf16(
     torch::Tensor const& a_packed,
     torch::Tensor const& b_packed,
@@ -318,8 +397,20 @@ void nvfp4_gemm_bias_gelu_nvfp4(
   check_same_device(a_packed, out_sfa, "a_packed", "out_sfa");
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
-  require_sm120(a_packed, "nvfp4_gemm_bias_gelu_nvfp4");
+  auto const* props = current_device_properties(a_packed);
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  if (props->major == 11 && props->minor == 0) {
+    TORCH_CHECK(flash_rt::hub::sm110_gemm_bias_gelu_fp4_dispatch != nullptr,
+                "SM110 bias-GELU-FP4 GEMM source is not present in this build");
+    const int rc = flash_rt::hub::sm110_gemm_bias_gelu_fp4_dispatch(
+        a_packed.data_ptr(), sfa.data_ptr(), b_packed.data_ptr(), sfb.data_ptr(),
+        bias.data_ptr(), out_packed.data_ptr(), out_sfa.data_ptr(),
+        checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_gelu_nvfp4 failed with rc=", rc);
+    return;
+  }
+  require_sm120(a_packed, "nvfp4_gemm_bias_gelu_nvfp4");
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
   flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_fp4out_sm120(
       a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
@@ -435,9 +526,19 @@ void quantize_fp4_sfa_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(x.device());
   auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
-  const int rc = flash_rt::fp4::quantize_fp4_dynamic_sfa_bf16(
-      x.data_ptr(), packed.data_ptr(), sfa.data_ptr(),
-      checked_int(rows, "rows"), checked_int(dim, "dim"), is_sfb, stream);
+  auto const* props = current_device_properties(x);
+  int rc = 0;
+  if (props->major == 11 && props->minor == 0) {
+    TORCH_CHECK(flash_rt::hub::sm110_quantize_bf16_dispatch != nullptr,
+                "SM110 vectorized BF16 FP4 quantizer is not present in this build");
+    rc = flash_rt::hub::sm110_quantize_bf16_dispatch(
+        x.data_ptr(), packed.data_ptr(), sfa.data_ptr(),
+        checked_int(rows, "rows"), checked_int(dim, "dim"), is_sfb, stream);
+  } else {
+    rc = flash_rt::fp4::quantize_fp4_dynamic_sfa_bf16(
+        x.data_ptr(), packed.data_ptr(), sfa.data_ptr(),
+        checked_int(rows, "rows"), checked_int(dim, "dim"), is_sfb, stream);
+  }
   TORCH_CHECK(rc == 0, "quantize_fp4_dynamic_sfa_bf16 failed with rc=", rc);
 #endif
 }
@@ -475,6 +576,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nvfp4_gemm_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0, int variant=-1) -> ()");
   ops.def("fp4_w4a16_linear_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0, int variant=-1) -> ()");
   ops.def("fp4_w4a4_gemv_warpsplit_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0, int warps=4, int stages=4) -> ()");
+  ops.def("nvfp4_gemm_bias_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor bias, Tensor! out) -> ()");
+  ops.def("nvfp4_gemm_bias_residual_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor bias, Tensor residual, Tensor! out) -> ()");
   ops.def("nvfp4_gemm_residual_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor residual, Tensor! out, float alpha=1.0) -> ()");
   ops.def("nvfp4_gemm_bias_gelu_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor bias, Tensor! out, float alpha=1.0) -> ()");
   ops.def("nvfp4_gemm_bias_gelu_nvfp4(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor bias, Tensor! out_packed, Tensor! out_sfa, float alpha=1.0) -> ()");
@@ -487,6 +590,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("nvfp4_gemm_bf16", torch::kCUDA, &fp4_w4a16_linear_bf16);
   ops.impl("fp4_w4a16_linear_bf16", torch::kCUDA, &fp4_w4a16_linear_bf16);
   ops.impl("fp4_w4a4_gemv_warpsplit_bf16", torch::kCUDA, &fp4_w4a4_gemv_warpsplit_bf16);
+  ops.impl("nvfp4_gemm_bias_bf16", torch::kCUDA, &nvfp4_gemm_bias_bf16);
+  ops.impl("nvfp4_gemm_bias_residual_bf16", torch::kCUDA, &nvfp4_gemm_bias_residual_bf16);
   ops.impl("nvfp4_gemm_residual_bf16", torch::kCUDA, &nvfp4_gemm_residual_bf16);
   ops.impl("nvfp4_gemm_bias_gelu_bf16", torch::kCUDA, &nvfp4_gemm_bias_gelu_bf16);
   ops.impl("nvfp4_gemm_bias_gelu_nvfp4", torch::kCUDA, &nvfp4_gemm_bias_gelu_nvfp4);

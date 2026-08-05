@@ -14,6 +14,8 @@ paths.
 - `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
 - `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
+- `nvfp4_gemm_bias_bf16(a_packed, b_packed, sfa, sfb, bias, out=None)`
+- `nvfp4_gemm_bias_residual_bf16(a_packed, b_packed, sfa, sfb, bias, residual, out=None)`
 - `nvfp4_gemm_residual_bf16(a_packed, b_packed, sfa, sfb, residual, alpha=1.0, out=None)`
 - `nvfp4_gemm_bias_gelu_bf16(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out=None)`
 - `nvfp4_gemm_bias_gelu_nvfp4(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out_packed=None, out_sfa=None)`
@@ -40,10 +42,17 @@ paths.
 - `2`: pingpong schedule for A/B testing shape-specific wins.
 
 The canonical linear API and FP4/SFA quantize/dequantize helpers are available
-on both SM110 and SM120. The residual, bias/GELU, FP4-output and Stream-K
-epilogues are currently SM120-only. SM110 runtimes compose the linear API with
-the production producers in `flashrt/fp4-fused-ops`; requesting an SM120-only
-epilogue on SM110 raises an explicit architecture error.
+on both SM110 and SM120. SM110 additionally provides the GROOT N1.7 production
+epilogues `nvfp4_gemm_bias_bf16`, `nvfp4_gemm_bias_residual_bf16`, and
+`nvfp4_gemm_bias_gelu_nvfp4`. The latter emits packed FP4 plus CUTLASS SFA so
+the following projection can consume it without a BF16 materialization and a
+standalone quantization launch. Stream-K and the older BF16 GELU epilogue keep
+their existing SM120 dispatch and reject unsupported architectures explicitly.
+
+The SM110 release gate includes the production `(M,N,K)` shapes
+`(41,4608,1536)`, `(41,6144,1536)`, and `(41,1536,6144)`, plus the legacy
+`M=51` compatibility row. The kernels are the native sources used by FlashRT's
+GROOT N1.7 Thor NVFP4 pipeline.
 
 ## Minimal Usage
 

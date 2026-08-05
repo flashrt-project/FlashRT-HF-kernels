@@ -56,6 +56,8 @@ on:
       - "audio-codebook-primitives/**"
       - "fp8-cross-attention-blackwell/**"
       - "fused-mlp-megakernels-blackwell/**"
+      - "masked-mha-runtime/**"
+      - "fa4-cute-runtime/**"
   workflow_dispatch:
     inputs:
       package:
@@ -116,6 +118,8 @@ on:
           - audio-codebook-primitives
           - fp8-cross-attention-blackwell
           - fused-mlp-megakernels-blackwell
+          - masked-mha-runtime
+          - fa4-cute-runtime
 
 permissions:
   contents: read
@@ -182,6 +186,8 @@ jobs:
           - audio-codebook-primitives
           - fp8-cross-attention-blackwell
           - fused-mlp-megakernels-blackwell
+          - masked-mha-runtime
+          - fa4-cute-runtime
 
     steps:
       - uses: actions/checkout@v4

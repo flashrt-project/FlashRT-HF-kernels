@@ -58,6 +58,16 @@ def _legacy_linear_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_bias_bf16"))
+def _bias_fake(a, b, sfa, sfb, bias, out) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_bias_residual_bf16"))
+def _bias_residual_fake(a, b, sfa, sfb, bias, residual, out) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_fp16"))
 def _quant_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb: bool = False) -> None:
     return None
@@ -191,6 +201,45 @@ def fp4_w4a16_linear_bf16(
     )
 
 
+def nvfp4_gemm_bias_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    bias: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """SM110 NVFP4 GEMM with a fused per-column BF16 bias."""
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.bfloat16,
+        )
+    ops.nvfp4_gemm_bias_bf16(a_packed, b_packed, sfa, sfb, bias, out)
+    return out
+
+
+def nvfp4_gemm_bias_residual_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    bias: torch.Tensor,
+    residual: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """SM110 NVFP4 GEMM with fused BF16 bias and residual add."""
+    if out is None:
+        out = torch.empty_like(residual)
+    ops.nvfp4_gemm_bias_residual_bf16(
+        a_packed, b_packed, sfa, sfb, bias, residual, out
+    )
+    return out
+
+
 def nvfp4_gemm_residual_bf16(
     a_packed: torch.Tensor,
     b_packed: torch.Tensor,
@@ -296,8 +345,10 @@ __all__ = [
     "fp4_w4a16_linear_bf16",
     "fp4_w4a4_gemv_warpsplit_bf16",
     "nvfp4_gemm_bf16",
+    "nvfp4_gemm_bias_bf16",
     "nvfp4_gemm_bias_gelu_bf16",
     "nvfp4_gemm_bias_gelu_nvfp4",
+    "nvfp4_gemm_bias_residual_bf16",
     "nvfp4_gemm_residual_bf16",
     "nvfp4_gemm_streamk_bf16",
     "nvfp4_gemm_streamk_bias_bf16",

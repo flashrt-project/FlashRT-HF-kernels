@@ -19,14 +19,23 @@ src = [
 
 [kernel.fp4_gemm_sm110]
 backend = "cuda"
-depends = ["torch", "cutlass_4_5"]
+depends = ["torch", "cutlass_4_4"]
 include = ["csrc"]
 cuda-minver = "13"
 cuda-capabilities = ["11.0a"]
-cuda-flags = ["--expt-relaxed-constexpr", "-O3", "--use_fast_math"]
+cuda-flags = [
+  "--expt-relaxed-constexpr",
+  "-O3",
+  "--use_fast_math",
+  "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+]
 src = [
   "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cu",
   "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cuh",
+  "csrc/gemm/fp4/cutlass_fp4_gemm_bias_bf16_sm100.cu",
+  "csrc/gemm/fp4/cutlass_fp4_gemm_bias_bf16_sm100.cuh",
+  "csrc/quantize/quantize_fp4_sfa_bf16.cu",
+  "csrc/quantize/quantize_fp4_sfa_bf16.cuh",
   "csrc/gemm/fp4/sm110_dispatch.cu",
   "csrc/gemm/fp4/sm110_dispatch.cuh",
 ]

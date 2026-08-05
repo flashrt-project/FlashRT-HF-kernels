@@ -17,8 +17,17 @@
 #include "kernels/relu2_quantize_fp8.cuh"
 #include "kernels/rms_norm_gated_silu_qwen36.cuh"
 #include "kernels/silu_mul_qwen36.cuh"
+#include "kernels/vec_fp16_dispatch.cuh"
 #include "registration.h"
 #include "torch_binding.h"
+
+flash_rt::hub::RmsNormFp16Dispatch flash_rt::hub::rms_norm_fp16_dispatch = nullptr;
+flash_rt::hub::LayerNormFp16Dispatch flash_rt::hub::layer_norm_fp16_dispatch = nullptr;
+flash_rt::hub::LayerNormFp8Fp16Dispatch flash_rt::hub::layer_norm_fp8_fp16_dispatch = nullptr;
+flash_rt::hub::RopeFp16Dispatch flash_rt::hub::rope_fp16_dispatch = nullptr;
+flash_rt::hub::QuantizeFp8Fp16Dispatch flash_rt::hub::quantize_fp8_fp16_dispatch = nullptr;
+flash_rt::hub::ResidualAddFp16Dispatch flash_rt::hub::residual_add_fp16_dispatch = nullptr;
+flash_rt::hub::RepeatHeadsFp16Dispatch flash_rt::hub::repeat_heads_fp16_dispatch = nullptr;
 
 namespace {
 
@@ -30,6 +39,17 @@ void check_cuda_contiguous(torch::Tensor const& t, const char* name) {
 void check_bf16(torch::Tensor const& t, const char* name) {
   check_cuda_contiguous(t, name);
   TORCH_CHECK(t.scalar_type() == torch::kBFloat16, name, " must be torch.bfloat16");
+}
+
+void check_fp16(torch::Tensor const& t, const char* name) {
+  check_cuda_contiguous(t, name);
+  TORCH_CHECK(t.scalar_type() == torch::kFloat16, name, " must be torch.float16");
+}
+
+void check_fp8(torch::Tensor const& t, const char* name) {
+  check_cuda_contiguous(t, name);
+  TORCH_CHECK(t.scalar_type() == c10::ScalarType::Float8_e4m3fn,
+              name, " must be torch.float8_e4m3fn");
 }
 
 void check_i64(torch::Tensor const& t, const char* name) {
@@ -56,6 +76,14 @@ int checked_int(int64_t value, const char* name) {
 void same_device(torch::Tensor const& a, torch::Tensor const& b, const char* an, const char* bn) {
   TORCH_CHECK(a.get_device() == b.get_device(), an, " and ", bn, " must be on the same CUDA device");
 }
+
+#if defined(CUDA_KERNEL)
+void require_sm110(torch::Tensor const& tensor, const char* op) {
+  auto const* props = at::cuda::getDeviceProperties(tensor.get_device());
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              op, " requires SM110; got SM", props->major, props->minor);
+}
+#endif
 
 }  // namespace
 
@@ -341,6 +369,191 @@ void relu2_quantize_fp8_static_bf16(
 #endif
 }
 
+void rms_norm_fp16(torch::Tensor const& x, torch::Tensor const& weight,
+                   double eps, torch::Tensor& out) {
+  check_fp16(x, "x");
+  check_fp16(weight, "weight");
+  check_fp16(out, "out");
+  TORCH_CHECK(x.dim() == 2 && weight.sizes() == torch::IntArrayRef({x.size(1)}),
+              "x must be (rows, dim) and weight must be (dim,)");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must match x");
+  same_device(x, weight, "x", "weight");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "rms_norm_fp16");
+  TORCH_CHECK(flash_rt::hub::rms_norm_fp16_dispatch,
+              "SM110 FP16 RMSNorm source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::rms_norm_fp16_dispatch(
+      static_cast<const __half*>(x.data_ptr()),
+      static_cast<const __half*>(weight.data_ptr()),
+      static_cast<__half*>(out.data_ptr()), checked_int(x.size(0), "rows"),
+      checked_int(x.size(1), "dim"), static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0, "rms_norm_fp16 failed with rc=", rc);
+#endif
+}
+
+void layer_norm_fp16(torch::Tensor const& x, torch::Tensor const& weight,
+                     torch::Tensor const& bias, double eps,
+                     torch::Tensor& out) {
+  check_fp16(x, "x");
+  check_fp16(weight, "weight");
+  check_fp16(bias, "bias");
+  check_fp16(out, "out");
+  TORCH_CHECK(x.dim() == 2 && weight.sizes() == torch::IntArrayRef({x.size(1)}) &&
+                  bias.sizes() == weight.sizes(),
+              "x must be (rows, dim), weight and bias must be (dim,)");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must match x");
+  same_device(x, weight, "x", "weight");
+  same_device(x, bias, "x", "bias");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "layer_norm_fp16");
+  TORCH_CHECK(flash_rt::hub::layer_norm_fp16_dispatch,
+              "SM110 FP16 LayerNorm source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::layer_norm_fp16_dispatch(
+      static_cast<const __half*>(x.data_ptr()),
+      static_cast<const __half*>(weight.data_ptr()),
+      static_cast<const __half*>(bias.data_ptr()),
+      static_cast<__half*>(out.data_ptr()), checked_int(x.size(0), "rows"),
+      checked_int(x.size(1), "dim"), static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0, "layer_norm_fp16 failed with rc=", rc);
+#endif
+}
+
+void layer_norm_quant_fp8_static_fp16(
+    torch::Tensor const& x, torch::Tensor const& weight,
+    torch::Tensor const& bias, torch::Tensor const& scale, double eps,
+    torch::Tensor& out) {
+  check_fp16(x, "x");
+  check_fp16(weight, "weight");
+  check_fp16(bias, "bias");
+  check_f32(scale, "scale");
+  check_fp8(out, "out");
+  TORCH_CHECK(x.dim() == 2 && weight.sizes() == torch::IntArrayRef({x.size(1)}) &&
+                  bias.sizes() == weight.sizes(),
+              "x must be (rows, dim), weight and bias must be (dim,)");
+  TORCH_CHECK(scale.numel() == 1, "scale must contain one FP32 value");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must match x");
+  same_device(x, weight, "x", "weight");
+  same_device(x, bias, "x", "bias");
+  same_device(x, scale, "x", "scale");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "layer_norm_quant_fp8_static_fp16");
+  TORCH_CHECK(flash_rt::hub::layer_norm_fp8_fp16_dispatch,
+              "SM110 fused LayerNorm-FP8 source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::layer_norm_fp8_fp16_dispatch(
+      static_cast<const __half*>(x.data_ptr()),
+      static_cast<const __half*>(weight.data_ptr()),
+      static_cast<const __half*>(bias.data_ptr()),
+      static_cast<__nv_fp8_e4m3*>(out.data_ptr()), scale.data_ptr<float>(),
+      checked_int(x.size(0), "rows"), checked_int(x.size(1), "dim"),
+      static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0, "layer_norm_quant_fp8_static_fp16 failed with rc=", rc);
+#endif
+}
+
+void rope_rotate_half_fp16_(torch::Tensor& x, torch::Tensor const& cos,
+                            torch::Tensor const& sin) {
+  check_fp16(x, "x");
+  check_fp16(cos, "cos");
+  check_fp16(sin, "sin");
+  TORCH_CHECK(x.dim() == 3, "x must have shape (sequence, heads, head_dim)");
+  TORCH_CHECK(cos.sizes() == torch::IntArrayRef({x.size(0), x.size(2)}) &&
+                  sin.sizes() == cos.sizes(),
+              "cos and sin must have shape (sequence, head_dim)");
+  same_device(x, cos, "x", "cos");
+  same_device(x, sin, "x", "sin");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "rope_rotate_half_fp16_");
+  TORCH_CHECK(flash_rt::hub::rope_fp16_dispatch,
+              "SM110 FP16 RoPE source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::rope_fp16_dispatch(
+      static_cast<__half*>(x.data_ptr()),
+      static_cast<const __half*>(cos.data_ptr()),
+      static_cast<const __half*>(sin.data_ptr()),
+      checked_int(x.size(0), "sequence"), checked_int(x.size(1), "heads"),
+      checked_int(x.size(2), "head_dim"), stream);
+  TORCH_CHECK(rc == 0, "rope_rotate_half_fp16_ failed with rc=", rc);
+#endif
+}
+
+void quantize_fp8_static_fp16(torch::Tensor const& x,
+                              torch::Tensor const& scale,
+                              torch::Tensor& out) {
+  check_fp16(x, "x");
+  check_f32(scale, "scale");
+  check_fp8(out, "out");
+  TORCH_CHECK(scale.numel() == 1, "scale must contain one FP32 value");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must match x");
+  same_device(x, scale, "x", "scale");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "quantize_fp8_static_fp16");
+  TORCH_CHECK(flash_rt::hub::quantize_fp8_fp16_dispatch,
+              "SM110 vectorized FP8 quantizer is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::quantize_fp8_fp16_dispatch(
+      static_cast<const __half*>(x.data_ptr()),
+      static_cast<__nv_fp8_e4m3*>(out.data_ptr()), scale.data_ptr<float>(),
+      checked_int(x.numel(), "numel"), stream);
+  TORCH_CHECK(rc == 0, "quantize_fp8_static_fp16 failed with rc=", rc);
+#endif
+}
+
+void residual_add_fp16_(torch::Tensor& residual, torch::Tensor const& x) {
+  check_fp16(residual, "residual");
+  check_fp16(x, "x");
+  TORCH_CHECK(residual.sizes() == x.sizes(), "residual and x must match");
+  same_device(residual, x, "residual", "x");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(residual.device());
+  require_sm110(residual, "residual_add_fp16_");
+  TORCH_CHECK(flash_rt::hub::residual_add_fp16_dispatch,
+              "SM110 vectorized residual-add source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(residual.get_device()).stream();
+  const int rc = flash_rt::hub::residual_add_fp16_dispatch(
+      static_cast<__half*>(residual.data_ptr()),
+      static_cast<const __half*>(x.data_ptr()),
+      checked_int(x.numel(), "numel"), stream);
+  TORCH_CHECK(rc == 0, "residual_add_fp16_ failed with rc=", rc);
+#endif
+}
+
+void repeat_interleave_heads_fp16(torch::Tensor const& x, int64_t repeat,
+                                  torch::Tensor& out) {
+  check_fp16(x, "x");
+  check_fp16(out, "out");
+  TORCH_CHECK(x.dim() == 3, "x must have shape (sequence, heads, head_dim)");
+  TORCH_CHECK(repeat > 0, "repeat must be positive");
+  TORCH_CHECK(out.sizes() == torch::IntArrayRef(
+                  {x.size(0), x.size(1) * repeat, x.size(2)}),
+              "out must have shape (sequence, heads * repeat, head_dim)");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "repeat_interleave_heads_fp16");
+  TORCH_CHECK(flash_rt::hub::repeat_heads_fp16_dispatch,
+              "SM110 vectorized head-repeat source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::repeat_heads_fp16_dispatch(
+      static_cast<const __half*>(x.data_ptr()),
+      static_cast<__half*>(out.data_ptr()), checked_int(x.size(0), "sequence"),
+      checked_int(x.size(1), "heads"), checked_int(x.size(2), "head_dim"),
+      checked_int(repeat, "repeat"), stream);
+  TORCH_CHECK(rc == 0, "repeat_interleave_heads_fp16 failed with rc=", rc);
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("rms_norm_gated_silu_bf16(Tensor x, Tensor gate, Tensor weight, float eps, Tensor! out) -> ()");
   ops.def("silu_mul_bf16(Tensor gate, Tensor up, Tensor! out) -> ()");
@@ -355,6 +568,13 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("router_topk_bf16(Tensor logits, Tensor! out_idx, Tensor! out_val, int k) -> ()");
   ops.def("moe_weighted_sum_bf16_to_fp32(Tensor expert_output, Tensor row_indices, Tensor router_weight, Tensor! out) -> ()");
   ops.def("relu2_quantize_fp8_static_bf16(Tensor input, Tensor scale, Tensor! output) -> ()");
+  ops.def("rms_norm_fp16(Tensor x, Tensor weight, float eps, Tensor! out) -> ()");
+  ops.def("layer_norm_fp16(Tensor x, Tensor weight, Tensor bias, float eps, Tensor! out) -> ()");
+  ops.def("layer_norm_quant_fp8_static_fp16(Tensor x, Tensor weight, Tensor bias, Tensor scale, float eps, Tensor! out) -> ()");
+  ops.def("rope_rotate_half_fp16_(Tensor(a!) x, Tensor cos, Tensor sin) -> ()");
+  ops.def("quantize_fp8_static_fp16(Tensor x, Tensor scale, Tensor! out) -> ()");
+  ops.def("residual_add_fp16_(Tensor(a!) residual, Tensor x) -> ()");
+  ops.def("repeat_interleave_heads_fp16(Tensor x, int repeat, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("rms_norm_gated_silu_bf16", torch::kCUDA, &rms_norm_gated_silu_bf16);
   ops.impl("silu_mul_bf16", torch::kCUDA, &silu_mul_bf16);
@@ -370,6 +590,13 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("moe_weighted_sum_bf16_to_fp32", torch::kCUDA,
            &moe_weighted_sum_bf16_to_fp32);
   ops.impl("relu2_quantize_fp8_static_bf16", torch::kCUDA, &relu2_quantize_fp8_static_bf16);
+  ops.impl("rms_norm_fp16", torch::kCUDA, &rms_norm_fp16);
+  ops.impl("layer_norm_fp16", torch::kCUDA, &layer_norm_fp16);
+  ops.impl("layer_norm_quant_fp8_static_fp16", torch::kCUDA, &layer_norm_quant_fp8_static_fp16);
+  ops.impl("rope_rotate_half_fp16_", torch::kCUDA, &rope_rotate_half_fp16_);
+  ops.impl("quantize_fp8_static_fp16", torch::kCUDA, &quantize_fp8_static_fp16);
+  ops.impl("residual_add_fp16_", torch::kCUDA, &residual_add_fp16_);
+  ops.impl("repeat_interleave_heads_fp16", torch::kCUDA, &repeat_interleave_heads_fp16);
 #endif
 }
 
