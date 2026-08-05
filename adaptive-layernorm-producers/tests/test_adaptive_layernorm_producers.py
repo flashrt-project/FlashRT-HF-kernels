@@ -133,6 +133,8 @@ def _preload_cublaslt() -> None:
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if (major, minor) == (11, 0):
+        return "11.0a"
     return f"{major}.{minor}"
 
 
@@ -154,7 +156,7 @@ def load_source_ops() -> SourceOps:
         sm110_sources = [
             str(PACKAGE / "csrc" / "dit_norm_fp4_sfa.cu"),
             str(PACKAGE / "csrc" / "sm110_fp4_dispatch.cu"),
-            str(ROOT.parent / "official" / "FlashRT" / "csrc" / "kernels" / "dit_bf16.cu"),
+            str(PACKAGE / "tests" / "native_reference" / "dit_bf16.cu"),
             str(ROOT / "fp4-gemm" / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
             str(PACKAGE / "tests" / "sm110_reference_binding.cpp"),
         ]
@@ -181,6 +183,39 @@ def load_source_ops() -> SourceOps:
         verbose=False,
     )
     return SourceOps(namespace)
+
+
+def load_sm110_reference_ops() -> SourceOps:
+    """Load the package-local staged native oracle for installed tests."""
+    from torch.utils.cpp_extension import load
+
+    cutlass_include = Path(
+        os.environ.get("FLASHRT_CUTLASS_INCLUDE", str(DEFAULT_CUTLASS_INCLUDE))
+    )
+    if not cutlass_include.is_dir():
+        raise RuntimeError(f"missing CUTLASS include path: {cutlass_include}")
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _current_arch_list())
+    load(
+        name="adaptive_layernorm_producers_reference",
+        sources=[
+            str(PACKAGE / "tests" / "native_reference" / "dit_bf16.cu"),
+            str(ROOT / "fp4-gemm" / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
+            str(PACKAGE / "tests" / "sm110_reference_binding.cpp"),
+        ],
+        extra_include_paths=[
+            str(ROOT / "fp4-gemm" / "csrc" / "quantize"),
+            str(REGISTRATION_INCLUDE),
+            str(cutlass_include),
+        ],
+        extra_cflags=["-O3", "-DCUDA_KERNEL"],
+        extra_cuda_cflags=[
+            "-O3", "--expt-relaxed-constexpr", "--expt-extended-lambda",
+            "-DCUDA_KERNEL", "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+        ],
+        is_python_module=False,
+        verbose=False,
+    )
+    return SourceOps("adaptive_layernorm_producers_test")
 
 
 def load_installed_ops(artifact: str | None):
@@ -384,7 +419,7 @@ def assert_fp8_contract(name: str, got: torch.Tensor, expected: torch.Tensor) ->
     )
 
 
-def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
+def run_shape(ops, label: str, rows: int, dim: int, eps: float, reference_ops=None) -> None:
     x, scale, shift, inv_s, act_scale, scale_fp8, shift_fp8, scale_deq, shift_deq = make_case(rows, dim)
 
     mod = ref_adaln(x, scale, shift, eps)
@@ -435,10 +470,11 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
             x, scale, shift, eps, packed=packed, sf_swizzled=sf
         )
         sm110_contract = torch.cuda.get_device_capability(0) == (11, 0)
-        if sm110_contract and hasattr(ops, "reference_adaln_fp4"):
+        oracle = reference_ops or ops
+        if sm110_contract and hasattr(oracle, "reference_adaln_fp4"):
             exp_packed = torch.empty_like(packed)
             exp_sf = torch.zeros_like(sf)
-            ops.reference_adaln_fp4(
+            oracle.reference_adaln_fp4(
                 x, scale, shift, eps, exp_packed, exp_sf
             )
         else:
@@ -456,10 +492,10 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
                     x, eps, packed=packed, sf_swizzled=sf
                 )
             )
-            if hasattr(ops, "reference_ln_fp4"):
+            if hasattr(oracle, "reference_ln_fp4"):
                 exp_ln_packed = torch.empty_like(packed)
                 exp_ln_sf = torch.zeros_like(sf)
-                ops.reference_ln_fp4(
+                oracle.reference_ln_fp4(
                     x, eps, exp_ln_packed, exp_ln_sf
                 )
             else:
@@ -489,6 +525,9 @@ def run(args) -> None:
         raise SystemExit("CUDA is required")
     torch.manual_seed(2026)
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
+    reference_ops = None
+    if args.backend == "installed" and torch.cuda.get_device_capability(0) == (11, 0):
+        reference_ops = load_sm110_reference_ops()
     shapes = {
         "decode_action": (16, 2048),
         "wan_video_short": (64, 3072),
@@ -499,7 +538,7 @@ def run(args) -> None:
     if args.mode == "smoke":
         shapes = {"wan_video_short": shapes["wan_video_short"]}
     for label, (rows, dim) in shapes.items():
-        run_shape(ops, label, rows, dim, args.eps)
+        run_shape(ops, label, rows, dim, args.eps, reference_ops)
 
     modulation_shapes = {
         "boundary": (1, 1, 48),

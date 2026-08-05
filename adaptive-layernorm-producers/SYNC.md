@@ -13,3 +13,7 @@ The SM110 FP4 scale contract is E4M3 round-to-nearest. It must be checked
 against the staged native BF16 norm plus native FP4 quantizer, including exact
 packed values and swizzled scale bytes. Do not reuse the older SM120 ceil-scale
 reference for this target.
+
+`tests/native_reference/dit_bf16.cu` is an exact, test-only copy from the same
+FlashRT revision. It keeps source and installed-artifact gates self-contained;
+it is not listed in `build.toml` and is never linked into release artifacts.
