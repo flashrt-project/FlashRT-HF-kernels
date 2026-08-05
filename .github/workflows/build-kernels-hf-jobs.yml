@@ -57,7 +57,6 @@ on:
       - "fp8-cross-attention-blackwell/**"
       - "fused-mlp-megakernels-blackwell/**"
       - "masked-mha-runtime/**"
-      - "fa4-cute-runtime/**"
   workflow_dispatch:
     inputs:
       package:
@@ -119,7 +118,6 @@ on:
           - fp8-cross-attention-blackwell
           - fused-mlp-megakernels-blackwell
           - masked-mha-runtime
-          - fa4-cute-runtime
 
 permissions:
   contents: read
@@ -187,7 +185,6 @@ jobs:
           - fp8-cross-attention-blackwell
           - fused-mlp-megakernels-blackwell
           - masked-mha-runtime
-          - fa4-cute-runtime
 
     steps:
       - uses: actions/checkout@v4

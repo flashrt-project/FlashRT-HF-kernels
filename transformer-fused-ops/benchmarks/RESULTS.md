@@ -25,3 +25,15 @@ Source-extension benchmark on RTX 5090, PyTorch 2.9.1+cu128.
 
 The wrapper is 3.19x faster than eager, 3.82x faster than compile, and within
 0.1% of the raw FlashRT native entry.
+
+## NVIDIA Thor installed artifact
+
+- Device: NVIDIA Thor, SM110, aarch64
+- Runtime: PyTorch 2.13.0 + CUDA 13.0
+- Variant: `torch213-cxx11-cu130-aarch64-linux`
+- Native source: FlashRT `24df793f4fa2d50780aea03b644208c6e0cb4162`
+
+The GROOT N1.7 FP16 vector-family installed gate passed 38/38. A representative
+LayerNorm wrapper/raw measurement was `5.0586/5.0558 us` (`1.0006x`) in direct
+mode and `2.7327/2.7282 us` (`1.0016x`) under CUDA Graph. Correctness and
+static-buffer semantics are gated independently in `VALIDATION.md`.

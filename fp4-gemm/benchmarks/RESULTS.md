@@ -55,3 +55,17 @@ The direct entry is byte-exact against the package's established
 BF16-to-FP16 plus FP16-producer contract. The native timing is reported as a
 performance reference only because that producer uses a distinct quantization
 strategy.
+
+## NVIDIA Thor GROOT N1.7 artifact
+
+The SM110 additions from FlashRT
+`24df793f4fa2d50780aea03b644208c6e0cb4162` were rebuilt on NVIDIA Thor with
+PyTorch 2.13.0+cu130 as `torch213-cxx11-cu130-aarch64-linux`. The installed
+artifact passed 23/23 checks; BF16-to-FP4 output was exact and the fullgraph
+compile path had `max_abs=0`.
+
+The FP4 quantizer Tensor wrapper/raw registered-op measurement was
+`5.5812/5.0712 us` in direct mode. This eager delta includes Python-side
+allocation and dispatch. With caller-owned buffers under CUDA Graph, the
+measurement was `3.2988/3.3003 us` (`0.9995x`), which is the production GROOT
+hot-path contract.
