@@ -19,19 +19,30 @@ src = [
 
 [kernel.fp4_fused_ops]
 backend = "cuda"
-depends = ["torch", "cutlass_4_0"]
+depends = ["torch", "cutlass_4_4"]
 include = ["csrc", "csrc/quantize"]
 cuda-minver = "12.8"
 cuda-capabilities = ["11.0a", "12.0a"]
-cuda-flags = ["--expt-relaxed-constexpr", "-O3", "--use_fast_math"]
+cuda-flags = [
+  "-std=c++17",
+  "--expt-relaxed-constexpr",
+  "-O3",
+  "--use_fast_math",
+  "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+]
 src = [
   "csrc/fused_fp4/norm_silu_fp4_sfa.cu",
   "csrc/fused_fp4/norm_silu_fp4_sfa.cuh",
+  "csrc/fused_fp4/layer_norm_fp4_sfa.cu",
+  "csrc/fused_fp4/layer_norm_fp4_sfa.cuh",
+  "csrc/fused_fp4/siglip_ln_vec.cu",
+  "csrc/fused_fp4/siglip_ln_vec.cuh",
   "csrc/fused_fp4/dequantize_fp4_sfa.cu",
   "csrc/fused_fp4/dequantize_fp4_sfa.cuh",
   "csrc/fused_fp4/res_rms_fp4_sfa_v2.cu",
   "csrc/fused_fp4/res_rms_mul_fp4_sfa.cu",
   "csrc/fused_fp4/silu_mul_fp4_sfa_v2.cu",
+  "csrc/fused_fp4/silu_mul_fp4_sfa_vec.cu",
   "csrc/fused_fp4/silu_mul_mul_fp4_sfa_v2.cu",
   "csrc/fused_fp4/silu_mul_two_fp4_to_fp4.cu",
   "csrc/fused_fp4/silu_mul_two_fp4_to_fp4.cuh",

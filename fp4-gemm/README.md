@@ -14,6 +14,10 @@ paths.
 - `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
 - `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
+- `nvfp4_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
+- `nvfp4_gemm_geglu_nvfp4_fp16(a_packed, b_interleaved_packed, sfa, sfb, skinny=False, ...)`
+- `nvfp4_gemm_bias_gelu_nvfp4_fp16(a_packed, b_packed, sfa, sfb, bias, ...)`
+- `nvfp4_gemm_bias_residual_fp16(a_packed, b_packed, sfa, sfb, bias, residual, out=None)`
 - `nvfp4_gemm_bias_bf16(a_packed, b_packed, sfa, sfb, bias, out=None)`
 - `nvfp4_gemm_bias_residual_bf16(a_packed, b_packed, sfa, sfb, bias, residual, out=None)`
 - `nvfp4_gemm_residual_bf16(a_packed, b_packed, sfa, sfb, residual, alpha=1.0, out=None)`
@@ -30,6 +34,8 @@ paths.
 - `sfa`: `torch.uint8`, CUTLASS SFA layout for `(M, K)`.
 - `sfb`: `torch.uint8`, CUTLASS SFB layout for `(N, K)`.
 - output: `torch.bfloat16`, shape `(M, N)`.
+- Native SM110 PI0.5 epilogues use FP16 outputs/producers; their dtype is
+  explicit in the function name.
 - `K` must be divisible by 16.
 - Targets: Blackwell `sm_110a` (Jetson AGX Thor, CUDA 13+) and `sm_120a`
   (RTX Blackwell, CUDA 12.8+).
@@ -53,6 +59,11 @@ The SM110 release gate includes the production `(M,N,K)` shapes
 `(41,4608,1536)`, `(41,6144,1536)`, and `(41,1536,6144)`, plus the legacy
 `M=51` compatibility row. The kernels are the native sources used by FlashRT's
 GROOT N1.7 Thor NVFP4 pipeline.
+
+PI0.5 Thor coverage additionally includes FP16 linear projections, compact
+GeGLU-to-NVFP4, and SigLIP bias+GELU / bias+residual epilogues. SigLIP's
+logical hidden width `4304` is physically zero-padded to `4320` for the FP4
+TMA contract; direct `4304` GEMM calls are unsupported.
 
 ## Minimal Usage
 
@@ -114,3 +125,7 @@ low-bit values.
 The producer gate also checks the BF16 direct entry byte-for-byte against the
 established FP16 compatibility chain at decode widths 5120, 6144 and 17408,
 plus multi-row activation and SFB layouts.
+
+Release artifacts cover the standard x86 matrix (Torch 2.11/2.12/2.13 over
+the supported CUDA 12.8/13.x variants) and native Thor aarch64 builds for
+Torch 2.11 and 2.13 with CUDA 13.0. Consumers should request `version=1`.

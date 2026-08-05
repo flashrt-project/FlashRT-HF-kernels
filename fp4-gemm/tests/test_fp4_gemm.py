@@ -93,7 +93,7 @@ class SourceOps:
     def alloc_fp4(self, rows: int, dim: int):
         return (
             torch.empty((rows, dim // 2), device="cuda", dtype=torch.uint8),
-            torch.empty((self.sfa_size_bytes(rows, dim),), device="cuda", dtype=torch.uint8),
+            torch.zeros((self.sfa_size_bytes(rows, dim),), device="cuda", dtype=torch.uint8),
         )
 
     def quantize_fp4_sfa_fp16(self, x, packed, sfa, is_sfb=False):
@@ -107,6 +107,32 @@ class SourceOps:
 
     def nvfp4_gemm_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=0):
         self._ops.nvfp4_gemm_bf16(a, b, sfa, sfb, out, float(alpha), int(variant))
+
+    def nvfp4_gemm_fp16(self, a, b, sfa, sfb, out, alpha=1.0, variant=-1):
+        self._ops.nvfp4_gemm_fp16(
+            a, b, sfa, sfb, out, float(alpha), int(variant)
+        )
+
+    def nvfp4_gemm_geglu_nvfp4_fp16(
+        self, a, b, sfa, sfb, scratch, out_packed, out_sfa, skinny=False
+    ):
+        self._ops.nvfp4_gemm_geglu_nvfp4_fp16(
+            a, b, sfa, sfb, scratch, out_packed, out_sfa, bool(skinny)
+        )
+
+    def nvfp4_gemm_bias_gelu_nvfp4_fp16(
+        self, a, b, sfa, sfb, bias, out_packed, out_sfa
+    ):
+        self._ops.nvfp4_gemm_bias_gelu_nvfp4_fp16(
+            a, b, sfa, sfb, bias, out_packed, out_sfa
+        )
+
+    def nvfp4_gemm_bias_residual_fp16(
+        self, a, b, sfa, sfb, bias, residual, out
+    ):
+        self._ops.nvfp4_gemm_bias_residual_fp16(
+            a, b, sfa, sfb, bias, residual, out
+        )
 
     def nvfp4_gemm_bias_bf16(self, a, b, sfa, sfb, bias, out):
         self._ops.nvfp4_gemm_bias_bf16(a, b, sfa, sfb, bias, out)
@@ -158,7 +184,7 @@ class InstalledOps:
     def alloc_fp4(self, rows: int, dim: int):
         return (
             torch.empty((rows, dim // 2), device="cuda", dtype=torch.uint8),
-            torch.empty(
+            torch.zeros(
                 (self._module.sfa_size_bytes(rows, dim),),
                 device="cuda",
                 dtype=torch.uint8,
@@ -189,6 +215,35 @@ class InstalledOps:
             alpha=float(alpha),
             out=out,
             variant=int(variant),
+        )
+
+    def nvfp4_gemm_fp16(self, a, b, sfa, sfb, out, alpha=1.0, variant=-1):
+        self._module.nvfp4_gemm_fp16(
+            a, b, sfa, sfb, alpha=float(alpha), out=out,
+            variant=int(variant),
+        )
+
+    def nvfp4_gemm_geglu_nvfp4_fp16(
+        self, a, b, sfa, sfb, scratch, out_packed, out_sfa, skinny=False
+    ):
+        self._module.nvfp4_gemm_geglu_nvfp4_fp16(
+            a, b, sfa, sfb, skinny=bool(skinny), scratch=scratch,
+            out_packed=out_packed, out_sfa=out_sfa,
+        )
+
+    def nvfp4_gemm_bias_gelu_nvfp4_fp16(
+        self, a, b, sfa, sfb, bias, out_packed, out_sfa
+    ):
+        self._module.nvfp4_gemm_bias_gelu_nvfp4_fp16(
+            a, b, sfa, sfb, bias,
+            out_packed=out_packed, out_sfa=out_sfa,
+        )
+
+    def nvfp4_gemm_bias_residual_fp16(
+        self, a, b, sfa, sfb, bias, residual, out
+    ):
+        self._module.nvfp4_gemm_bias_residual_fp16(
+            a, b, sfa, sfb, bias, residual, out=out
         )
 
     def nvfp4_gemm_bias_bf16(self, a, b, sfa, sfb, bias, out):
@@ -258,6 +313,11 @@ def load_source_ops() -> SourceOps:
         gemm_sources = [
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_w4a16_gemm_sm100.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_bias_bf16_sm100.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_variants.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_fp4out.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_geglu_il_sm100.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_siglip_ffn_sm100.cu"),
             str(PACKAGE / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "sm110_dispatch.cu"),
         ]
@@ -286,6 +346,7 @@ def load_source_ops() -> SourceOps:
         ],
         extra_cflags=[flag for flag in ["-O3", "-DCUDA_KERNEL", source_define] if flag],
         extra_cuda_cflags=[
+            "-std=c++17",
             "-O3",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
@@ -528,6 +589,157 @@ def run_sm110_epilogue_case(ops, name: str, shape: tuple[int, int, int]):
     return rows
 
 
+def run_pi05_sm110_native_cases(ops, full_shapes: bool) -> list[Metrics]:
+    """Exercise the native PI0.5 FP16-output and compact FP4 epilogues."""
+
+    if torch.cuda.get_device_capability(0) != (11, 0):
+        return []
+
+    rows: list[Metrics] = []
+    base_shape = (51, 2048, 1024) if full_shapes else (16, 512, 512)
+    m, n, k = base_shape
+    a, b, sfa, sfb, a_deq, b_deq = prepare_quantized_full(
+        ops, m, n, k
+    )
+    expected = (a_deq.float() @ b_deq.float().T).to(torch.float16)
+    # Sweep every schedule on the bounded smoke shape.  The model-shape gate
+    # exercises the production auto-dispatch only; running six large schedule
+    # candidates back-to-back is an autotune stress test, not the runtime
+    # contract, and can retain substantial CUTLASS workspace state.
+    variants = (-1,) if full_shapes else (-1, 0, 1, 2, 7, 10)
+    for variant in variants:
+        out = torch.empty((m, n), device="cuda", dtype=torch.float16)
+        ops.nvfp4_gemm_fp16(a, b, sfa, sfb, out, 1.0, variant)
+        torch.cuda.synchronize()
+        rows.append(result_row(
+            f"pi05_fp16_linear_{m}x{n}x{k}", base_shape,
+            f"nvfp4_gemm_fp16_v{variant}", out, expected,
+        ))
+
+    geglu_shape = (51, 4096, 1024) if full_shapes else (16, 1024, 512)
+    m, n_twice, k = geglu_shape
+    a_fp16, _ = make_inputs(m, n_twice, k, seed=20260801)
+    gate_weight = (
+        torch.randn((n_twice // 2, k), device="cuda") * 0.02
+    ).to(torch.float16)
+    up_weight = (
+        torch.randn((n_twice // 2, k), device="cuda") * 0.02
+    ).to(torch.float16)
+    interleaved = torch.empty(
+        (n_twice, k), device="cuda", dtype=torch.float16
+    )
+    interleaved[0::2] = gate_weight
+    interleaved[1::2] = up_weight
+    a, sfa = ops.alloc_fp4(m, k)
+    b, sfb = ops.alloc_fp4(n_twice, k)
+    ops.quantize_fp4_sfa_fp16(a_fp16, a, sfa, False)
+    ops.quantize_fp4_sfa_fp16(interleaved, b, sfb, True)
+    a_deq = torch.empty_like(a_fp16)
+    b_deq = torch.empty_like(interleaved)
+    ops.dequantize_fp4_sfa_fp16(a, sfa, a_deq, False)
+    ops.dequantize_fp4_sfa_fp16(b, sfb, b_deq, True)
+    gate = a_deq.float() @ b_deq[0::2].float().T
+    up = a_deq.float() @ b_deq[1::2].float().T
+    geglu_ref = (
+        torch.nn.functional.gelu(gate, approximate="tanh") * up
+    ).to(torch.float16)
+    staged_packed, staged_sfa = ops.alloc_fp4(m, n_twice // 2)
+    ops.quantize_fp4_sfa_fp16(
+        geglu_ref, staged_packed, staged_sfa, False
+    )
+    staged = torch.empty_like(geglu_ref)
+    ops.dequantize_fp4_sfa_fp16(
+        staged_packed, staged_sfa, staged, False
+    )
+    for skinny in (False, True):
+        out_packed, out_sfa = ops.alloc_fp4(m, n_twice // 2)
+        scratch = torch.empty(
+            (m, n_twice // 2), device="cuda", dtype=torch.uint8
+        )
+        ops.nvfp4_gemm_geglu_nvfp4_fp16(
+            a, b, sfa, sfb, scratch, out_packed, out_sfa, skinny
+        )
+        out = torch.empty_like(geglu_ref)
+        ops.dequantize_fp4_sfa_fp16(
+            out_packed, out_sfa, out, False
+        )
+        rows.append(result_row(
+            f"pi05_geglu_{m}x{n_twice}x{k}", geglu_shape,
+            f"nvfp4_gemm_geglu_nvfp4_fp16_skinny_{skinny}",
+            out, staged, fp4_output=True,
+        ))
+
+    # SigLIP's logical FFN width is 4304.  The production NVFP4 path pads
+    # that physical GEMM dimension to 4320 for the 32-element TMA contract;
+    # the extra weights and bias values are zero and are sliced by the host.
+    siglip_shape = (768, 4320, 1152) if full_shapes else (64, 512, 512)
+    m, n, k = siglip_shape
+    a, b, sfa, sfb, a_deq, b_deq = prepare_quantized_full(
+        ops, m, n, k
+    )
+    matmul = a_deq.float() @ b_deq.float().T
+    bias = (torch.randn(n, device="cuda") * 0.02).to(torch.float16)
+    out_packed, out_sfa = ops.alloc_fp4(m, n)
+    ops.nvfp4_gemm_bias_gelu_nvfp4_fp16(
+        a, b, sfa, sfb, bias, out_packed, out_sfa
+    )
+    torch.cuda.synchronize()
+    out = torch.empty((m, n), device="cuda", dtype=torch.float16)
+    ops.dequantize_fp4_sfa_fp16(out_packed, out_sfa, out, False)
+    gelu_ref = torch.nn.functional.gelu(
+        matmul + bias.float().view(1, -1), approximate="tanh"
+    ).to(torch.float16)
+    staged_packed, staged_sfa = ops.alloc_fp4(m, n)
+    ops.quantize_fp4_sfa_fp16(
+        gelu_ref, staged_packed, staged_sfa, False
+    )
+    staged = torch.empty_like(out)
+    ops.dequantize_fp4_sfa_fp16(
+        staged_packed, staged_sfa, staged, False
+    )
+    rows.append(result_row(
+        f"siglip_up_{m}x{n}x{k}", siglip_shape,
+        "nvfp4_gemm_bias_gelu_nvfp4_fp16", out, staged,
+        fp4_output=True,
+    ))
+
+    # Release the large eager-reference temporaries before constructing the
+    # independent down-projection case.  Production uses preallocated buffers;
+    # retaining both full reference chains here only stresses the test allocator.
+    del matmul, gelu_ref, staged, staged_packed, staged_sfa, out
+    del out_packed, out_sfa, a, b, sfa, sfb, a_deq, b_deq
+    torch.cuda.empty_cache()
+
+    down_shape = (768, 1152, 4320) if full_shapes else (64, 512, 512)
+    m, n, k = down_shape
+    a, b, sfa, sfb, a_deq, b_deq = prepare_quantized_full(
+        ops, m, n, k
+    )
+    bias = (torch.randn(n, device="cuda") * 0.02).to(torch.float16)
+    residual = torch.randn(
+        (m, n), device="cuda", dtype=torch.float16
+    )
+    residual_before = residual.clone()
+    # The production residual epilogue is intentionally in-place (C == D).
+    # Exercise that exact contract rather than an unsupported out-of-place
+    # layout.
+    out = residual
+    ops.nvfp4_gemm_bias_residual_fp16(
+        a, b, sfa, sfb, bias, residual, out
+    )
+    torch.cuda.synchronize()
+    expected = (
+        a_deq.float() @ b_deq.float().T
+        + bias.float().view(1, -1)
+        + residual_before.float()
+    ).to(torch.float16)
+    rows.append(result_row(
+        f"siglip_down_{m}x{n}x{k}", down_shape,
+        "nvfp4_gemm_bias_residual_fp16", out, expected,
+    ))
+    return rows
+
+
 def check_installed_compile(ops: InstalledOps) -> dict[str, object]:
     a_packed, b_packed, sfa, sfb, _ = prepare_quantized(ops, 128, 128, 128)
 
@@ -634,6 +846,10 @@ def main() -> int:
             results.extend(run_sm110_epilogue_case(
                 ops, name, SM110_SHAPES[name]
             ))
+    if capability == (11, 0):
+        results.extend(run_pi05_sm110_native_cases(
+            ops, full_shapes=args.mode == "thor-models"
+        ))
     compile_check = None
     bf16_quantizer_check = check_bf16_quantizer(ops)
     if args.backend == "installed" and args.mode == "full":

@@ -19,7 +19,8 @@ def sfa_size_bytes(rows: int, dim: int) -> int:
 def _alloc_fp4(rows: int, dim: int, device: torch.device | str):
     return (
         torch.empty((rows, dim // 2), device=device, dtype=torch.uint8),
-        torch.empty((sfa_size_bytes(rows, dim),), device=device, dtype=torch.uint8),
+        # Tile-layout padding entries are not written by every quantizer.
+        torch.zeros((sfa_size_bytes(rows, dim),), device=device, dtype=torch.uint8),
     )
 
 
@@ -33,6 +34,26 @@ def _linear_fake(
     alpha: float = 1.0,
     variant: int = -1,
 ) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_fp16"))
+def _linear_fp16_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, variant: int = -1) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_geglu_nvfp4_fp16"))
+def _geglu_fp4_fake(a, b, sfa, sfb, scratch, out_packed, out_sfa, skinny: bool = False) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_bias_gelu_nvfp4_fp16"))
+def _bias_gelu_fp4_fp16_fake(a, b, sfa, sfb, bias, out_packed, out_sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_bias_residual_fp16"))
+def _bias_residual_fp16_fake(a, b, sfa, sfb, bias, residual, out) -> None:
     return None
 
 
@@ -159,6 +180,100 @@ def nvfp4_gemm_bf16(
     if out is None:
         out = torch.empty((a_packed.shape[0], b_packed.shape[0]), device=a_packed.device, dtype=torch.bfloat16)
     ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, out, float(alpha), int(variant))
+    return out
+
+
+def nvfp4_gemm_fp16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+    variant: int = -1,
+) -> torch.Tensor:
+    """SM110 native NVFP4 GEMM with FP16 output."""
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.float16,
+        )
+    ops.nvfp4_gemm_fp16(
+        a_packed, b_packed, sfa, sfb, out, float(alpha), int(variant)
+    )
+    return out
+
+
+def nvfp4_gemm_geglu_nvfp4_fp16(
+    a_packed: torch.Tensor,
+    b_interleaved_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    skinny: bool = False,
+    scratch: torch.Tensor | None = None,
+    out_packed: torch.Tensor | None = None,
+    out_sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """GEMM with fused GeGLU and compact NVFP4 output on SM110.
+
+    ``b_interleaved_packed`` stores gate/up rows pairwise, so its first
+    dimension is twice the logical hidden width.
+    """
+    m, n_twice = a_packed.shape[0], b_interleaved_packed.shape[0]
+    hidden = n_twice // 2
+    if scratch is None:
+        scratch = torch.empty((m, hidden), device=a_packed.device, dtype=torch.uint8)
+    if out_packed is None:
+        out_packed = torch.empty((m, hidden // 2), device=a_packed.device, dtype=torch.uint8)
+    if out_sfa is None:
+        out_sfa = torch.zeros((sfa_size_bytes(m, hidden),), device=a_packed.device, dtype=torch.uint8)
+    ops.nvfp4_gemm_geglu_nvfp4_fp16(
+        a_packed, b_interleaved_packed, sfa, sfb, scratch,
+        out_packed, out_sfa, bool(skinny)
+    )
+    return out_packed, out_sfa
+
+
+def nvfp4_gemm_bias_gelu_nvfp4_fp16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    bias: torch.Tensor,
+    *,
+    out_packed: torch.Tensor | None = None,
+    out_sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """FP16-bias GEMM with fused GELU and NVFP4 output on SM110."""
+    m, n = a_packed.shape[0], b_packed.shape[0]
+    if out_packed is None:
+        out_packed = torch.empty((m, n // 2), device=a_packed.device, dtype=torch.uint8)
+    if out_sfa is None:
+        out_sfa = torch.zeros((sfa_size_bytes(m, n),), device=a_packed.device, dtype=torch.uint8)
+    ops.nvfp4_gemm_bias_gelu_nvfp4_fp16(
+        a_packed, b_packed, sfa, sfb, bias, out_packed, out_sfa
+    )
+    return out_packed, out_sfa
+
+
+def nvfp4_gemm_bias_residual_fp16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    bias: torch.Tensor,
+    residual: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """FP16-output GEMM with fused FP16 bias and residual on SM110."""
+    if out is None:
+        out = torch.empty_like(residual)
+    ops.nvfp4_gemm_bias_residual_fp16(
+        a_packed, b_packed, sfa, sfb, bias, residual, out
+    )
     return out
 
 
@@ -292,7 +407,7 @@ def nvfp4_gemm_bias_gelu_nvfp4(
     if out_packed is None:
         out_packed = torch.empty((m, n // 2), device=a_packed.device, dtype=torch.uint8)
     if out_sfa is None:
-        out_sfa = torch.empty((sfa_size_bytes(m, n),), device=a_packed.device, dtype=torch.uint8)
+        out_sfa = torch.zeros((sfa_size_bytes(m, n),), device=a_packed.device, dtype=torch.uint8)
     ops.nvfp4_gemm_bias_gelu_nvfp4(
         a_packed, b_packed, sfa, sfb, bias, out_packed, out_sfa, float(alpha)
     )
@@ -345,6 +460,10 @@ __all__ = [
     "fp4_w4a16_linear_bf16",
     "fp4_w4a4_gemv_warpsplit_bf16",
     "nvfp4_gemm_bf16",
+    "nvfp4_gemm_fp16",
+    "nvfp4_gemm_geglu_nvfp4_fp16",
+    "nvfp4_gemm_bias_gelu_nvfp4_fp16",
+    "nvfp4_gemm_bias_residual_fp16",
     "nvfp4_gemm_bias_bf16",
     "nvfp4_gemm_bias_gelu_bf16",
     "nvfp4_gemm_bias_gelu_nvfp4",

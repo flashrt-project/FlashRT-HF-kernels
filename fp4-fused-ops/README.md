@@ -4,9 +4,9 @@ FlashRT fused FP16-to-NVFP4 producer kernels for keeping low-bit transformer
 and diffuser paths continuous.
 
 The source kernels use the CUTLASS SM100-family block-scale layout shared by
-SM110 and SM120. Published artifacts are architecture-specific: RTX variants
-are built by HF Jobs, while the Thor `torch211-cxx11-cu130-aarch64-linux`
-variant is built and validated on Jetson AGX Thor before incremental upload.
+SM110 and SM120. Published artifacts are architecture-specific. Native Thor
+artifacts cover Torch 2.11 and 2.13 with CUDA 13.0 and are validated on Jetson
+AGX Thor before upload.
 
 These kernels turn FP16 residual/norm/gated activations directly into NVFP4
 packed tensors plus CUTLASS-compatible SFA scale-factor buffers. They are meant
@@ -25,6 +25,11 @@ chains.
 - `silu_mul_mul_fp4_sfa_v2_fp16(merged, inv_s, packed=None, sfa=None)`
 - `silu_mul_two_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, out_packed=None, out_sfa=None)`
 - `silu_mul_two_mul_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed=None, out_sfa=None)`
+- `adaptive_rms_norm_nvfp4_fp16(x, style, packed=None, sfa=None, gate=None)`
+- `gated_residual_adaptive_rms_norm_nvfp4_fp16(x, previous_gate, residual, style, ...)`
+- `layer_norm_fp8_fp16(x, gamma, beta, eps=1e-5, out=None)`
+- `layer_norm_nvfp4_fp16(x, gamma, beta, inv_s=None, eps=1e-5, ...)`
+- `gelu_mul_nvfp4_fp16(merged, packed=None, sfa=None)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None)`
 - `quantize_bf16_to_nvfp4_linear(input, packed=None, scale_factors=None)`
 - `rms_silu_nvfp4_ndhwc_bf16(x, gamma, awq_inv_scale=None, eps=1e-6, packed=None, scale_factors=None)`
@@ -43,6 +48,10 @@ Tensor contract:
   shapes should use `residual_add_rms_norm_fp4_sfa_v2_fp16`.
 - All dimensions must be divisible by 16. Unsupported shapes raise instead of
   silently taking a slow or partial path.
+- PI0.5 adaptive RMSNorm producers currently require `dim=1024`; `style` is
+  `(rows, 3 * dim)` containing scale, shift, and gate.
+- Automatically allocated SFA buffers are zero-initialized because CUTLASS
+  tile padding is intentionally not written by every producer.
 - Linear NVFP4 uses E2M1 values and linear UE4M3 scale bytes per 16 channels.
 - NCDHW RMS kernels accept BF16 `(B,C,T,H,W)`, even `C <= 1024`; the fused
   NVFP4 producer requires `C % 128 == 0`.

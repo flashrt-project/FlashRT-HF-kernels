@@ -86,7 +86,7 @@ class SourceOps:
     def alloc(self, rows: int, dim: int, device: str = "cuda") -> tuple[torch.Tensor, torch.Tensor]:
         return (
             torch.empty((rows, dim // 2), device=device, dtype=torch.uint8),
-            torch.empty((self.sfa_size_bytes(rows, dim, False),), device=device, dtype=torch.uint8),
+            torch.zeros((self.sfa_size_bytes(rows, dim, False),), device=device, dtype=torch.uint8),
         )
 
     def rms_norm_fp4_sfa_fp16(self, x, packed, sfa):
@@ -117,6 +117,29 @@ class SourceOps:
         self._ops.silu_mul_two_mul_fp4_to_fp4(
             gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed, out_sfa
         )
+
+    def adaptive_rms_norm_nvfp4_fp16(self, x, style, packed, sfa, gate):
+        self._ops.adaptive_rms_norm_nvfp4_fp16(x, style, packed, sfa, gate)
+
+    def gated_residual_adaptive_rms_norm_nvfp4_fp16(
+        self, x, previous_gate, residual, style, packed, sfa, gate
+    ):
+        self._ops.gated_residual_adaptive_rms_norm_nvfp4_fp16(
+            x, previous_gate, residual, style, packed, sfa, gate
+        )
+
+    def layer_norm_fp8_fp16(self, x, gamma, beta, eps, out):
+        self._ops.layer_norm_fp8_fp16(x, gamma, beta, float(eps), out)
+
+    def layer_norm_nvfp4_fp16(
+        self, x, gamma, beta, inv_s, eps, packed, sfa
+    ):
+        self._ops.layer_norm_nvfp4_fp16(
+            x, gamma, beta, inv_s, float(eps), packed, sfa
+        )
+
+    def gelu_mul_nvfp4_fp16(self, merged, packed, sfa):
+        self._ops.gelu_mul_nvfp4_fp16(merged, packed, sfa)
 
     def dequantize_fp4_sfa_fp16(self, packed, sfa, out):
         self._ops.dequantize_fp4_sfa_fp16(packed, sfa, out)
@@ -169,7 +192,7 @@ def alloc_fp4(ops, rows: int, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
 
     return (
         torch.empty((rows, dim // 2), device="cuda", dtype=torch.uint8),
-        torch.empty(
+        torch.zeros(
             (ops.sfa_size_bytes(rows, dim, False),),
             device="cuda",
             dtype=torch.uint8,
@@ -201,6 +224,9 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "fused_fp4" / "norm_silu_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "layer_norm_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "siglip_ln_vec.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "silu_mul_fp4_sfa_vec.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "dequantize_fp4_sfa.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "res_rms_fp4_sfa_v2.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "res_rms_mul_fp4_sfa.cu"),
@@ -215,11 +241,13 @@ def load_source_ops() -> SourceOps:
         extra_include_paths=[str(PACKAGE / "csrc"), str(PACKAGE / "csrc" / "quantize"), str(cutlass_include), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
         extra_cuda_cflags=[
+            "-std=c++17",
             "-O3",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "--use_fast_math",
             "-DCUDA_KERNEL",
+            "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
         ],
         verbose=False,
     )
@@ -230,7 +258,14 @@ def load_installed_ops(artifact: str | None):
     if artifact:
         sys.path.insert(0, artifact)
     try:
-        return importlib.import_module("fp4_fused_ops")
+        module = importlib.import_module("fp4_fused_ops")
+        # Exercise the installed torch.library ABI with the same explicit
+        # output-buffer contract used by source tests.  The public Python
+        # helpers intentionally expose a more convenient keyword API.
+        adapter = object.__new__(SourceOps)
+        adapter._ops = module.ops
+        adapter._anchor = torch.empty((1,), device="cuda", dtype=torch.uint8)
+        return adapter
     finally:
         if artifact:
             sys.path.remove(artifact)
@@ -279,6 +314,212 @@ def check_fp4_path_equivalence_threshold(max_abs: float, mean_abs: float, p99_ab
 
 def check_fp4_quant_reference_threshold(max_abs: float, mean_abs: float, p99_abs: float, cosine: float) -> bool:
     return max_abs <= 1.0 and mean_abs <= 0.10 and p99_abs <= 0.40 and cosine >= 0.99
+
+
+def run_pi05_thor_producer_checks(ops) -> list[CaseResult]:
+    """Validate SM110 producers and report their expected quantization loss.
+
+    These kernels emit NVFP4/FP8, so comparing their dequantized values with
+    the pre-quantization FP16 tensor is a quantization-quality check, not an
+    exact-equivalence check.  Residual and gate outputs remain bit-exact.  The
+    native producer implementations are copied byte-for-byte from the PI0.5
+    production runtime and are additionally covered there by fused-vs-staged
+    and end-to-end parity tests.
+    """
+
+    if torch.cuda.get_device_capability(0) != (11, 0):
+        return []
+
+    results: list[CaseResult] = []
+    rows, dim = 10, 1024
+    x = make_fp16((rows, dim), 20260725, 0.2)
+    style = make_fp16((rows, 3 * dim), 20260726, 0.1)
+    packed, sfa = alloc_fp4(ops, rows, dim)
+    packed.zero_()
+    sfa.zero_()
+    gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_nvfp4_fp16(x, style, packed, sfa, gate)
+    torch.cuda.synchronize()
+
+    scale, shift, gate_ref = style.chunk(3, dim=-1)
+    rstd = torch.rsqrt(x.float().square().mean(dim=-1, keepdim=True) + 1e-6)
+    normed_ref = (
+        x.float() * rstd * (1.0 + scale.float()) + shift.float()
+    ).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, normed_ref
+    )
+    gate_equal = check_equal(gate, gate_ref)
+    results.append(
+        CaseResult(
+            case="pi05_adaptive_rms_rows10_dim1024",
+            rows=rows,
+            dim=dim,
+            check="adaptive_rms_norm_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=gate_equal,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(
+                gate_equal
+                and check_fp4_quant_reference_threshold(
+                    max_abs, mean_abs, p99_abs, cosine
+                )
+            ),
+        )
+    )
+
+    delta = make_fp16((rows, dim), 20260727, 0.1)
+    previous_gate = make_fp16((rows, dim), 20260728, 0.1)
+    residual = make_fp16((rows, dim), 20260729, 0.15)
+    residual_ref = (
+        residual.float() + delta.float() * previous_gate.float()
+    ).to(torch.float16)
+    packed.zero_()
+    sfa.zero_()
+    ops.gated_residual_adaptive_rms_norm_nvfp4_fp16(
+        delta, previous_gate, residual, style, packed, sfa, gate
+    )
+    torch.cuda.synchronize()
+    rstd = torch.rsqrt(
+        residual_ref.float().square().mean(dim=-1, keepdim=True) + 1e-6
+    )
+    normed_ref = (
+        residual_ref.float() * rstd * (1.0 + scale.float()) + shift.float()
+    ).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, normed_ref
+    )
+    residual_equal = check_equal(residual, residual_ref)
+    gate_equal = check_equal(gate, gate_ref)
+    results.append(
+        CaseResult(
+            case="pi05_gated_residual_adaptive_rms_rows10_dim1024",
+            rows=rows,
+            dim=dim,
+            check="gated_residual_adaptive_rms_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=residual_equal,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(
+                residual_equal
+                and gate_equal
+                and check_fp4_quant_reference_threshold(
+                    max_abs, mean_abs, p99_abs, cosine
+                )
+            ),
+        )
+    )
+
+    rows, dim, eps = 768, 1152, 1e-5
+    x = make_fp16((rows, dim), 20260730, 1.5)
+    gamma = (make_fp16((1, dim), 20260731, 0.2).reshape(dim) + 1).contiguous()
+    beta = make_fp16((1, dim), 20260732, 0.1).reshape(dim).contiguous()
+    inv_s = (torch.rand(dim, device="cuda", dtype=torch.float16) + 0.5).contiguous()
+    mean = x.float().mean(dim=-1, keepdim=True)
+    var = (x.float() - mean).square().mean(dim=-1, keepdim=True)
+    ln_ref = (
+        (x.float() - mean) * torch.rsqrt(var + eps) * gamma.float()
+        + beta.float()
+    ).to(torch.float16)
+
+    out_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.layer_norm_fp8_fp16(x, gamma, beta, eps, out_fp8)
+    torch.cuda.synchronize()
+    ref_fp8 = ln_ref.to(torch.float8_e4m3fn)
+    fp8_diff = (out_fp8.float() - ref_fp8.float()).abs().flatten()
+    fp8_cos = float(torch.nn.functional.cosine_similarity(
+        out_fp8.float().flatten(), ref_fp8.float().flatten(), dim=0
+    ))
+    fp8_agree = float((out_fp8.view(torch.uint8) == ref_fp8.view(torch.uint8)).float().mean())
+    results.append(
+        CaseResult(
+            case="siglip_layer_norm_rows768_dim1152",
+            rows=rows,
+            dim=dim,
+            check="layer_norm_fp8_quantization_quality_vs_math",
+            packed_equal=float(torch.quantile(fp8_diff, 0.99)) == 0.0,
+            sfa_equal=True,
+            residual_equal=None,
+            max_abs=float(fp8_diff.max()),
+            mean_abs=float(fp8_diff.mean()),
+            p99_abs=float(torch.quantile(fp8_diff, 0.99)),
+            cosine=fp8_cos,
+            # Reduction order differs from eager LayerNorm at FP8 bin
+            # boundaries.  The production acceptance test separately checks
+            # >99.9% byte agreement against the native LayerNorm kernel.
+            passed=(
+                float(torch.quantile(fp8_diff, 0.99)) == 0.0
+                and float(fp8_diff.mean()) <= 5e-4
+                and fp8_cos >= 0.99998
+            ),
+        )
+    )
+
+    packed, sfa = alloc_fp4(ops, rows, dim)
+    ops.layer_norm_nvfp4_fp16(x, gamma, beta, inv_s, eps, packed, sfa)
+    awq_ref = (ln_ref.float() * inv_s.float()).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, awq_ref
+    )
+    results.append(
+        CaseResult(
+            case="siglip_layer_norm_awq_rows768_dim1152",
+            rows=rows,
+            dim=dim,
+            check="layer_norm_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=None,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=check_fp4_quant_reference_threshold(
+                max_abs, mean_abs, p99_abs, cosine
+            ),
+        )
+    )
+
+    merged = make_fp16((51, 4096), 20260733, 0.4)
+    packed, sfa = alloc_fp4(ops, 51, 2048)
+    ops.gelu_mul_nvfp4_fp16(merged, packed, sfa)
+    gate_values, up_values = merged.chunk(2, dim=-1)
+    gelu_ref = (
+        torch.nn.functional.gelu(
+            gate_values.float(), approximate="tanh"
+        )
+        * up_values.float()
+    ).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, gelu_ref
+    )
+    results.append(
+        CaseResult(
+            case="pi05_gelu_mul_rows51_dim2048",
+            rows=51,
+            dim=2048,
+            check="gelu_mul_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=None,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=check_fp4_quant_reference_threshold(
+                max_abs, mean_abs, p99_abs, cosine
+            ),
+        )
+    )
+    return results
 
 
 def encode_ue4m3_ceil(value: float) -> int:
@@ -886,6 +1127,7 @@ def main() -> int:
     results.extend(run_linear_nvfp4_checks(ops))
     results.extend(run_ncdhw_bf16_checks(ops))
     results.extend(run_unsupported_checks(ops))
+    results.extend(run_pi05_thor_producer_checks(ops))
 
     passed = sum(1 for item in results if item.passed)
     payload = {
