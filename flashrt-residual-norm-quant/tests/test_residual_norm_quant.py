@@ -60,6 +60,12 @@ class SourceOps:
         )
         return out
 
+    def residual_add_rms_norm_bf16(self, residual, x, weight, eps=1e-6, out=None):
+        if out is None:
+            out = torch.empty_like(x, dtype=torch.bfloat16)
+        self._ops.residual_add_rms_norm_bf16(residual, x, weight, float(eps), out)
+        return out
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -268,6 +274,28 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
         f"{label}/residual_add_rms_norm_quant_fp8_static_bf16",
         got_res_fp8,
         exp_res_fp8,
+    )
+
+    residual.copy_(residual_in)
+    got_res_bf16 = ops.residual_add_rms_norm_bf16(
+        residual, x, weight, eps
+    )
+    assert_close_distribution(
+        f"{label}/residual_add_rms_norm_bf16_inplace",
+        residual,
+        exp_residual,
+        p99_abs_limit=0.0,
+        p99_rel_limit=0.0,
+    )
+    added_fp32 = residual_in.float() + x.float()
+    added_rms = torch.rsqrt(added_fp32.square().mean(1, keepdim=True) + eps)
+    expected_bf16 = (exp_residual.float() * added_rms * weight.float()).to(torch.bfloat16)
+    assert_close_distribution(
+        f"{label}/residual_add_rms_norm_bf16",
+        got_res_bf16,
+        expected_bf16,
+        p99_abs_limit=0.015625,
+        p99_rel_limit=0.02,
     )
 
 

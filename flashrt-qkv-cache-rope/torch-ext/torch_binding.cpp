@@ -11,6 +11,7 @@
 #endif
 
 #include "qkv_cache_rope.cuh"
+#include "cosmos_edge/cosmos3_edge_misc.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -586,6 +587,144 @@ void qkv_split_rope_kvcache_bf16(
 #endif
 }
 
+void qkv_split_rope_kvcache_fp16(
+    torch::Tensor const& packed_qkv,
+    torch::Tensor const& rope,
+    int64_t q_heads64,
+    int64_t kv_heads64,
+    int64_t head_dim64,
+    int64_t cache_offset64,
+    c10::optional<torch::Tensor> const& device_position,
+    torch::Tensor& q_out,
+    torch::Tensor& k_cache,
+    torch::Tensor& v_cache) {
+  check_fp16(packed_qkv, "packed_qkv");
+  check_fp16(rope, "rope");
+  check_fp16(q_out, "q_out");
+  check_fp16(k_cache, "k_cache");
+  check_fp16(v_cache, "v_cache");
+  TORCH_CHECK(packed_qkv.dim() == 3,
+              "packed_qkv must have shape (batch, seq_len, packed_width)");
+  const int64_t batch = packed_qkv.size(0);
+  const int64_t seq_len = packed_qkv.size(1);
+  const int q_heads = checked_int(q_heads64, "q_heads");
+  const int kv_heads = checked_int(kv_heads64, "kv_heads");
+  const int head_dim = checked_int(head_dim64, "head_dim");
+  TORCH_CHECK(head_dim % 2 == 0, "head_dim must be even");
+  const int64_t q_dim = q_heads64 * head_dim64;
+  const int64_t kv_dim = kv_heads64 * head_dim64;
+  TORCH_CHECK(packed_qkv.size(2) == q_dim + 2 * kv_dim,
+              "packed_qkv has an invalid GQA width");
+  TORCH_CHECK(rope.dim() == 2 && rope.size(0) >= seq_len &&
+                  rope.size(1) == head_dim,
+              "rope must have shape (>= seq_len, head_dim)");
+  TORCH_CHECK(q_out.sizes() ==
+                  torch::IntArrayRef({batch, seq_len, q_heads64, head_dim64}),
+              "q_out has an invalid shape");
+  TORCH_CHECK(k_cache.dim() == 4 && k_cache.size(0) == batch &&
+                  k_cache.size(2) == kv_heads64 &&
+                  k_cache.size(3) == head_dim64,
+              "k_cache must have shape (batch, max_seq_len, kv_heads, head_dim)");
+  TORCH_CHECK(v_cache.sizes() == k_cache.sizes(),
+              "v_cache must have the same shape as k_cache");
+  TORCH_CHECK(cache_offset64 >= 0, "cache_offset must be non-negative");
+  if (!device_position.has_value()) {
+    TORCH_CHECK(cache_offset64 + seq_len <= k_cache.size(1),
+                "cache_offset + seq_len exceeds cache capacity");
+  }
+  check_same_device(packed_qkv, rope, "packed_qkv", "rope");
+  check_same_device(packed_qkv, q_out, "packed_qkv", "q_out");
+  check_same_device(packed_qkv, k_cache, "packed_qkv", "k_cache");
+  check_same_device(packed_qkv, v_cache, "packed_qkv", "v_cache");
+  const void* device_position_ptr = nullptr;
+  if (device_position.has_value()) {
+    auto const& position = device_position.value();
+    check_int32(position, "device_position");
+    TORCH_CHECK(position.numel() == 1,
+                "device_position must contain one int32 element");
+    check_same_device(packed_qkv, position, "packed_qkv", "device_position");
+    device_position_ptr = position.data_ptr();
+  }
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(packed_qkv.device());
+  auto stream = at::cuda::getCurrentCUDAStream(packed_qkv.get_device()).stream();
+  flash_rt::qkv_cache_rope::qkv_split_rope_kvcache_fp16(
+      packed_qkv.data_ptr(), rope.data_ptr(), q_out.data_ptr(),
+      k_cache.data_ptr(), v_cache.data_ptr(), device_position_ptr,
+      checked_int(batch, "batch"), checked_int(seq_len, "seq_len"),
+      checked_int(k_cache.size(1), "max_seq_len"), q_heads, kv_heads,
+      head_dim, checked_nonnegative_int(cache_offset64, "cache_offset"), stream);
+#else
+  TORCH_CHECK(false, "flashrt-qkv-cache-rope was not built with CUDA support");
+#endif
+}
+
+void qk_norm_rope_strided_bf16(
+    torch::Tensor const& q_in,
+    torch::Tensor const& k_in,
+    torch::Tensor const& q_weight,
+    torch::Tensor const& k_weight,
+    torch::Tensor const& cos,
+    torch::Tensor const& sin,
+    int64_t q_heads64,
+    int64_t k_heads64,
+    double eps,
+    torch::Tensor& q_out,
+    torch::Tensor& k_out) {
+  check_bf16(q_in, "q_in");
+  check_bf16(k_in, "k_in");
+  check_bf16(q_weight, "q_weight");
+  check_bf16(k_weight, "k_weight");
+  check_bf16(cos, "cos");
+  check_bf16(sin, "sin");
+  check_bf16(q_out, "q_out");
+  check_bf16(k_out, "k_out");
+  const int q_heads = checked_int(q_heads64, "q_heads");
+  const int k_heads = checked_int(k_heads64, "k_heads");
+  TORCH_CHECK(q_in.dim() == 2 && k_in.dim() == 2 &&
+                  q_in.size(0) == k_in.size(0),
+              "q_in and k_in must be rank-2 with the same row count");
+  const int64_t rows = q_in.size(0);
+  TORCH_CHECK(q_in.size(1) >= q_heads64 * 128 &&
+                  k_in.size(1) >= k_heads64 * 128,
+              "input row widths must cover heads * 128");
+  TORCH_CHECK(q_weight.sizes() == torch::IntArrayRef({128}) &&
+                  k_weight.sizes() == torch::IntArrayRef({128}),
+              "Q/K weights must have shape (128,)");
+  TORCH_CHECK(cos.sizes() == torch::IntArrayRef({rows, 128}) &&
+                  sin.sizes() == cos.sizes(),
+              "cos and sin must have shape (rows, 128)");
+  TORCH_CHECK(q_out.sizes() == torch::IntArrayRef({rows, q_heads64, 128}) &&
+                  k_out.sizes() == torch::IntArrayRef({rows, k_heads64, 128}),
+              "output shapes must be (rows, heads, 128)");
+  check_same_device(q_in, k_in, "q_in", "k_in");
+  check_same_device(q_in, q_weight, "q_in", "q_weight");
+  check_same_device(q_in, k_weight, "q_in", "k_weight");
+  check_same_device(q_in, cos, "q_in", "cos");
+  check_same_device(q_in, sin, "q_in", "sin");
+  check_same_device(q_in, q_out, "q_in", "q_out");
+  check_same_device(q_in, k_out, "q_in", "k_out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(q_in.device());
+  auto stream = at::cuda::getCurrentCUDAStream(q_in.get_device()).stream();
+  flash_rt::kernels::cosmos3_edge_qk_norm_rope_strided_bf16(
+      static_cast<const __nv_bfloat16*>(q_in.data_ptr()),
+      static_cast<const __nv_bfloat16*>(k_in.data_ptr()),
+      static_cast<const __nv_bfloat16*>(q_weight.data_ptr()),
+      static_cast<const __nv_bfloat16*>(k_weight.data_ptr()),
+      static_cast<const __nv_bfloat16*>(cos.data_ptr()),
+      static_cast<const __nv_bfloat16*>(sin.data_ptr()),
+      static_cast<__nv_bfloat16*>(q_out.data_ptr()),
+      static_cast<__nv_bfloat16*>(k_out.data_ptr()),
+      checked_int(rows, "rows"), q_heads, k_heads,
+      checked_int(q_in.size(1), "q_input_row_stride"),
+      checked_int(k_in.size(1), "k_input_row_stride"),
+      static_cast<float>(eps), stream);
+#else
+  TORCH_CHECK(false, "flashrt-qkv-cache-rope was not built with CUDA support");
+#endif
+}
+
 void qkv_split_bf16(
     torch::Tensor const& packed_qkv,
     int64_t heads64,
@@ -985,6 +1124,14 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("qkv_split_rope_kvcache_bf16("
           "Tensor packed_qkv, Tensor rope, int q_heads, int kv_heads, int head_dim, "
           "int cache_offset, Tensor! q_out, Tensor! k_cache, Tensor! v_cache) -> ()");
+  ops.def("qkv_split_rope_kvcache_fp16("
+          "Tensor packed_qkv, Tensor rope, int q_heads, int kv_heads, int head_dim, "
+          "int cache_offset, Tensor? device_position, Tensor! q_out, "
+          "Tensor! k_cache, Tensor! v_cache) -> ()");
+  ops.def("qk_norm_rope_strided_bf16("
+          "Tensor q_in, Tensor k_in, Tensor q_weight, Tensor k_weight, "
+          "Tensor cos, Tensor sin, int q_heads, int k_heads, float eps, "
+          "Tensor! q_out, Tensor! k_out) -> ()");
   ops.def("qkv_split_bf16("
           "Tensor packed_qkv, int heads, int head_dim, "
           "Tensor! q_out, Tensor! k_out, Tensor! v_out) -> ()");
@@ -1028,6 +1175,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("qkv_split_rope_kvcache_bf16",
            torch::kCUDA,
            &qkv_split_rope_kvcache_bf16);
+  ops.impl("qkv_split_rope_kvcache_fp16",
+           torch::kCUDA,
+           &qkv_split_rope_kvcache_fp16);
+  ops.impl("qk_norm_rope_strided_bf16",
+           torch::kCUDA,
+           &qk_norm_rope_strided_bf16);
   ops.impl("qkv_split_bf16",
            torch::kCUDA,
            &qkv_split_bf16);

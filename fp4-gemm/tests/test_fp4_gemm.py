@@ -99,6 +99,9 @@ class SourceOps:
     def quantize_fp4_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_fp4_sfa_fp16(x, packed, sfa, bool(is_sfb))
 
+    def quantize_e0m3_sfa_fp16(self, x, packed, sfa, is_sfb=False):
+        self._ops.quantize_e0m3_sfa_fp16(x, packed, sfa, bool(is_sfb))
+
     def quantize_fp4_sfa_bf16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_fp4_sfa_bf16(x, packed, sfa, bool(is_sfb))
 
@@ -171,6 +174,20 @@ class SourceOps:
             a, b, sfa, sfb, bias, out, float(alpha)
         )
 
+    def e0m3_weight_gemm_fp16(
+        self, a, b, sfa, sfb, out, alpha=1.0, a_format=1
+    ):
+        self._ops.e0m3_weight_gemm_fp16(
+            a, b, sfa, sfb, out, float(alpha), int(a_format)
+        )
+
+    def nvfp4_gemm_relu2_nvfp4(
+        self, a, b, sfa, sfb, out_packed, out_sfa
+    ):
+        self._ops.nvfp4_gemm_relu2_nvfp4(
+            a, b, sfa, sfb, out_packed, out_sfa
+        )
+
 
 class InstalledOps:
     """Adapt the public return-value API to the in-place test interface."""
@@ -193,6 +210,11 @@ class InstalledOps:
 
     def quantize_fp4_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._module.quantize_fp4_sfa_fp16(
+            x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
+        )
+
+    def quantize_e0m3_sfa_fp16(self, x, packed, sfa, is_sfb=False):
+        self._module.quantize_e0m3_sfa_fp16(
             x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
         )
 
@@ -288,6 +310,21 @@ class InstalledOps:
             a, b, sfa, sfb, bias, alpha=float(alpha), out=out
         )
 
+    def e0m3_weight_gemm_fp16(
+        self, a, b, sfa, sfb, out, alpha=1.0, a_format=1
+    ):
+        self._module.e0m3_weight_gemm_fp16(
+            a, b, sfa, sfb, alpha=float(alpha),
+            a_format=int(a_format), out=out,
+        )
+
+    def nvfp4_gemm_relu2_nvfp4(
+        self, a, b, sfa, sfb, out_packed, out_sfa
+    ):
+        self._module.nvfp4_gemm_relu2_nvfp4(
+            a, b, sfa, sfb, out_packed=out_packed, out_sfa=out_sfa
+        )
+
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -318,6 +355,8 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_fp4out.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_geglu_il_sm100.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_siglip_ffn_sm100.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_e0m3w_sm100.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cosmos3_edge_fp4_gemm_relu2_fp4out.cu"),
             str(PACKAGE / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "sm110_dispatch.cu"),
         ]
@@ -337,6 +376,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             *gemm_sources,
             str(PACKAGE / "csrc" / "quantize" / "quantize_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "quantize" / "quantize_e0m3_sfa.cu"),
             str(PACKAGE / "csrc" / "dequantize_fp4_sfa.cu"),
         ],
         extra_include_paths=[
@@ -352,6 +392,7 @@ def load_source_ops() -> SourceOps:
             "--expt-extended-lambda",
             "-DCUDA_KERNEL",
             "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+            "-DFLASHRT_HAVE_COSMOS3_EDGE=1",
             *([source_define] if source_define else []),
         ],
         verbose=False,
@@ -426,6 +467,126 @@ def prepare_quantized_full(ops: SourceOps, m: int, n: int, k: int):
     ops.dequantize_fp4_sfa_fp16(a_packed, sfa, a_deq, False)
     ops.dequantize_fp4_sfa_fp16(b_packed, sfb, b_deq, True)
     return a_packed, b_packed, sfa, sfb, a_deq, b_deq
+
+
+def dequantize_e0m3_reference(
+    packed: torch.Tensor, sfa: torch.Tensor
+) -> torch.Tensor:
+    """Decode the package's E0M3 bytes and CUTLASS SFA layout independently."""
+
+    rows, packed_dim = packed.shape
+    dim = packed_dim * 2
+    blocks = dim // 16
+    row = torch.arange(rows, device=packed.device).view(rows, 1)
+    block = torch.arange(blocks, device=packed.device).view(1, blocks)
+    row_block = row >> 7
+    row_inner = row & 127
+    col_block = block >> 2
+    col_inner = block & 3
+    n_col_super = (blocks + 3) // 4
+    offsets = (
+        (row_block * n_col_super + col_block) * 512
+        + (row_inner & 31) * 16
+        + ((row_inner >> 5) & 3) * 4
+        + col_inner
+    )
+    scale = sfa[offsets].contiguous().view(torch.float8_e4m3fn).float()
+
+    lo = packed & 0x0F
+    hi = packed >> 4
+    nibble = torch.stack((lo, hi), dim=-1).reshape(rows, dim).to(torch.int16)
+    magnitude = (nibble & 0x7).float()
+    signed = torch.where((nibble & 0x8) != 0, -magnitude, magnitude)
+    return (signed.view(rows, blocks, 16) * scale.unsqueeze(-1)).reshape(
+        rows, dim
+    )
+
+
+def run_sm110_e0m3_cosmos_cases(ops) -> tuple[list[Metrics], dict[str, object]]:
+    """Validate the additive E0M3 and Cosmos FP4 epilogue surfaces."""
+
+    if torch.cuda.get_device_capability(0) != (11, 0):
+        return [], {"skipped": True, "reason": "requires SM110", "passed": True}
+
+    shape = (64, 512, 512)
+    m, n, k = shape
+    a_fp16, b_fp16 = make_inputs(m, n, k, seed=20260806)
+    a_e0m3, sfa_e0m3 = ops.alloc_fp4(m, k)
+    b_e0m3, sfb_e0m3 = ops.alloc_fp4(n, k)
+    ops.quantize_e0m3_sfa_fp16(a_fp16, a_e0m3, sfa_e0m3, False)
+    ops.quantize_e0m3_sfa_fp16(b_fp16, b_e0m3, sfb_e0m3, True)
+    torch.cuda.synchronize()
+
+    # Quantization is deterministic and the sign-magnitude payload has no -0.
+    a_repeat, sfa_repeat = ops.alloc_fp4(m, k)
+    ops.quantize_e0m3_sfa_fp16(a_fp16, a_repeat, sfa_repeat, False)
+    torch.cuda.synchronize()
+    nibble_lo = a_e0m3 & 0x0F
+    nibble_hi = a_e0m3 >> 4
+    no_negative_zero = bool(
+        torch.all(nibble_lo != 0x8).item()
+        and torch.all(nibble_hi != 0x8).item()
+    )
+    quant_exact = bool(
+        torch.equal(a_e0m3, a_repeat)
+        and torch.equal(sfa_e0m3, sfa_repeat)
+        and no_negative_zero
+    )
+
+    a_deq = dequantize_e0m3_reference(a_e0m3, sfa_e0m3).float()
+    b_deq = dequantize_e0m3_reference(b_e0m3, sfb_e0m3).float()
+    out = torch.empty((m, n), device="cuda", dtype=torch.float16)
+    ops.e0m3_weight_gemm_fp16(
+        a_e0m3, b_e0m3, sfa_e0m3, sfb_e0m3, out, a_format=0
+    )
+    torch.cuda.synchronize()
+    expected = (a_deq @ b_deq.T).to(torch.float16)
+    rows = [result_row("e0m3_tile", shape, "e0m3_weight_gemm_fp16", out, expected)]
+
+    a_nv, b_nv, sfa_nv, sfb_nv, a_nv_deq, b_nv_deq = prepare_quantized_full(
+        ops, m, n, k
+    )
+    relu2_packed, relu2_sfa = ops.alloc_fp4(m, n)
+    # Warm-up initializes the native epilogue's scalar before graph capture.
+    ops.nvfp4_gemm_relu2_nvfp4(
+        a_nv, b_nv, sfa_nv, sfb_nv, relu2_packed, relu2_sfa
+    )
+    torch.cuda.synchronize()
+    relu2_out = torch.empty((m, n), device="cuda", dtype=torch.float16)
+    ops.dequantize_fp4_sfa_fp16(relu2_packed, relu2_sfa, relu2_out, False)
+    relu2_ref = torch.relu(a_nv_deq.float() @ b_nv_deq.float().T).square().to(
+        torch.float16
+    )
+    staged_packed, staged_sfa = ops.alloc_fp4(m, n)
+    ops.quantize_fp4_sfa_fp16(relu2_ref, staged_packed, staged_sfa, False)
+    staged_out = torch.empty_like(relu2_out)
+    ops.dequantize_fp4_sfa_fp16(staged_packed, staged_sfa, staged_out, False)
+    rows.append(result_row(
+        "cosmos_relu2_tile", shape, "nvfp4_gemm_relu2_nvfp4",
+        relu2_out, staged_out, fp4_output=True,
+    ))
+
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.nvfp4_gemm_relu2_nvfp4(
+            a_nv, b_nv, sfa_nv, sfb_nv, relu2_packed, relu2_sfa
+        )
+    graph.replay()
+    torch.cuda.synchronize()
+    packed_first = relu2_packed.clone()
+    sfa_first = relu2_sfa.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    graph_exact = bool(
+        torch.equal(packed_first, relu2_packed)
+        and torch.equal(sfa_first, relu2_sfa)
+    )
+    gate = {
+        "e0m3_quantize_exact": quant_exact,
+        "relu2_graph_exact": graph_exact,
+        "passed": quant_exact and graph_exact,
+    }
+    return rows, gate
 
 
 def run_case(ops: SourceOps, name: str, shape: tuple[int, int, int]) -> list[Metrics]:
@@ -850,6 +1011,8 @@ def main() -> int:
         results.extend(run_pi05_sm110_native_cases(
             ops, full_shapes=args.mode == "thor-models"
         ))
+    sm110_additive_rows, sm110_additive_gate = run_sm110_e0m3_cosmos_cases(ops)
+    results.extend(sm110_additive_rows)
     compile_check = None
     bf16_quantizer_check = check_bf16_quantizer(ops)
     if args.backend == "installed" and args.mode == "full":
@@ -861,6 +1024,8 @@ def main() -> int:
         passed += int(bool(compile_check["passed"]))
     total += 1
     passed += int(bool(bf16_quantizer_check["passed"]))
+    total += 1
+    passed += int(bool(sm110_additive_gate["passed"]))
     payload = {
         "backend": args.backend,
         "mode": args.mode,
@@ -871,6 +1036,7 @@ def main() -> int:
         "results": [asdict(item) for item in results],
         "compile_check": compile_check,
         "bf16_quantizer_check": bf16_quantizer_check,
+        "sm110_additive_gate": sm110_additive_gate,
     }
     print(json.dumps(payload, indent=2))
     if args.json_out:

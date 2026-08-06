@@ -14,10 +14,14 @@ out = torch.empty_like(q, memory_format=torch.contiguous_format)
 ops.forward_static(q, k, v, logits=logits, out=out)
 ```
 
-Public functions are `allocate_workspace`, `forward_static`, and `forward`.
+Public functions are `allocate_workspace`, `forward_static`, `forward`, and
+`forward_seqused_static`.
 Inputs use `(sequence, heads, head_dim)`. The production GROOT gate covers
 DiT `(41, 32, 48)`, ViT/LLM sequence lengths `277/1024`, padded boundaries
 `1025/2048`, FP16 and BF16, fused strides, and bitwise CUDA Graph replay.
+`forward_seqused_static` is the FP16 shared-KV path used by static VLA
+decoders: Q is `(Sq,H,D)`, K/V are `(Sk_max,D)`, and a CUDA int32 `valid_k`
+limits softmax without a standalone `-inf` fill. It supports `Sk_max <= 1024`.
 
 See [CARD.md](CARD.md) for the complete contract. Source provenance is FlashRT
 commit `24df793f4fa2d50780aea03b644208c6e0cb4162`.

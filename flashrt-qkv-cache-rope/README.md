@@ -26,6 +26,8 @@ GQA packed QKV -> split Q/K/V -> interleaved RoPE Q/K -> KV cache write
 - `qkv_split_bias_rope_bf16(packed_qkv, qkv_bias, cos, sin, q_heads, kv_heads, head_dim, q_out=None, k_out=None, v_out=None)`
 - `qkv_split_bias_rope_fp16(packed_qkv, qkv_bias, cos, sin, q_heads, kv_heads, head_dim, q_out=None, k_out=None, v_out=None)`
 - `qkv_split_rope_kvcache_bf16(packed_qkv, rope, q_heads, kv_heads, head_dim, cache_offset, q_out=None, k_cache=None, v_cache=None, max_seq_len=None)`
+- `qkv_split_rope_kvcache_fp16(packed_qkv, rope, q_heads, kv_heads, head_dim, cache_offset=0, device_position=None, q_out=None, k_cache=None, v_cache=None, max_seq_len=None)`
+- `qk_norm_rope_strided_bf16(q, k, q_weight, k_weight, cos, sin, q_heads, k_heads, head_dim, eps=1e-6, q_out=None, k_out=None)`
 - `decode_q_norm_rope_stage_bf16(q_pre, q_norm_weight, cos, sin, eps=1e-6, q_out=None)`
 - `decode_k_norm_rope_kvwrite_bf16(k_pre, v_pre, k_norm_weight, cos, sin, eps=1e-6, k_cache_dst=None, v_cache_dst=None)`
 - `decode_k_norm_rope_kvwrite_devpos_bf16(k_pre, v_pre, k_norm_weight, cos, sin, cur_pos, k_cache, v_cache, eps=1e-6)`
@@ -77,6 +79,10 @@ The GQA cache API is the sequence form used by static decoder loops. It does
 not apply RMSNorm; callers should pass already-projected QKV rows. It applies
 the same adjacent-pair, interleaved cos/sin RoPE contract used by FlashRT
 PI0/PI0.5 RTX decoder staging, but the public API remains model-agnostic.
+The FP16 twin accepts either a host `cache_offset` or a CUDA int32
+`device_position`; the latter keeps cache position inside a captured graph.
+`qk_norm_rope_strided_bf16` handles independently strided Q/K projections and
+is validated on the Cosmos3-Edge `(rows=51, Hq=16, Hk=2, D=128)` contract.
 
 The per-head GQA API covers sequence attention blocks that normalize every
 128-wide Q/K head independently before rotate-half RoPE. It accepts unequal

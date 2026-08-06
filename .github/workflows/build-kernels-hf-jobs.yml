@@ -30,6 +30,7 @@ on:
       - "fp8-gemm/**"
       - "fp4-fused-ops/**"
       - "fp4-gemm/**"
+      - "fa4-cute-runtime/**"
       - "fp8-kv-attention/**"
       - "causal-conv1d-state/**"
       - "gated-delta-attention/**"
@@ -91,6 +92,7 @@ on:
           - fp8-gemm
           - fp4-fused-ops
           - fp4-gemm
+          - fa4-cute-runtime
           - fp8-kv-attention
           - causal-conv1d-state
           - gated-delta-attention
@@ -159,6 +161,7 @@ jobs:
           - fp8-gemm
           - fp4-fused-ops
           - fp4-gemm
+          - fa4-cute-runtime
           - fp8-kv-attention
           - causal-conv1d-state
           - gated-delta-attention

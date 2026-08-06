@@ -419,6 +419,76 @@ __global__ void qkv_split_rope_kvcache_bf16_kernel(
   }
 }
 
+__global__ void qkv_split_rope_kvcache_fp16_kernel(
+    const __half* __restrict__ packed_qkv,
+    const __half* __restrict__ rope,
+    __half* __restrict__ q_out,
+    __half* __restrict__ k_cache,
+    __half* __restrict__ v_cache,
+    const int* __restrict__ device_position,
+    int B,
+    int S,
+    int max_S,
+    int q_heads,
+    int kv_heads,
+    int D_h,
+    int cache_offset) {
+  const int q_dim = q_heads * D_h;
+  const int kv_dim = kv_heads * D_h;
+  const int qkv_stride = q_dim + 2 * kv_dim;
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total = B * S * qkv_stride;
+  if (idx >= total) return;
+
+  const int c = idx % qkv_stride;
+  const int row = idx / qkv_stride;
+  const int s = row % S;
+  const int b = row / S;
+  const int write_pos = cache_offset +
+      (device_position == nullptr ? s : device_position[0] + s);
+
+  if (c < q_dim) {
+    const int d_in_head = c % D_h;
+    const int pair = d_in_head >> 1;
+    const int is_odd = d_in_head & 1;
+    const int head = c / D_h;
+    const long long pair_base =
+        ((long long)b * S + s) * qkv_stride + head * D_h + pair * 2;
+    const float x0 = __half2float(packed_qkv[pair_base]);
+    const float x1 = __half2float(packed_qkv[pair_base + 1]);
+    const long long rope_base = (long long)s * D_h + pair * 2;
+    const float cos_v = __half2float(rope[rope_base]);
+    const float sin_v = __half2float(rope[rope_base + 1]);
+    const long long out_idx = ((long long)b * S + s) * q_dim + c;
+    q_out[out_idx] = is_odd == 0
+        ? __float2half_rn(x0 * cos_v - x1 * sin_v)
+        : __float2half_rn(x1 * cos_v + x0 * sin_v);
+  } else if (c < q_dim + kv_dim) {
+    const int k_col = c - q_dim;
+    const int d_in_head = k_col % D_h;
+    const int pair = d_in_head >> 1;
+    const int is_odd = d_in_head & 1;
+    const long long pair_base =
+        ((long long)b * S + s) * qkv_stride + q_dim +
+        (k_col / D_h) * D_h + pair * 2;
+    const float x0 = __half2float(packed_qkv[pair_base]);
+    const float x1 = __half2float(packed_qkv[pair_base + 1]);
+    const long long rope_base = (long long)s * D_h + pair * 2;
+    const float cos_v = __half2float(rope[rope_base]);
+    const float sin_v = __half2float(rope[rope_base + 1]);
+    const long long cache_idx =
+        ((long long)b * max_S + write_pos) * kv_dim + k_col;
+    k_cache[cache_idx] = is_odd == 0
+        ? __float2half_rn(x0 * cos_v - x1 * sin_v)
+        : __float2half_rn(x1 * cos_v + x0 * sin_v);
+  } else {
+    const int v_col = c - q_dim - kv_dim;
+    const long long cache_idx =
+        ((long long)b * max_S + write_pos) * kv_dim + v_col;
+    v_cache[cache_idx] = packed_qkv[idx];
+  }
+}
+
 __global__ void qkv_split_bf16_kernel(
     const __nv_bfloat16* __restrict__ packed_qkv,
     __nv_bfloat16* __restrict__ q_out,
@@ -1316,6 +1386,39 @@ void qkv_split_rope_kvcache_bf16(
       kv_heads,
       D_h,
       cache_offset);
+}
+
+void qkv_split_rope_kvcache_fp16(
+    const void* packed_qkv,
+    const void* rope,
+    void* q_out,
+    void* k_cache,
+    void* v_cache,
+    const void* device_position,
+    int B,
+    int S,
+    int max_S,
+    int q_heads,
+    int kv_heads,
+    int D_h,
+    int cache_offset,
+    cudaStream_t stream) {
+  if (B <= 0 || S <= 0 || max_S <= 0 || q_heads <= 0 ||
+      kv_heads <= 0 || D_h <= 0) {
+    return;
+  }
+  const int qkv_stride = (q_heads + 2 * kv_heads) * D_h;
+  const int total = B * S * qkv_stride;
+  const int threads = 256;
+  const int blocks = (total + threads - 1) / threads;
+  qkv_split_rope_kvcache_fp16_kernel<<<blocks, threads, 0, stream>>>(
+      reinterpret_cast<const __half*>(packed_qkv),
+      reinterpret_cast<const __half*>(rope),
+      reinterpret_cast<__half*>(q_out),
+      reinterpret_cast<__half*>(k_cache),
+      reinterpret_cast<__half*>(v_cache),
+      reinterpret_cast<const int*>(device_position),
+      B, S, max_S, q_heads, kv_heads, D_h, cache_offset);
 }
 
 void qkv_split_bf16(

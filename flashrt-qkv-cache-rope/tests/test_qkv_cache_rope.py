@@ -103,6 +103,46 @@ class SourceOps:
         )
         return q_out, k_cache, v_cache
 
+    def qkv_split_rope_kvcache_fp16(
+        self, packed_qkv, rope, q_heads, kv_heads, head_dim,
+        cache_offset=0, device_position=None, q_out=None, k_cache=None,
+        v_cache=None, max_seq_len=None,
+    ):
+        batch, seq_len, _ = packed_qkv.shape
+        if q_out is None:
+            q_out = torch.empty(
+                (batch, seq_len, q_heads, head_dim),
+                device=packed_qkv.device, dtype=torch.float16,
+            )
+        if k_cache is None or v_cache is None:
+            if max_seq_len is None:
+                max_seq_len = cache_offset + seq_len
+            shape = (batch, max_seq_len, kv_heads, head_dim)
+            if k_cache is None:
+                k_cache = torch.empty(shape, device=packed_qkv.device, dtype=torch.float16)
+            if v_cache is None:
+                v_cache = torch.empty(shape, device=packed_qkv.device, dtype=torch.float16)
+        self._ops.qkv_split_rope_kvcache_fp16(
+            packed_qkv, rope, int(q_heads), int(kv_heads), int(head_dim),
+            int(cache_offset), device_position, q_out, k_cache, v_cache,
+        )
+        return q_out, k_cache, v_cache
+
+    def qk_norm_rope_strided_bf16(
+        self, q_in, k_in, q_weight, k_weight, cos, sin,
+        q_heads, k_heads, eps=1e-6, q_out=None, k_out=None,
+    ):
+        rows = q_in.shape[0]
+        if q_out is None:
+            q_out = torch.empty((rows, q_heads, 128), device="cuda", dtype=torch.bfloat16)
+        if k_out is None:
+            k_out = torch.empty((rows, k_heads, 128), device="cuda", dtype=torch.bfloat16)
+        self._ops.qk_norm_rope_strided_bf16(
+            q_in, k_in, q_weight, k_weight, cos, sin,
+            int(q_heads), int(k_heads), float(eps), q_out, k_out,
+        )
+        return q_out, k_out
+
     def qkv_split_per_head_norm_rope_bf16(
         self,
         packed_qkv,
@@ -456,10 +496,11 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "qkv_cache_rope.cu"),
+            str(PACKAGE / "csrc" / "cosmos_edge" / "cosmos3_edge_misc.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
-        extra_cflags=["-O3", "-DCUDA_KERNEL"],
-        extra_cuda_cflags=["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL"],
+        extra_cflags=["-O3", "-DCUDA_KERNEL", "-DFLASHRT_HAVE_COSMOS3_EDGE=1"],
+        extra_cuda_cflags=["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL", "-DFLASHRT_HAVE_COSMOS3_EDGE=1", "-U__CUDA_NO_BFLOAT16_CONVERSIONS__"],
         verbose=False,
     )
     return SourceOps(namespace)
@@ -919,6 +960,94 @@ def run_kvcache_shape(
         raise AssertionError(f"{label}/kvcache_v_suffix failed: suffix modified")
 
 
+def run_fp16_kvcache_shape(ops, label: str, seq_len: int, device_position: bool) -> None:
+    batch, q_heads, kv_heads, head_dim = 1, 8, 1, 256
+    width = (q_heads + 2 * kv_heads) * head_dim
+    packed = torch.randn((batch, seq_len, width), device="cuda", dtype=torch.float16)
+    rope = make_interleaved_rope(seq_len, head_dim).to(torch.float16)
+    max_seq_len = 1024
+    cache_offset = 3
+    position = torch.tensor([17], device="cuda", dtype=torch.int32) if device_position else None
+    write_start = cache_offset + (17 if device_position else 0)
+    q_out = torch.empty((batch, seq_len, q_heads, head_dim), device="cuda", dtype=torch.float16)
+    k_cache = torch.full((batch, max_seq_len, kv_heads, head_dim), -7.0, device="cuda", dtype=torch.float16)
+    v_cache = torch.full_like(k_cache, -9.0)
+    ops.qkv_split_rope_kvcache_fp16(
+        packed, rope, q_heads, kv_heads, head_dim, cache_offset,
+        position, q_out, k_cache, v_cache,
+    )
+    exp_q, exp_k, exp_v = ref_qkv_split_rope_kvcache(
+        packed, rope, q_heads, kv_heads, head_dim
+    )
+    sl = slice(write_start, write_start + seq_len)
+    assert_close_distribution(f"{label}/q", q_out, exp_q)
+    assert_close_distribution(f"{label}/k", k_cache[:, sl], exp_k)
+    assert_close_distribution(f"{label}/v", v_cache[:, sl], exp_v)
+    if not torch.equal(k_cache[:, :write_start], torch.full_like(k_cache[:, :write_start], -7.0)):
+        raise AssertionError(f"{label}/k_prefix modified")
+    if not torch.equal(v_cache[:, write_start + seq_len:], torch.full_like(v_cache[:, write_start + seq_len:], -9.0)):
+        raise AssertionError(f"{label}/v_suffix modified")
+
+    if device_position:
+        graph = torch.cuda.CUDAGraph()
+        torch.cuda.synchronize()
+        with torch.cuda.graph(graph):
+            ops.qkv_split_rope_kvcache_fp16(
+                packed, rope, q_heads, kv_heads, head_dim, cache_offset,
+                position, q_out, k_cache, v_cache,
+            )
+        graph.replay()
+        torch.cuda.synchronize()
+        first = (q_out.clone(), k_cache[:, sl].clone(), v_cache[:, sl].clone())
+        graph.replay()
+        torch.cuda.synchronize()
+        second = (q_out.clone(), k_cache[:, sl].clone(), v_cache[:, sl].clone())
+        if not all(torch.equal(a, b) for a, b in zip(first, second)):
+            raise AssertionError(f"{label}/cuda_graph replay is not bitwise deterministic")
+        print(f"PASS {label}/cuda_graph bitwise replay")
+
+
+def run_qk_norm_rope_strided(ops) -> None:
+    rows, q_heads, k_heads, head_dim = 51, 16, 2, 128
+    q_width = q_heads * head_dim + 256
+    k_width = k_heads * head_dim + 128
+    q_in = torch.randn((rows, q_width), device="cuda", dtype=torch.bfloat16)
+    k_in = torch.randn((rows, k_width), device="cuda", dtype=torch.bfloat16)
+    q_weight = torch.randn((head_dim,), device="cuda", dtype=torch.bfloat16)
+    k_weight = torch.randn((head_dim,), device="cuda", dtype=torch.bfloat16)
+    angle = torch.randn((rows, head_dim), device="cuda", dtype=torch.bfloat16)
+    cos, sin = angle.cos().contiguous(), angle.sin().contiguous()
+    got_q, got_k = ops.qk_norm_rope_strided_bf16(
+        q_in, k_in, q_weight, k_weight, cos, sin, q_heads, k_heads
+    )
+
+    def reference(value, heads, weight):
+        value = value[:, :heads * head_dim].view(rows, heads, head_dim)
+        rstd = torch.rsqrt(value.float().square().mean(-1, keepdim=True) + 1e-6)
+        normed = (value.float() * rstd * weight.float()).to(torch.bfloat16).float()
+        rotated = torch.cat((-normed[..., 64:], normed[..., :64]), dim=-1)
+        # Native rounds the rotated*sin term to BF16 before adding normed*cos.
+        rot_term = (rotated * sin[:, None, :].float()).to(torch.bfloat16).float()
+        return (rot_term + normed * cos[:, None, :].float()).to(torch.bfloat16)
+
+    assert_close_distribution("cosmos_edge/qk_norm_rope_strided_q", got_q, reference(q_in, q_heads, q_weight))
+    assert_close_distribution("cosmos_edge/qk_norm_rope_strided_k", got_k, reference(k_in, k_heads, k_weight))
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.qk_norm_rope_strided_bf16(
+            q_in, k_in, q_weight, k_weight, cos, sin, q_heads, k_heads,
+            q_out=got_q, k_out=got_k,
+        )
+    graph.replay()
+    torch.cuda.synchronize()
+    first = (got_q.clone(), got_k.clone())
+    graph.replay()
+    torch.cuda.synchronize()
+    if not torch.equal(first[0], got_q) or not torch.equal(first[1], got_k):
+        raise AssertionError("cosmos_edge/qk_norm_rope_strided graph replay mismatch")
+    print("PASS cosmos_edge/qk_norm_rope_strided CUDA Graph bitwise replay")
+
+
 def run_per_head_gqa_shape(
     ops,
     label: str,
@@ -1208,6 +1337,9 @@ def run(args) -> None:
         ops, "bias_rope_fp16_small", 1, 17, 4, 2, 64
     )
     run_kvcache_shape(ops, "pi05_decoder_gqa", 1, 10, 8, 1, 256)
+    run_fp16_kvcache_shape(ops, "pi05_fp16_static", 10, False)
+    run_fp16_kvcache_shape(ops, "pi05_fp16_devpos", 1, True)
+    run_qk_norm_rope_strided(ops)
     if args.mode == "full":
         run_decode_shape(ops, "decode_vla", 24, args.eps)
         run_per_head_gqa_shape(

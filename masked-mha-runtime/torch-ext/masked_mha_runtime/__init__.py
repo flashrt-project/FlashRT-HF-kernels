@@ -23,6 +23,17 @@ def _forward_static_fake(q, k, v, logits, out, scale: float) -> None:
         raise RuntimeError("logits stride must cover sequence_kv")
 
 
+@torch.library.register_fake(add_op_namespace_prefix("forward_seqused_static"))
+def _forward_seqused_static_fake(q, k, v, valid_k, logits, out, scale: float) -> None:
+    del scale
+    if q.dim() != 3 or k.dim() != 2 or v.dim() != 2:
+        raise RuntimeError("q must be (sequence, heads, head_dim); k/v must be (max_sequence, head_dim)")
+    if valid_k.numel() != 1 or valid_k.dtype != torch.int32:
+        raise RuntimeError("valid_k must be an int32 scalar tensor")
+    if out.shape != q.shape or logits.shape != (q.shape[0] * q.shape[1], k.shape[0]):
+        raise RuntimeError("caller-owned output shapes do not match q/k")
+
+
 def allocate_workspace(q: torch.Tensor, k: torch.Tensor) -> torch.Tensor:
     """Allocate padded logits scratch once, outside the hot path."""
     stride = (k.shape[0] + 7) // 8 * 8
@@ -54,4 +65,26 @@ def forward(q, k, v, *, scale: Optional[float] = None):
     return forward_static(q, k, v, logits=logits, out=out, scale=scale)
 
 
-__all__ = ["allocate_workspace", "forward", "forward_static"]
+def forward_seqused_static(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    valid_k: torch.Tensor,
+    *,
+    logits: torch.Tensor,
+    out: torch.Tensor,
+    scale: Optional[float] = None,
+) -> torch.Tensor:
+    """Run FP16 shared-KV attention with a graph-resident valid-key count."""
+    if scale is None:
+        scale = 1.0 / math.sqrt(q.shape[-1])
+    ops.forward_seqused_static(q, k, v, valid_k, logits, out, float(scale))
+    return out
+
+
+__all__ = [
+    "allocate_workspace",
+    "forward",
+    "forward_static",
+    "forward_seqused_static",
+]

@@ -20,6 +20,11 @@ low-bit paths.
 - `rms_silu_nvfp4_ndhwc_bf16`
 - `bf16_rms_norm_ncdhw`
 - `bf16_rms_silu_ncdhw`
+- `adaptive_rms_norm_e0m3_fp16`
+- `gated_residual_adaptive_rms_norm_e0m3_fp16`
+- `gelu_mul_e0m3_fp16`
+- `residual_add_rms_norm_quant_nvfp4_swizzled_bf16`
+- `relu2_quant_nvfp4_swizzled_fp16`
 
 This package targets Blackwell `sm_110a` and `sm_120a` and uses CUTLASS/CUTE
 SFA layouts. SM110 artifacts require CUDA 13+.

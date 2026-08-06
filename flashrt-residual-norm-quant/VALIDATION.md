@@ -46,3 +46,11 @@ Required before publishing this package:
 
    Add hardware claims only after the same correctness and benchmark commands
    pass on that machine.
+
+## Thor validation
+
+On 2026-08-06, source full passed on NVIDIA Thor (SM110), PyTorch
+`2.13.0+cu130`, and CUDA 13.0. The new `residual_add_rms_norm_bf16` entry was
+checked both out-of-place and with the production in-place residual contract
+across PI0.5, GROOT, and video-prefill shapes. All rows passed the package's
+strict BF16 operation-order reference.

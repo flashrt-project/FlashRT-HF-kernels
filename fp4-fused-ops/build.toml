@@ -29,6 +29,7 @@ cuda-flags = [
   "-O3",
   "--use_fast_math",
   "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+  "-DFLASHRT_HAVE_COSMOS3_EDGE=1",
 ]
 src = [
   "csrc/fused_fp4/norm_silu_fp4_sfa.cu",
@@ -39,6 +40,12 @@ src = [
   "csrc/fused_fp4/siglip_ln_vec.cuh",
   "csrc/fused_fp4/dequantize_fp4_sfa.cu",
   "csrc/fused_fp4/dequantize_fp4_sfa.cuh",
+  "csrc/fused_fp4/adarms_fp8_static_fp16.cu",
+  "csrc/fused_fp4/adarms_fp8_static_fp16.cuh",
+  "csrc/fused_fp4/pi05_e0m3_act.cu",
+  "csrc/fused_fp4/pi05_e0m3_act.cuh",
+  "csrc/fused_fp4/cosmos3_edge_fp4.cu",
+  "csrc/fused_fp4/cosmos3_edge_fp4.cuh",
   "csrc/fused_fp4/res_rms_fp4_sfa_v2.cu",
   "csrc/fused_fp4/res_rms_mul_fp4_sfa.cu",
   "csrc/fused_fp4/silu_mul_fp4_sfa_v2.cu",

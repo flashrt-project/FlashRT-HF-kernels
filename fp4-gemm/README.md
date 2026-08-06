@@ -12,6 +12,7 @@ paths.
 - `sfa_size_bytes(rows, dim)`
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
+- `quantize_e0m3_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
 - `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
 - `nvfp4_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
@@ -26,6 +27,8 @@ paths.
 - `nvfp4_gemm_streamk_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None)`
 - `nvfp4_gemm_streamk_bias_bf16(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out=None)`
 - `fp4_w4a16_linear_bf16(...)` is retained as a compatibility alias
+- `e0m3_weight_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, a_format=1, out=None)`
+- `nvfp4_gemm_relu2_nvfp4(a_packed, b_packed, sfa, sfb, out_packed=None, out_sfa=None)`
 
 ## Tensor Contract
 
@@ -64,6 +67,8 @@ PI0.5 Thor coverage additionally includes FP16 linear projections, compact
 GeGLU-to-NVFP4, and SigLIP bias+GELU / bias+residual epilogues. SigLIP's
 logical hidden width `4304` is physically zero-padded to `4320` for the FP4
 TMA contract; direct `4304` GEMM calls are unsupported.
+E0M3 weight GEMM and the ReLU-squared FP4-output epilogue are SM110-only.
+`a_format=1` consumes E2M1 activations; `a_format=0` consumes E0M3 activations.
 
 ## Minimal Usage
 

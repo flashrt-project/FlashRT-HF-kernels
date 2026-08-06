@@ -81,3 +81,14 @@ The Tensor wrapper was compared against the same native FlashRT launchers on
 Thor with 20 warmup and 100 measured iterations. For production auto-dispatch
 across the six model shapes, wrapper/native latency ratio had median `1.019`
 and maximum `1.086`. Correctness was exact (`max_abs=mean_abs=p99_abs=0`).
+
+## SM110 additive format and epilogue gate
+
+On 2026-08-06, the current source snapshot passed `18/18` smoke checks on
+NVIDIA Thor, PyTorch `2.13.0+cu130`, and CUDA 13.0. The independent E0M3
+sign-magnitude/SFA reference produced exact output for
+`e0m3_weight_gemm_fp16` at `(M,N,K)=(64,512,512)`. The Cosmos Edge
+`nvfp4_gemm_relu2_nvfp4` row had p99 absolute error `0`, cosine
+`0.99996096`, deterministic packed/scale output, and bitwise CUDA Graph
+replay. `a_format=0` denotes E0M3 activations; `a_format=1` denotes the default
+NVFP4 activation path with E0M3 weights.

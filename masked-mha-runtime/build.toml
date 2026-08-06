@@ -21,4 +21,9 @@ include = ["csrc"]
 cuda-minver = "13"
 cuda-capabilities = ["11.0a"]
 cuda-flags = ["-O3", "--use_fast_math"]
-src = ["csrc/attention_mha_masked.cu", "csrc/attention_mha_masked.cuh"]
+src = [
+  "csrc/attention_mha_masked.cu",
+  "csrc/attention_mha_masked.cuh",
+  "csrc/attention_seqused_fused.cu",
+  "csrc/attention_seqused_fused.cuh",
+]

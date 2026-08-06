@@ -56,6 +56,16 @@ using Sm110GemmBiasResidualFp16Dispatch = int (*)(
     const void* bias, const void* residual, void* out, int m, int n,
     int k, cudaStream_t stream);
 
+using Sm110E0m3GemmDispatch = int (*)(
+    const void* a, const void* sfa, const void* b, const void* sfb,
+    void* out, int m, int n, int k, float alpha, float beta,
+    cudaStream_t stream, int a_format);
+
+using Sm110GemmRelu2Fp4Dispatch = int (*)(
+    const void* a, const void* sfa, const void* b, const void* sfb,
+    void* out_packed, void* out_sfa, int m, int n, int k,
+    cudaStream_t stream);
+
 extern Sm110GemmDispatch sm110_gemm_dispatch;
 extern Sm110GemmBiasDispatch sm110_gemm_bias_dispatch;
 extern Sm110GemmBiasResidualDispatch sm110_gemm_bias_residual_dispatch;
@@ -67,5 +77,7 @@ extern Sm110GemmBiasGeluFp4Fp16Dispatch
     sm110_gemm_bias_gelu_fp4_fp16_dispatch;
 extern Sm110GemmBiasResidualFp16Dispatch
     sm110_gemm_bias_residual_fp16_dispatch;
+extern Sm110E0m3GemmDispatch sm110_e0m3_gemm_dispatch;
+extern Sm110GemmRelu2Fp4Dispatch sm110_gemm_relu2_fp4_dispatch;
 
 }  // namespace flash_rt::hub

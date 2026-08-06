@@ -27,6 +27,13 @@ chains.
 - `silu_mul_two_mul_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed=None, out_sfa=None)`
 - `adaptive_rms_norm_nvfp4_fp16(x, style, packed=None, sfa=None, gate=None)`
 - `gated_residual_adaptive_rms_norm_nvfp4_fp16(x, previous_gate, residual, style, ...)`
+- `adaptive_rms_norm_fp8_static_fp16(x, style, scale, out=None, gate=None)`
+- `gate_res_ada_rms_norm_quant_fp8_static_fp16(x, previous_gate, residual, style, scale, ...)`
+- `adaptive_rms_norm_e0m3_fp16(x, style, use_rht=False, ...)`
+- `gated_residual_adaptive_rms_norm_e0m3_fp16(x, previous_gate, residual, style, use_rht=False, ...)`
+- `gelu_mul_e0m3_fp16(merged, use_rht=False, ...)`
+- `residual_add_rms_norm_quant_nvfp4_swizzled_bf16(residual, x, weight, eps=1e-6, ...)`
+- `relu2_quant_nvfp4_swizzled_fp16(x, ...)`
 - `layer_norm_fp8_fp16(x, gamma, beta, eps=1e-5, out=None)`
 - `layer_norm_nvfp4_fp16(x, gamma, beta, inv_s=None, eps=1e-5, ...)`
 - `gelu_mul_nvfp4_fp16(merged, packed=None, sfa=None)`
@@ -53,6 +60,9 @@ Tensor contract:
 - Automatically allocated SFA buffers are zero-initialized because CUTLASS
   tile padding is intentionally not written by every producer.
 - Linear NVFP4 uses E2M1 values and linear UE4M3 scale bytes per 16 channels.
+- E0M3 APIs use the uniform signed-int4 codebook with optional per-16
+  orthonormal Hadamard rotation; their packed/SFA layout is GEMM-compatible
+  but their values must not be decoded as E2M1.
 - NCDHW RMS kernels accept BF16 `(B,C,T,H,W)`, even `C <= 1024`; the fused
   NVFP4 producer requires `C % 128 == 0`.
 

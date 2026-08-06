@@ -38,6 +38,15 @@ class SourceOps:
         self.ops.forward_static(q, k, v, logits, out, float(scale))
         return out
 
+    def forward_seqused_static(
+        self, q, k, v, valid_k, *, logits, out, scale=None
+    ):
+        scale = q.shape[-1] ** -0.5 if scale is None else scale
+        self.ops.forward_seqused_static(
+            q, k, v, valid_k, logits, out, float(scale)
+        )
+        return out
+
 
 def load_source_ops():
     from torch.utils.cpp_extension import load
@@ -62,6 +71,7 @@ def load_source_ops():
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "attention_mha_masked.cu"),
+            str(PACKAGE / "csrc" / "attention_seqused_fused.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -144,6 +154,54 @@ def run_case(ops, dtype, sq, sk, heads, dim, fused_stride=False):
     )
 
 
+def run_seqused_case(ops, sq, sk, valid, heads=8, dim=256):
+    torch.manual_seed(164000 + sq + sk + valid)
+    q = torch.randn((sq, heads, dim), device="cuda", dtype=torch.float16)
+    k = torch.randn((sk, dim), device="cuda", dtype=torch.float16)
+    v = torch.randn_like(k)
+    valid_k = torch.tensor([valid], device="cuda", dtype=torch.int32)
+    logits = torch.full(
+        (sq * heads, sk), float("nan"), device="cuda", dtype=torch.float16
+    )
+    out = torch.empty_like(q)
+    got = ops.forward_seqused_static(
+        q, k, v, valid_k, logits=logits, out=out
+    )
+    torch.cuda.synchronize()
+    ref = torch.nn.functional.scaled_dot_product_attention(
+        q.permute(1, 0, 2).unsqueeze(0).float(),
+        k[:valid].unsqueeze(0).unsqueeze(0).float(),
+        v[:valid].unsqueeze(0).unsqueeze(0).float(),
+        enable_gqa=True,
+    ).squeeze(0).permute(1, 0, 2).half()
+    max_abs, p99_abs, cosine = metrics(got, ref)
+    if not torch.isfinite(got.float()).all() or cosine < 0.999 or p99_abs > 0.00390625:
+        raise AssertionError(
+            f"seqused sq={sq} sk={sk} valid={valid} h={heads} d={dim}: "
+            f"max={max_abs} p99={p99_abs} cos={cosine}"
+        )
+    if not torch.equal(logits[:, valid:], torch.zeros_like(logits[:, valid:])):
+        raise AssertionError("seqused probabilities beyond valid_k are not zero")
+
+    residual = torch.randn_like(out)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.forward_seqused_static(
+            q, k, v, valid_k, logits=logits, out=out
+        )
+    graph.replay()
+    first = out.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    if not torch.equal(first, out):
+        raise AssertionError("seqused CUDA Graph replay is not bitwise deterministic")
+    del residual
+    print(
+        f"PASS seqused sq={sq} sk={sk} valid={valid} h={heads} d={dim} "
+        f"max={max_abs:.6f} p99={p99_abs:.6f} cos={cosine:.8f}"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -166,7 +224,13 @@ def main():
         ])
     for case in cases:
         run_case(ops, *case)
-    print(f"masked-mha-runtime {args.backend} {args.mode}: passed {len(cases)}/{len(cases)}")
+    seqused_cases = [(10, 456, 456)]
+    if args.mode == "full":
+        seqused_cases.extend([(10, 968, 456), (10, 968, 712), (10, 968, 968)])
+    for case in seqused_cases:
+        run_seqused_case(ops, *case)
+    total = len(cases) + len(seqused_cases)
+    print(f"masked-mha-runtime {args.backend} {args.mode}: passed {total}/{total}")
 
 
 if __name__ == "__main__":

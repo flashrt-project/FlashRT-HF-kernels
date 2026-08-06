@@ -5,6 +5,10 @@
 
 #include <limits>
 
+#ifndef FLASHRT_HAVE_COSMOS3_EDGE
+#define FLASHRT_HAVE_COSMOS3_EDGE 1
+#endif
+
 #if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -20,6 +24,7 @@
 #endif
 #include "gemm/fp4/sm110_dispatch.cuh"
 #include "quantize/quantize_fp4_sfa.cuh"
+#include "quantize/quantize_e0m3_sfa.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -40,6 +45,10 @@ flash_rt::hub::Sm110GemmBiasGeluFp4Fp16Dispatch
     flash_rt::hub::sm110_gemm_bias_gelu_fp4_fp16_dispatch = nullptr;
 flash_rt::hub::Sm110GemmBiasResidualFp16Dispatch
     flash_rt::hub::sm110_gemm_bias_residual_fp16_dispatch = nullptr;
+flash_rt::hub::Sm110E0m3GemmDispatch
+    flash_rt::hub::sm110_e0m3_gemm_dispatch = nullptr;
+flash_rt::hub::Sm110GemmRelu2Fp4Dispatch
+    flash_rt::hub::sm110_gemm_relu2_fp4_dispatch = nullptr;
 
 namespace {
 
@@ -674,6 +683,89 @@ void quantize_fp4_sfa_fp16(
 #endif
 }
 
+void quantize_e0m3_sfa_fp16(
+    torch::Tensor const& x, torch::Tensor& packed, torch::Tensor& sfa,
+    bool is_sfb) {
+  check_fp16_cuda(x, "x");
+  check_uint8_cuda(packed, "packed");
+  check_uint8_cuda(sfa, "sfa");
+  TORCH_CHECK(x.dim() == 2 && x.size(1) % 16 == 0,
+              "x must have shape (rows, dim) with dim divisible by 16");
+  TORCH_CHECK(packed.sizes() == torch::IntArrayRef({x.size(0), x.size(1) / 2}),
+              "packed must have shape (rows, dim / 2)");
+  TORCH_CHECK(sfa.numel() >= swizzled_bytes(x.size(0), x.size(1)),
+              "sfa is too small for CUTLASS SFA/SFB layout");
+  check_same_device(x, packed, "x", "packed");
+  check_same_device(x, sfa, "x", "sfa");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::fp4::quantize_e0m3_dynamic_sfa_fp16(
+      x.data_ptr(), packed.data_ptr(), sfa.data_ptr(),
+      checked_int(x.size(0), "rows"), checked_int(x.size(1), "dim"),
+      is_sfb, stream);
+  TORCH_CHECK(rc == 0, "quantize_e0m3_sfa_fp16 failed with rc=", rc);
+#endif
+}
+
+void e0m3_weight_gemm_fp16(
+    torch::Tensor const& a_packed, torch::Tensor const& b_packed,
+    torch::Tensor const& sfa, torch::Tensor const& sfb, torch::Tensor& out,
+    double alpha, int64_t a_format) {
+  auto shape = check_fp4_gemm_inputs(a_packed, b_packed, sfa, sfb);
+  check_fp16_cuda(out, "out");
+  TORCH_CHECK(out.sizes() == torch::IntArrayRef({shape.m, shape.n}),
+              "out must have shape (M, N)");
+  TORCH_CHECK(a_format == 0 || a_format == 1,
+              "a_format must be 0 (E0M3) or 1 (E2M1)");
+  check_same_device(a_packed, out, "a_packed", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(a_packed.device());
+  auto const* props = current_device_properties(a_packed);
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              "e0m3_weight_gemm_fp16 requires SM110");
+  auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  TORCH_CHECK(flash_rt::hub::sm110_e0m3_gemm_dispatch != nullptr,
+              "SM110 E0M3 GEMM source is not present in this build");
+  const int rc = flash_rt::hub::sm110_e0m3_gemm_dispatch(
+      a_packed.data_ptr(), sfa.data_ptr(), b_packed.data_ptr(), sfb.data_ptr(),
+      out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+      checked_int(shape.k, "K"), static_cast<float>(alpha), 0.0f, stream,
+      static_cast<int>(a_format));
+  TORCH_CHECK(rc == 0, "e0m3_weight_gemm_fp16 failed with rc=", rc);
+#endif
+}
+
+void nvfp4_gemm_relu2_nvfp4(
+    torch::Tensor const& a_packed, torch::Tensor const& b_packed,
+    torch::Tensor const& sfa, torch::Tensor const& sfb,
+    torch::Tensor& out_packed, torch::Tensor& out_sfa) {
+  auto shape = check_fp4_gemm_inputs(a_packed, b_packed, sfa, sfb);
+  TORCH_CHECK(shape.n % 16 == 0, "N must be divisible by 16");
+  check_uint8_cuda(out_packed, "out_packed");
+  check_uint8_cuda(out_sfa, "out_sfa");
+  TORCH_CHECK(out_packed.sizes() == torch::IntArrayRef({shape.m, shape.n / 2}),
+              "out_packed must have shape (M, N / 2)");
+  TORCH_CHECK(out_sfa.numel() >= swizzled_bytes(shape.m, shape.n),
+              "out_sfa is too small");
+  check_same_device(a_packed, out_packed, "a_packed", "out_packed");
+  check_same_device(a_packed, out_sfa, "a_packed", "out_sfa");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(a_packed.device());
+  auto const* props = current_device_properties(a_packed);
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              "nvfp4_gemm_relu2_nvfp4 requires SM110");
+  auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
+  TORCH_CHECK(flash_rt::hub::sm110_gemm_relu2_fp4_dispatch != nullptr,
+              "SM110 ReLU2 FP4 GEMM source is not present in this build");
+  const int rc = flash_rt::hub::sm110_gemm_relu2_fp4_dispatch(
+      a_packed.data_ptr(), sfa.data_ptr(), b_packed.data_ptr(), sfb.data_ptr(),
+      out_packed.data_ptr(), out_sfa.data_ptr(), checked_int(shape.m, "M"),
+      checked_int(shape.n, "N"), checked_int(shape.k, "K"), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_relu2_nvfp4 failed with rc=", rc);
+#endif
+}
+
 void quantize_fp4_sfa_bf16(
     torch::Tensor const& x,
     torch::Tensor& packed,
@@ -757,6 +849,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nvfp4_gemm_streamk_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0) -> ()");
   ops.def("nvfp4_gemm_streamk_bias_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor bias, Tensor! out, float alpha=1.0) -> ()");
   ops.def("quantize_fp4_sfa_fp16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
+  ops.def("quantize_e0m3_sfa_fp16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
+  ops.def("e0m3_weight_gemm_fp16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0, int a_format=1) -> ()");
+  ops.def("nvfp4_gemm_relu2_nvfp4(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out_packed, Tensor! out_sfa) -> ()");
   ops.def("quantize_fp4_sfa_bf16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
   ops.def("dequantize_fp4_sfa_fp16(Tensor packed, Tensor sfa, Tensor! out, bool is_sfb=False) -> ()");
 #if defined(CUDA_KERNEL)
@@ -775,6 +870,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("nvfp4_gemm_streamk_bf16", torch::kCUDA, &nvfp4_gemm_streamk_bf16);
   ops.impl("nvfp4_gemm_streamk_bias_bf16", torch::kCUDA, &nvfp4_gemm_streamk_bias_bf16);
   ops.impl("quantize_fp4_sfa_fp16", torch::kCUDA, &quantize_fp4_sfa_fp16);
+  ops.impl("quantize_e0m3_sfa_fp16", torch::kCUDA, &quantize_e0m3_sfa_fp16);
+  ops.impl("e0m3_weight_gemm_fp16", torch::kCUDA, &e0m3_weight_gemm_fp16);
+  ops.impl("nvfp4_gemm_relu2_nvfp4", torch::kCUDA, &nvfp4_gemm_relu2_nvfp4);
   ops.impl("quantize_fp4_sfa_bf16", torch::kCUDA, &quantize_fp4_sfa_bf16);
   ops.impl("dequantize_fp4_sfa_fp16", torch::kCUDA, &dequantize_fp4_sfa_fp16);
 #endif

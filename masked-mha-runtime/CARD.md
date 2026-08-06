@@ -14,6 +14,7 @@ removing the per-call `-inf` pre-fill. BF16 accepts fused-QKV token strides.
 - `forward(q, k, v, *, scale=None)`
 - `forward_static(q, k, v, *, logits, out, scale=None)`
 - `allocate_workspace(q, k)`
+- `forward_seqused_static(q, k, v, valid_k, *, logits, out, scale=None)`
 
 Inputs use `(sequence, heads, head_dim)`. `forward_static` is the CUDA Graph
 hot-path API: allocate `logits` and `out` once and reuse their addresses.

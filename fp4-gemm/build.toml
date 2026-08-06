@@ -29,6 +29,7 @@ cuda-flags = [
   "-O3",
   "--use_fast_math",
   "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+  "-DFLASHRT_HAVE_COSMOS3_EDGE=1",
 ]
 src = [
   "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cu",
@@ -44,6 +45,10 @@ src = [
   "csrc/gemm/fp4/cutlass_fp4_gemm_geglu_il_sm100.cuh",
   "csrc/gemm/fp4/cutlass_fp4_gemm_siglip_ffn_sm100.cu",
   "csrc/gemm/fp4/cutlass_fp4_gemm_siglip_ffn_sm100.cuh",
+  "csrc/gemm/fp4/cutlass_fp4_gemm_e0m3w_sm100.cu",
+  "csrc/gemm/fp4/cutlass_fp4_gemm_e0m3w_sm100.cuh",
+  "csrc/gemm/fp4/cosmos3_edge_fp4_gemm_relu2_fp4out.cu",
+  "csrc/gemm/fp4/cosmos3_edge_fp4_gemm_relu2_fp4out.cuh",
   "csrc/gemm/fp4/sm100_gelu_mul_blockscale_visitor.hpp",
   "csrc/quantize/quantize_fp4_sfa_bf16.cu",
   "csrc/quantize/quantize_fp4_sfa_bf16.cuh",
@@ -61,6 +66,8 @@ cuda-flags = ["--expt-relaxed-constexpr", "-O3", "--use_fast_math"]
 src = [
   "csrc/quantize/quantize_fp4_sfa.cu",
   "csrc/quantize/quantize_fp4_sfa.cuh",
+  "csrc/quantize/quantize_e0m3_sfa.cu",
+  "csrc/quantize/quantize_e0m3_sfa.cuh",
   "csrc/dequantize_fp4_sfa.cu",
   "csrc/dequantize_fp4_sfa.cuh",
 ]

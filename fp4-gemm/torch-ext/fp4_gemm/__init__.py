@@ -94,6 +94,21 @@ def _quant_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("quantize_e0m3_sfa_fp16"))
+def _quant_e0m3_fake(x, packed, sfa, is_sfb: bool = False) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("e0m3_weight_gemm_fp16"))
+def _e0m3_gemm_fake(a, b, sfa, sfb, out, alpha: float = 1.0, a_format: int = 1) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_relu2_nvfp4"))
+def _relu2_gemm_fake(a, b, sfa, sfb, out_packed, out_sfa) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_bf16"))
 def _quant_bf16_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb: bool = False) -> None:
     return None
@@ -141,6 +156,62 @@ def quantize_fp4_sfa_fp16(
         packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
     ops.quantize_fp4_sfa_fp16(x, packed, sfa, bool(is_sfb))
     return packed, sfa
+
+
+def quantize_e0m3_sfa_fp16(
+    x: torch.Tensor,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    is_sfb: bool = False,
+):
+    """Quantize FP16 to packed E0M3 with CUTLASS SFA/SFB layout."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.quantize_e0m3_sfa_fp16(x, packed, sfa, bool(is_sfb))
+    return packed, sfa
+
+
+def e0m3_weight_gemm_fp16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    alpha: float = 1.0,
+    a_format: int = 1,
+    out: torch.Tensor | None = None,
+):
+    """SM110 GEMM with E0M3 weights and E2M1 or E0M3 activations."""
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.float16,
+        )
+    ops.e0m3_weight_gemm_fp16(
+        a_packed, b_packed, sfa, sfb, out, float(alpha), int(a_format)
+    )
+    return out
+
+
+def nvfp4_gemm_relu2_nvfp4(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    out_packed: torch.Tensor | None = None,
+    out_sfa: torch.Tensor | None = None,
+):
+    """SM110 NVFP4 GEMM with fused ReLU-squared and NVFP4 output."""
+    if out_packed is None or out_sfa is None:
+        out_packed, out_sfa = _alloc_fp4(
+            a_packed.shape[0], b_packed.shape[0], a_packed.device
+        )
+    ops.nvfp4_gemm_relu2_nvfp4(
+        a_packed, b_packed, sfa, sfb, out_packed, out_sfa
+    )
+    return out_packed, out_sfa
 
 
 def quantize_fp4_sfa_bf16(
@@ -457,6 +528,7 @@ def nvfp4_gemm_streamk_bias_bf16(
 
 __all__ = [
     "dequantize_fp4_sfa_fp16",
+    "e0m3_weight_gemm_fp16",
     "fp4_w4a16_linear_bf16",
     "fp4_w4a4_gemv_warpsplit_bf16",
     "nvfp4_gemm_bf16",
@@ -469,9 +541,11 @@ __all__ = [
     "nvfp4_gemm_bias_gelu_nvfp4",
     "nvfp4_gemm_bias_residual_bf16",
     "nvfp4_gemm_residual_bf16",
+    "nvfp4_gemm_relu2_nvfp4",
     "nvfp4_gemm_streamk_bf16",
     "nvfp4_gemm_streamk_bias_bf16",
     "quantize_fp4_sfa_fp16",
+    "quantize_e0m3_sfa_fp16",
     "quantize_fp4_sfa_bf16",
     "sfa_size_bytes",
 ]

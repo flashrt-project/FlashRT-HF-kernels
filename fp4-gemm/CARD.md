@@ -8,6 +8,7 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 - `sfa_size_bytes`
 - `quantize_fp4_sfa_fp16`
 - `quantize_fp4_sfa_bf16`
+- `quantize_e0m3_sfa_fp16`
 - `dequantize_fp4_sfa_fp16`
 - `nvfp4_gemm_bf16`
 - `nvfp4_gemm_bias_bf16`
@@ -18,6 +19,8 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 - `nvfp4_gemm_streamk_bf16`
 - `nvfp4_gemm_streamk_bias_bf16`
 - `fp4_w4a16_linear_bf16` (compatibility alias)
+- `e0m3_weight_gemm_fp16`
+- `nvfp4_gemm_relu2_nvfp4`
 
 ## Example
 

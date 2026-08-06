@@ -78,6 +78,22 @@ def _residual_add_rms_norm_quant_fp8_static_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("residual_add_rms_norm_bf16"))
+def _residual_add_rms_norm_bf16_fake(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+    out: torch.Tensor,
+) -> None:
+    if residual.shape != x.shape:
+        raise RuntimeError("residual and x must have the same shape")
+    _check_rank2_same_shape(x, out, "out")
+    if weight.shape != (x.shape[1],):
+        raise RuntimeError("weight must have shape (x.shape[1],)")
+    return None
+
+
 def rms_norm_bf16(
     x: torch.Tensor,
     weight: torch.Tensor,
@@ -145,9 +161,24 @@ def residual_add_rms_norm_quant_fp8_static_bf16(
     return out
 
 
+def residual_add_rms_norm_bf16(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-6,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """In-place ``residual += x`` followed by weighted BF16 RMSNorm."""
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.bfloat16)
+    ops.residual_add_rms_norm_bf16(residual, x, weight, float(eps), out)
+    return out
+
+
 __all__ = [
     "layer_norm_bf16",
     "residual_add_rms_norm_quant_fp8_static_bf16",
+    "residual_add_rms_norm_bf16",
     "rms_norm_bf16",
     "rms_norm_quant_fp8_static_bf16",
 ]
