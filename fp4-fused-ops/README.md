@@ -1,3 +1,15 @@
+---
+library_name: kernels
+license: apache-2.0
+tags:
+  - cuda
+  - native-cuda
+  - blackwell
+  - nvfp4
+  - transformers
+  - diffusers
+---
+
 # fp4-fused-ops
 
 FlashRT fused FP16-to-NVFP4 producer kernels for keeping low-bit transformer
