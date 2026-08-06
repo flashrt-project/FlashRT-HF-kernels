@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import cutlass
 from cutlass import cute
@@ -35,6 +36,11 @@ if _DSL_VERSION >= (4, 6):
         cute.core.ThrCopy = cute.ThrCopy
     if not hasattr(cute, "make_fragment"):
         cute.make_fragment = cute.make_rmem_tensor
+
+# Kernel Hub imports a noarch variant under a content-derived module name after
+# flattening this package into the variant root. Preserve the public package
+# alias used by the vendored FA4 absolute imports.
+sys.modules.setdefault("fa4_cute_runtime", sys.modules[__name__])
 
 # kernel-builder copies only the directory matching ``general.name`` for a
 # torch-noarch package. The private vendor and quack subset therefore live
