@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import cutlass
+from cutlass import cute
 
 
 def _version_tuple(value: str) -> tuple[int, int]:
@@ -13,9 +14,9 @@ def _version_tuple(value: str) -> tuple[int, int]:
 
 
 _DSL_VERSION = _version_tuple(str(getattr(cutlass, "__version__", "0.0")))
-if not ((4, 4) <= _DSL_VERSION < (4, 6)):
+if not ((4, 4) <= _DSL_VERSION < (4, 7)):
     raise RuntimeError(
-        "fa4-cute-runtime requires nvidia-cutlass-dsl 4.4.x or 4.5.x; "
+        "fa4-cute-runtime requires nvidia-cutlass-dsl 4.4.x, 4.5.x, or 4.6.x; "
         f"found {getattr(cutlass, '__version__', 'unknown')}"
     )
 
@@ -23,6 +24,17 @@ os.environ.setdefault(
     "CUTE_DSL_ARCH", "sm_101a" if _DSL_VERSION >= (4, 5) else "sm_110a"
 )
 os.environ.setdefault("FLASH_ATTENTION_ARCH", "sm_100a")
+
+# CUTLASS DSL 4.6 promoted these public types out of ``cute.core``. The
+# vendored FA4 sources use the 4.4/4.5 annotation paths; restoring the aliases
+# keeps those annotations importable without changing generated kernels.
+if _DSL_VERSION >= (4, 6):
+    if not hasattr(cute.core, "ThrMma"):
+        cute.core.ThrMma = cute.ThrMma
+    if not hasattr(cute.core, "ThrCopy"):
+        cute.core.ThrCopy = cute.ThrCopy
+    if not hasattr(cute, "make_fragment"):
+        cute.make_fragment = cute.make_rmem_tensor
 
 # kernel-builder copies only the directory matching ``general.name`` for a
 # torch-noarch package. The private vendor and quack subset therefore live

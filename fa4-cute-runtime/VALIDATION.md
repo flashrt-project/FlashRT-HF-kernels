@@ -1,6 +1,6 @@
 # Validation
 
-Required on NVIDIA Thor with CUDA 13 and CUTLASS DSL 4.4.x or 4.5.x:
+Required on NVIDIA Thor with CUDA 13 and CUTLASS DSL 4.4.x, 4.5.x, or 4.6.x:
 
 ```bash
 python tests/test_fa4_cute_runtime.py --backend source --mode full
@@ -20,6 +20,10 @@ and all four D256 rows passed; worst p99 absolute error was `0.000244` and
 worst cosine was `0.99999982`. CUDA Graph replay was bitwise deterministic.
 The torch-noarch final-layout import probe also passed from the isolated Thor
 environment.
+
+The same `8/8` source matrix passed on the same Thor with CUTLASS DSL 4.6.1.
+The 4.6 compatibility aliases cover public API relocations only; D48/D72/D128
+and D256 dense/seqused results matched the 4.4.2 gate.
 
 Installed-artifact execution and performance must still be rerun after every
 Hub rebuild. Source qualification alone is not a release artifact claim.

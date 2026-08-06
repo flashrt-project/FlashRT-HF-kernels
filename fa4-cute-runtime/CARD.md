@@ -56,7 +56,7 @@ Inputs follow FlashAttention's `(batch, sequence, heads, head_dim)` contract.
 Qualified model profiles include D72 MHA and D256 GQA (8 Q heads / 1 KV head),
 with both dense and `seqused_k` execution. This package targets SM100-family
 Blackwell forward inference and requires
-CUDA 13 plus `nvidia-cutlass-dsl` 4.4.x or 4.5.x. The wrapper selects Thor's
+CUDA 13 plus `nvidia-cutlass-dsl` 4.4.x, 4.5.x, or 4.6.x. The wrapper selects Thor's
 accepted architecture alias according to the installed DSL version.
 
 This is an execution backend rather than a universal SDPA replacement. Select

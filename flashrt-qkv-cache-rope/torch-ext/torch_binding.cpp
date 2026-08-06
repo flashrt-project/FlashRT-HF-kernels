@@ -5,6 +5,12 @@
 
 #include <limits>
 
+// This package always builds the additive Cosmos3-Edge QK/RoPE surface.
+// kernel-builder compiles the Torch binding separately from CUDA targets, so
+// target-local cuda-flags are not visible while this translation unit parses
+// the public declarations.
+#define FLASHRT_HAVE_COSMOS3_EDGE 1
+
 #if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>

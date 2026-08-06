@@ -24,5 +24,5 @@ the FA4 source contents otherwise remain byte-identical to the PI0.5 delivery
 snapshot.
 
 When syncing, compare the complete vendor subtree, rerun all Thor shape gates,
-and validate both CUTLASS DSL 4.4.x (`sm_110a`) and the builder's 4.5.x
+and validate CUTLASS DSL 4.4.x (`sm_110a`) and the builder's 4.5.x/4.6.x
 (`sm_101a`) alias before updating this record.
