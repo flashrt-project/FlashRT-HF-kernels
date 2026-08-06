@@ -34,6 +34,8 @@ cuda-flags = [
 src = [
   "csrc/fused_fp4/norm_silu_fp4_sfa.cu",
   "csrc/fused_fp4/norm_silu_fp4_sfa.cuh",
+  "csrc/fused_fp4/adarms_nvfp4_bf16.cu",
+  "csrc/fused_fp4/adarms_nvfp4_bf16.cuh",
   "csrc/fused_fp4/layer_norm_fp4_sfa.cu",
   "csrc/fused_fp4/layer_norm_fp4_sfa.cuh",
   "csrc/fused_fp4/siglip_ln_vec.cu",

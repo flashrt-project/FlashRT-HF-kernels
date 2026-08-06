@@ -128,6 +128,16 @@ class SourceOps:
             x, previous_gate, residual, style, packed, sfa, gate
         )
 
+    def adaptive_rms_norm_nvfp4_bf16(self, x, style, packed, sfa, gate):
+        self._ops.adaptive_rms_norm_nvfp4_bf16(x, style, packed, sfa, gate)
+
+    def gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        self, x, previous_gate, residual, style, packed, sfa, gate
+    ):
+        self._ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+            x, previous_gate, residual, style, packed, sfa, gate
+        )
+
     def adaptive_rms_norm_fp8_static_fp16(self, x, style, scale, out, gate):
         self._ops.adaptive_rms_norm_fp8_static_fp16(x, style, scale, out, gate)
 
@@ -261,6 +271,7 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "fused_fp4" / "norm_silu_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "adarms_nvfp4_bf16.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "layer_norm_fp4_sfa.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "siglip_ln_vec.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "silu_mul_fp4_sfa_vec.cu"),
@@ -316,6 +327,12 @@ def make_fp16(shape: tuple[int, int], seed: int, scale: float = 0.25) -> torch.T
     gen = torch.Generator(device="cuda")
     gen.manual_seed(seed)
     return (torch.randn(shape, device="cuda", generator=gen) * scale).to(torch.float16).contiguous()
+
+
+def make_bf16(shape: tuple[int, int], seed: int, scale: float = 0.25) -> torch.Tensor:
+    gen = torch.Generator(device="cuda")
+    gen.manual_seed(seed)
+    return (torch.randn(shape, device="cuda", generator=gen) * scale).to(torch.bfloat16).contiguous()
 
 
 def check_equal(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -427,6 +444,91 @@ def run_fp8_adarms_checks(ops) -> list[CaseResult]:
         max_abs=metrics[0], mean_abs=metrics[1], p99_abs=metrics[2],
         cosine=metrics[3], passed=(residual_equal and graph_equal and torch.equal(out.view(torch.uint8), expected_fp8.view(torch.uint8))),
     ))
+    return results
+
+
+def run_bf16_adarms_nvfp4_checks(ops) -> list[CaseResult]:
+    results: list[CaseResult] = []
+    dim = 1024
+    for rows in (1, 10, 51, 105):
+        x = make_bf16((rows, dim), 2026080700 + rows, 0.2)
+        style = make_bf16((rows, 3 * dim), 2026080800 + rows, 0.1)
+        packed, sfa = alloc_fp4(ops, rows, dim)
+        gate = torch.empty_like(x)
+        ops.adaptive_rms_norm_nvfp4_bf16(x, style, packed, sfa, gate)
+        torch.cuda.synchronize()
+
+        scale, shift, gate_ref = style.chunk(3, dim=-1)
+        rstd = torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6)
+        norm_ref = (
+            x.float() * rstd * (1.0 + scale.float()) + shift.float()
+        ).to(torch.bfloat16)
+        max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+            ops, packed, sfa, norm_ref.half()
+        )
+        gate_exact = torch.equal(gate, gate_ref)
+        results.append(CaseResult(
+            case=f"adarms_nvfp4_bf16_rows{rows}_dim{dim}",
+            rows=rows, dim=dim, check="gate_exact_and_nvfp4_vs_bf16_math",
+            packed_equal=True, sfa_equal=True, residual_equal=gate_exact,
+            max_abs=max_abs, mean_abs=mean_abs, p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(gate_exact and check_fp4_quant_reference_threshold(
+                max_abs, mean_abs, p99_abs, cosine
+            )),
+        ))
+
+        previous_gate = make_bf16((rows, dim), 2026080900 + rows, 0.1)
+        residual = make_bf16((rows, dim), 2026081000 + rows, 0.15)
+        residual_initial = residual.clone()
+        update_math = residual.float() + x.float() * previous_gate.float()
+        residual_ref = update_math.to(torch.bfloat16)
+        ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+            x, previous_gate, residual, style, packed, sfa, gate
+        )
+        torch.cuda.synchronize()
+        rstd = torch.rsqrt(update_math.square().mean(-1, keepdim=True) + 1e-6)
+        norm_ref = (
+            residual_ref.float() * rstd * (1.0 + scale.float()) + shift.float()
+        ).to(torch.bfloat16)
+        max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+            ops, packed, sfa, norm_ref.half()
+        )
+        residual_exact = torch.equal(residual, residual_ref)
+        gate_exact = torch.equal(gate, gate_ref)
+
+        graph_exact = True
+        if rows == 10:
+            graph = torch.cuda.CUDAGraph()
+            residual.copy_(residual_initial)
+            torch.cuda.synchronize()
+            with torch.cuda.graph(graph):
+                ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+                    x, previous_gate, residual, style, packed, sfa, gate
+                )
+            residual.copy_(residual_initial)
+            graph.replay()
+            torch.cuda.synchronize()
+            first = (residual.clone(), packed.clone(), sfa.clone(), gate.clone())
+            residual.copy_(residual_initial)
+            graph.replay()
+            torch.cuda.synchronize()
+            second = (residual.clone(), packed.clone(), sfa.clone(), gate.clone())
+            graph_exact = all(torch.equal(a, b) for a, b in zip(first, second))
+
+        results.append(CaseResult(
+            case=f"gate_res_adarms_nvfp4_bf16_rows{rows}_dim{dim}",
+            rows=rows, dim=dim,
+            check="residual_gate_graph_exact_and_nvfp4_vs_bf16_math",
+            packed_equal=graph_exact, sfa_equal=graph_exact,
+            residual_equal=residual_exact,
+            max_abs=max_abs, mean_abs=mean_abs, p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(residual_exact and gate_exact and graph_exact and
+                    check_fp4_quant_reference_threshold(
+                        max_abs, mean_abs, p99_abs, cosine
+                    )),
+        ))
     return results
 
 
@@ -1366,6 +1468,7 @@ def main() -> int:
     results.extend(run_linear_nvfp4_checks(ops))
     results.extend(run_ncdhw_bf16_checks(ops))
     results.extend(run_fp8_adarms_checks(ops))
+    results.extend(run_bf16_adarms_nvfp4_checks(ops))
     results.extend(run_e0m3_and_cosmos_fp4_checks(ops))
     results.extend(run_unsupported_checks(ops))
     results.extend(run_pi05_thor_producer_checks(ops))

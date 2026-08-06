@@ -62,3 +62,21 @@ and report time per launch.
 PyTorch does not expose a contract-equivalent NVFP4 E2M1 packer with UE4M3
 linear scale-byte output, so those rows deliberately do not report a speedup
 against the CPU/Python correctness reference.
+
+## BF16 AdaRMS producer twins on Thor
+
+Measured on NVIDIA Thor, PyTorch `2.13.0+cu130`, CUDA 13.0, with 50 warmups
+and 500 timed launches. The comparison is against the already qualified FP16
+native-family producer with identical launch geometry and SFA output layout;
+it is a performance-parity gate, not an eager speedup claim.
+
+| Rows | BF16 AdaRMS us | BF16/FP16 | BF16 gate-res AdaRMS us | BF16/FP16 |
+|---:|---:|---:|---:|---:|
+| 1 | 10.244 | 0.998 | 10.684 | 0.669 |
+| 10 | 5.076 | 0.985 | 10.431 | 0.992 |
+| 51 | 5.102 | 0.982 | 10.345 | 0.972 |
+| 105 | 6.132 | 0.990 | 10.156 | 0.951 |
+
+The corresponding Thor source gate passed `66/66`. BF16 residual and gate
+outputs are exact, rows=10 CUDA Graph replay is bit-identical, and the worst
+dequantized NVFP4 cosine over rows `1/10/51/105` is `0.995462`.

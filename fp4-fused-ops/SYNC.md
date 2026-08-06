@@ -8,6 +8,8 @@
 Copied source files:
 
 - `csrc/fused_fp4/norm_silu_fp4_sfa.cu/.cuh`
+- `csrc/fused_fp4/adarms_nvfp4_bf16.cu/.cuh` (additive BF16 twin;
+  preserves the production FP16 reduction and SFA contract)
 - `csrc/fused_fp4/dequantize_fp4_sfa.cu/.cuh`
 - `csrc/fused_fp4/res_rms_fp4_sfa_v2.cu`
 - `csrc/fused_fp4/res_rms_mul_fp4_sfa.cu`
@@ -31,11 +33,12 @@ Architecture and dependency assumptions:
 
 - CUDA 12.8+ for SM120; CUDA 13+ for SM110
 - NVIDIA Blackwell `sm_110a` and `sm_120a`
-- `cutlass_4_0` from `kernel-builder` for CUTE/CUTLASS SFA layout helpers.
+- `cutlass_4_4` from `kernel-builder` for CUTE/CUTLASS SFA layout helpers.
 
 Runtime constraints:
 
-- Inputs are FP16 (`torch.float16`) matrices.
+- Inputs are FP16 (`torch.float16`) or BF16 (`torch.bfloat16`) matrices through
+  explicit dtype-specific entry points; no implicit cast is permitted.
 - Packed outputs are `torch.uint8`.
 - SFA buffers are `torch.uint8` with byte length from `sfa_size_bytes`.
 - Dimensions must be multiples of 16.

@@ -102,6 +102,18 @@ def _gated_adaptive_rms_fake(x, previous_gate, residual, style, packed, sfa, gat
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("adaptive_rms_norm_nvfp4_bf16"))
+def _adaptive_rms_bf16_fake(x, style, packed, sfa, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gated_residual_adaptive_rms_norm_nvfp4_bf16"))
+def _gated_adaptive_rms_bf16_fake(
+    x, previous_gate, residual, style, packed, sfa, gate
+) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("adaptive_rms_norm_fp8_static_fp16"))
 def _adaptive_rms_fp8_fake(x, style, scale, out, gate) -> None:
     return None
@@ -375,6 +387,75 @@ def gate_res_ada_rms_norm_quant_nvfp4_swizzled_fp16(
 ):
     """Canonical name for gated residual + AdaRMS-to-NVFP4."""
     return gated_residual_adaptive_rms_norm_nvfp4_fp16(
+        x, previous_gate, residual, style,
+        packed=packed, sfa=sf_swizzled, gate=gate,
+    )
+
+
+def adaptive_rms_norm_nvfp4_bf16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Apply BF16 AdaRMSNorm and emit native NVFP4 plus the BF16 gate."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_nvfp4_bf16(x, style, packed, sfa, gate)
+    return packed, sfa, gate
+
+
+def gated_residual_adaptive_rms_norm_nvfp4_bf16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Update a BF16 gated residual, apply AdaRMSNorm, and emit NVFP4."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        x, previous_gate, residual, style, packed, sfa, gate
+    )
+    return residual, packed, sfa, gate
+
+
+def ada_rms_norm_quant_nvfp4_swizzled_bf16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Canonical BF16 alias for AdaRMSNorm-to-NVFP4."""
+    return adaptive_rms_norm_nvfp4_bf16(
+        x, style, packed=packed, sfa=sf_swizzled, gate=gate
+    )
+
+
+def gate_res_ada_rms_norm_quant_nvfp4_swizzled_bf16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Canonical BF16 alias for gated residual AdaRMSNorm-to-NVFP4."""
+    return gated_residual_adaptive_rms_norm_nvfp4_bf16(
         x, previous_gate, residual, style,
         packed=packed, sfa=sf_swizzled, gate=gate,
     )
@@ -707,14 +788,18 @@ def bf16_rms_norm_ncdhw(
 __all__ = [
     "ada_rms_norm_quant_nvfp4_swizzled_fp16",
     "adaptive_rms_norm_nvfp4_fp16",
+    "adaptive_rms_norm_nvfp4_bf16",
     "adaptive_rms_norm_fp8_static_fp16",
     "adaptive_rms_norm_e0m3_fp16",
     "bf16_rms_norm_ncdhw",
     "bf16_rms_silu_ncdhw",
     "dequantize_fp4_sfa_fp16",
     "gated_residual_adaptive_rms_norm_nvfp4_fp16",
+    "gated_residual_adaptive_rms_norm_nvfp4_bf16",
     "gated_residual_adaptive_rms_norm_e0m3_fp16",
     "gate_res_ada_rms_norm_quant_nvfp4_swizzled_fp16",
+    "ada_rms_norm_quant_nvfp4_swizzled_bf16",
+    "gate_res_ada_rms_norm_quant_nvfp4_swizzled_bf16",
     "gate_res_ada_rms_norm_quant_fp8_static_fp16",
     "gelu_mul_nvfp4_fp16",
     "gelu_mul_e0m3_fp16",

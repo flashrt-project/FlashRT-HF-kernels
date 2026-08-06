@@ -22,6 +22,10 @@ low-bit paths.
 - `bf16_rms_silu_ncdhw`
 - `adaptive_rms_norm_e0m3_fp16`
 - `gated_residual_adaptive_rms_norm_e0m3_fp16`
+- `adaptive_rms_norm_nvfp4_fp16` / `adaptive_rms_norm_nvfp4_bf16`
+- `gated_residual_adaptive_rms_norm_nvfp4_fp16` / `gated_residual_adaptive_rms_norm_nvfp4_bf16`
+- canonical aliases `ada_rms_norm_quant_nvfp4_swizzled_{fp16,bf16}` and
+  `gate_res_ada_rms_norm_quant_nvfp4_swizzled_{fp16,bf16}`
 - `gelu_mul_e0m3_fp16`
 - `residual_add_rms_norm_quant_nvfp4_swizzled_bf16`
 - `relu2_quant_nvfp4_swizzled_fp16`
@@ -47,7 +51,8 @@ bf16_view = ops.dequantize_fp4_sfa_fp16(packed, sfa)
 ## Shape Contract
 
 - CUDA tensors only.
-- FP16 producer inputs, uint8 FP4 packed outputs, uint8 CUTLASS SFA buffers.
+- FP16/BF16 producer inputs use dtype-specific entry points; outputs are uint8
+  FP4 packed tensors plus uint8 CUTLASS SFA buffers.
 - Dimensions must be divisible by 16.
 - v1 RMS producer paths support `dim <= 2048`.
 - Larger residual/RMS producer shapes should use

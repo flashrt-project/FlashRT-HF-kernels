@@ -15,6 +15,7 @@
 #endif
 
 #include "fused_fp4/norm_silu_fp4_sfa.cuh"
+#include "fused_fp4/adarms_nvfp4_bf16.cuh"
 #include "fused_fp4/layer_norm_fp4_sfa.cuh"
 #include "fused_fp4/siglip_ln_vec.cuh"
 #include "fused_fp4/dequantize_fp4_sfa.cuh"
@@ -50,6 +51,17 @@ void check_fp16_matrix(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.size(0) > 0 && tensor.size(1) > 0,
               name, " dimensions must be positive");
   TORCH_CHECK(tensor.size(1) % 16 == 0, name, ".shape[1] must be divisible by 16");
+}
+
+void check_bf16_matrix(torch::Tensor const& tensor, const char* name) {
+  check_cuda_contiguous(tensor, name);
+  TORCH_CHECK(tensor.scalar_type() == torch::kBFloat16,
+              name, " must have dtype torch.bfloat16");
+  TORCH_CHECK(tensor.dim() == 2, name, " must have shape (rows, cols)");
+  TORCH_CHECK(tensor.size(0) > 0 && tensor.size(1) > 0,
+              name, " dimensions must be positive");
+  TORCH_CHECK(tensor.size(1) % 16 == 0,
+              name, ".shape[1] must be divisible by 16");
 }
 
 void check_uint8(torch::Tensor const& tensor, const char* name) {
@@ -470,6 +482,80 @@ void gated_residual_adaptive_rms_norm_nvfp4_fp16(
       reinterpret_cast<uint8_t*>(sfa.data_ptr()),
       reinterpret_cast<__half*>(gate.data_ptr()), checked_int(rows, "rows"),
       checked_int(dim, "dim"), stream);
+#endif
+}
+
+void adaptive_rms_norm_nvfp4_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& style,
+    torch::Tensor& packed,
+    torch::Tensor& sfa,
+    torch::Tensor& gate) {
+  check_bf16_matrix(x, "x");
+  check_bf16_matrix(style, "style");
+  check_bf16_matrix(gate, "gate");
+  const int64_t rows = x.size(0);
+  const int64_t dim = x.size(1);
+  TORCH_CHECK(dim == 1024,
+              "adaptive_rms_norm_nvfp4_bf16 currently supports dim=1024");
+  TORCH_CHECK(style.sizes() == torch::IntArrayRef({rows, 3 * dim}),
+              "style must have shape (rows, 3 * dim)");
+  TORCH_CHECK(gate.sizes() == x.sizes(), "gate must match x shape");
+  check_packed_sfa(packed, sfa, x, rows, dim);
+  check_same_device(x, style, "x", "style");
+  check_same_device(x, gate, "x", "gate");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::fused_fp4::adarms_nvfp4_native_bf16(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(style.data_ptr()),
+      static_cast<uint8_t*>(packed.data_ptr()),
+      static_cast<uint8_t*>(sfa.data_ptr()),
+      static_cast<__nv_bfloat16*>(gate.data_ptr()),
+      checked_int(rows, "rows"), checked_int(dim, "dim"), stream);
+#endif
+}
+
+void gated_residual_adaptive_rms_norm_nvfp4_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& previous_gate,
+    torch::Tensor& residual,
+    torch::Tensor const& style,
+    torch::Tensor& packed,
+    torch::Tensor& sfa,
+    torch::Tensor& gate) {
+  check_bf16_matrix(x, "x");
+  check_bf16_matrix(previous_gate, "previous_gate");
+  check_bf16_matrix(residual, "residual");
+  check_bf16_matrix(style, "style");
+  check_bf16_matrix(gate, "gate");
+  const int64_t rows = x.size(0);
+  const int64_t dim = x.size(1);
+  TORCH_CHECK(dim == 1024,
+              "gated_residual_adaptive_rms_norm_nvfp4_bf16 currently supports dim=1024");
+  TORCH_CHECK(previous_gate.sizes() == x.sizes() &&
+                  residual.sizes() == x.sizes() && gate.sizes() == x.sizes(),
+              "previous_gate, residual, and gate must match x shape");
+  TORCH_CHECK(style.sizes() == torch::IntArrayRef({rows, 3 * dim}),
+              "style must have shape (rows, 3 * dim)");
+  check_packed_sfa(packed, sfa, x, rows, dim);
+  check_same_device(x, previous_gate, "x", "previous_gate");
+  check_same_device(x, residual, "x", "residual");
+  check_same_device(x, style, "x", "style");
+  check_same_device(x, gate, "x", "gate");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::fused_fp4::gate_res_adarms_nvfp4_native_bf16(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(previous_gate.data_ptr()),
+      static_cast<__nv_bfloat16*>(residual.data_ptr()),
+      static_cast<const __nv_bfloat16*>(style.data_ptr()),
+      static_cast<uint8_t*>(packed.data_ptr()),
+      static_cast<uint8_t*>(sfa.data_ptr()),
+      static_cast<__nv_bfloat16*>(gate.data_ptr()),
+      checked_int(rows, "rows"), checked_int(dim, "dim"), stream);
 #endif
 }
 
@@ -1049,6 +1135,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("silu_mul_two_mul_fp4_to_fp4(Tensor gate_packed, Tensor gate_sfa, Tensor up_packed, Tensor up_sfa, Tensor inv_s, Tensor! out_packed, Tensor! out_sfa) -> ()");
   ops.def("adaptive_rms_norm_nvfp4_fp16(Tensor x, Tensor style, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
   ops.def("gated_residual_adaptive_rms_norm_nvfp4_fp16(Tensor x, Tensor previous_gate, Tensor! residual, Tensor style, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
+  ops.def("adaptive_rms_norm_nvfp4_bf16(Tensor x, Tensor style, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
+  ops.def("gated_residual_adaptive_rms_norm_nvfp4_bf16(Tensor x, Tensor previous_gate, Tensor! residual, Tensor style, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
   ops.def("adaptive_rms_norm_fp8_static_fp16(Tensor x, Tensor style, Tensor scale, Tensor! out, Tensor! gate) -> ()");
   ops.def("gated_residual_adaptive_rms_norm_fp8_static_fp16(Tensor x, Tensor previous_gate, Tensor! residual, Tensor style, Tensor scale, Tensor! out, Tensor! gate) -> ()");
   ops.def("adaptive_rms_norm_e0m3_fp16(Tensor x, Tensor style, bool use_rht, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
@@ -1077,6 +1165,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("silu_mul_two_mul_fp4_to_fp4", torch::kCUDA, &silu_mul_two_mul_fp4_to_fp4);
   ops.impl("adaptive_rms_norm_nvfp4_fp16", torch::kCUDA, &adaptive_rms_norm_nvfp4_fp16);
   ops.impl("gated_residual_adaptive_rms_norm_nvfp4_fp16", torch::kCUDA, &gated_residual_adaptive_rms_norm_nvfp4_fp16);
+  ops.impl("adaptive_rms_norm_nvfp4_bf16", torch::kCUDA, &adaptive_rms_norm_nvfp4_bf16);
+  ops.impl("gated_residual_adaptive_rms_norm_nvfp4_bf16", torch::kCUDA, &gated_residual_adaptive_rms_norm_nvfp4_bf16);
   ops.impl("adaptive_rms_norm_fp8_static_fp16", torch::kCUDA, &adaptive_rms_norm_fp8_static_fp16);
   ops.impl("gated_residual_adaptive_rms_norm_fp8_static_fp16", torch::kCUDA, &gated_residual_adaptive_rms_norm_fp8_static_fp16);
   ops.impl("adaptive_rms_norm_e0m3_fp16", torch::kCUDA, &adaptive_rms_norm_e0m3_fp16);

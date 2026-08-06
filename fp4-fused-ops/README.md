@@ -27,6 +27,10 @@ chains.
 - `silu_mul_two_mul_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed=None, out_sfa=None)`
 - `adaptive_rms_norm_nvfp4_fp16(x, style, packed=None, sfa=None, gate=None)`
 - `gated_residual_adaptive_rms_norm_nvfp4_fp16(x, previous_gate, residual, style, ...)`
+- `adaptive_rms_norm_nvfp4_bf16(x, style, packed=None, sfa=None, gate=None)`
+- `gated_residual_adaptive_rms_norm_nvfp4_bf16(x, previous_gate, residual, style, ...)`
+- `ada_rms_norm_quant_nvfp4_swizzled_fp16(...)` / `ada_rms_norm_quant_nvfp4_swizzled_bf16(...)`
+- `gate_res_ada_rms_norm_quant_nvfp4_swizzled_fp16(...)` / `gate_res_ada_rms_norm_quant_nvfp4_swizzled_bf16(...)`
 - `adaptive_rms_norm_fp8_static_fp16(x, style, scale, out=None, gate=None)`
 - `gate_res_ada_rms_norm_quant_fp8_static_fp16(x, previous_gate, residual, style, scale, ...)`
 - `adaptive_rms_norm_e0m3_fp16(x, style, use_rht=False, ...)`
@@ -55,8 +59,9 @@ Tensor contract:
   shapes should use `residual_add_rms_norm_fp4_sfa_v2_fp16`.
 - All dimensions must be divisible by 16. Unsupported shapes raise instead of
   silently taking a slow or partial path.
-- PI0.5 adaptive RMSNorm producers currently require `dim=1024`; `style` is
-  `(rows, 3 * dim)` containing scale, shift, and gate.
+- Adaptive RMSNorm producers require `dim=1024`; `style` is `(rows, 3 * dim)`
+  containing scale, shift, and gate. FP16 and BF16 input/gate contracts are
+  separate additive entry points; neither silently casts.
 - Automatically allocated SFA buffers are zero-initialized because CUTLASS
   tile padding is intentionally not written by every producer.
 - Linear NVFP4 uses E2M1 values and linear UE4M3 scale bytes per 16 channels.
