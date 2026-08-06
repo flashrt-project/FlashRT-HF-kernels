@@ -56,7 +56,13 @@ class SourceOps:
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if major == 11 and minor == 0:
+        return "11.0a"
     return "12.0a" if major >= 12 else f"{major}.{minor}"
+
+
+def _is_sm110() -> bool:
+    return torch.cuda.get_device_capability(0) == (11, 0)
 
 
 def load_source_ops() -> SourceOps:
@@ -64,14 +70,29 @@ def load_source_ops() -> SourceOps:
 
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _arch_list())
     namespace = "grouped_moe_gemv_source_test"
-    load(
-        name=namespace,
-        sources=[
-            str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
+    if _is_sm110():
+        kernel_sources = [
+            str(PACKAGE / "csrc" / "kernels" / "w4a16_edge_sm120.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "sm110_dispatch.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "quantize_activations_nvfp4.cu"),
+        ]
+        cuda_flags = [
+            "-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL",
+            "-DFLASHRT_W4A16_EDGE_UNROLL=2",
+        ]
+    else:
+        kernel_sources = [
             str(PACKAGE / "csrc" / "kernels" / "nexn2_w4a16_gemv.cu"),
             str(PACKAGE / "csrc" / "kernels" / "nexn2_moe_grouped_w4a16.cu"),
             str(PACKAGE / "csrc" / "kernels" / "grouped_w4a4_gemv_sm120.cu"),
             str(PACKAGE / "csrc" / "kernels" / "quantize_activations_nvfp4.cu"),
+        ]
+        cuda_flags = ["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL"]
+    load(
+        name=namespace,
+        sources=[
+            str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
+            *kernel_sources,
         ],
         extra_include_paths=[
             str(PACKAGE / "csrc"),
@@ -82,7 +103,7 @@ def load_source_ops() -> SourceOps:
             ),
         ],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
-        extra_cuda_cflags=["-O3", "--expt-relaxed-constexpr", "-DCUDA_KERNEL"],
+        extra_cuda_cflags=cuda_flags,
         is_python_module=False,
         verbose=False,
     )
@@ -95,6 +116,13 @@ def load_source_ops() -> SourceOps:
     torch.library.register_fake(f"{namespace}::grouped_w4a4_gemv_bf16")(
         lambda activations_packed, weight_stack, sfa, sfb_stack, alpha_stack,
         expert_idx, out: None
+    )
+    torch.library.register_fake(f"{namespace}::w4a16_decode_gemv_bf16")(
+        lambda x, weight, sfb, alpha, out: None
+    )
+    torch.library.register_fake(f"{namespace}::grouped_w4a16_gemv_bf16")(
+        lambda activations, weight_stack, sfb_stack, alpha_stack, expert_idx,
+        w_stride, sfb_stride, out: None
     )
     return SourceOps(namespace)
 
@@ -328,8 +356,72 @@ def _torch_compile_case(ops) -> int:
     return 1
 
 
+def _sm110_w4a4_rejection_case(ops) -> int:
+    a = torch.empty((1, 64), device="cuda", dtype=torch.uint8)
+    w = torch.empty((1, 64, 64), device="cuda", dtype=torch.uint8)
+    sfa = torch.empty((sfb_bytes(1, 128),), device="cuda", dtype=torch.uint8)
+    sfb = torch.empty((1, sfb_bytes(64, 128)), device="cuda", dtype=torch.uint8)
+    alpha = torch.ones((1,), device="cuda", dtype=torch.float32)
+    idx = torch.zeros((1, 1), device="cuda", dtype=torch.int32)
+    try:
+        ops.grouped_w4a4_gemv_bf16(a, w, sfa, sfb, alpha, idx)
+    except RuntimeError as exc:
+        if "requires SM120/SM121" not in str(exc):
+            raise
+    else:
+        raise AssertionError("SM110 must reject the SM120-only W4A4 path")
+    return 1
+
+
+def _sm110_graph_case(ops) -> int:
+    slots, experts, n, k = 8, 4, 256, 512
+    acts = torch.randn((slots, k), device="cuda", dtype=torch.bfloat16)
+    weights = torch.randn((experts, n, k), device="cuda", dtype=torch.bfloat16)
+    packed = torch.empty((experts, n, k // 2), device="cuda", dtype=torch.uint8)
+    sf_one = sfb_bytes(n, k)
+    scales = torch.empty((experts, sf_one), device="cuda", dtype=torch.uint8)
+    for expert in range(experts):
+        ops.quantize_weights_nvfp4_bf16(
+            weights[expert], packed=packed[expert], sfb=scales[expert]
+        )
+    alpha = torch.ones((experts,), device="cuda", dtype=torch.float32)
+    idx = torch.arange(slots, device="cuda", dtype=torch.int32) % experts
+    out = torch.empty((slots, n), device="cuda", dtype=torch.bfloat16)
+    args = (acts, packed, scales, alpha, idx, n * k // 2, sf_one, n)
+    for _ in range(3):
+        ops.grouped_w4a16_gemv_bf16(*args, out=out)
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.grouped_w4a16_gemv_bf16(*args, out=out)
+    graph.replay()
+    torch.cuda.synchronize()
+    first = out.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, first, rtol=0, atol=0)
+    idx.copy_(torch.flip(idx, dims=[0]))
+    graph.replay()
+    torch.cuda.synchronize()
+    replay = out.clone()
+    eager = ops.grouped_w4a16_gemv_bf16(*args)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(replay, eager, rtol=0, atol=0)
+    return 2
+
+
 def run(ops, mode: str) -> int:
-    shapes = [(64, 128), (128, 256)] if mode == "smoke" else [(64, 128), (128, 256), (256, 512)]
+    shapes = (
+        [(64, 128), (128, 256)]
+        if mode == "smoke"
+        else [
+            (64, 128),
+            (128, 256),
+            (256, 512),
+            (1024, 2048),  # gate/up decode profile
+            (2048, 512),   # down decode/verify profile
+        ]
+    )
     count = 0
     for n, k in shapes:
         x = torch.ones((k,), device="cuda", dtype=torch.bfloat16)
@@ -357,6 +449,11 @@ def run(ops, mode: str) -> int:
         if float(diff.max().item()) > 0.0:
             raise AssertionError("grouped_w4a16_gemv_bf16 constant mismatch")
         count += 1
+    if _is_sm110():
+        count += _sm110_w4a4_rejection_case(ops)
+        count += _sm110_graph_case(ops)
+        return count
+
     w4a4_shapes = [(1, 8, 128, 256), (7, 8, 128, 512)]
     if mode == "full":
         w4a4_shapes += [

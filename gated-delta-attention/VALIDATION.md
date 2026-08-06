@@ -35,6 +35,9 @@ It additionally requires:
 - deterministic rejection of poisoned packed-Q/value tail data on partial
   64-token tiles;
 - installed-wrapper parity under `torch.compile(fullgraph=True)`.
+- twenty repeated single-chunk H32 WY launches. This is a regression gate for
+  the `NT=1` asynchronous-copy boundary and must not be replaced by a relaxed
+  numerical tolerance.
 
 `gated_delta_recurrent_sequence_bf16` keeps recurrent state in FP32 for the
 entire sequence and casts state to BF16 only once on exit. Its independent
@@ -101,3 +104,15 @@ Result: same full rows, CUDA Graph, poisoned-tail regression, and
 
 For v5 release artifacts, rerun the same command against the HF Jobs artifact
 before updating the installed-artifact claim.
+
+## SM110 Source Results
+
+Jetson AGX Thor source validation passes `38/38`, including the complete H32
+WY chain at `S={1,17,64,65,128,256}`, CUDA Graph bitwise replay, poisoned-tail
+rejection, and the 20-repeat `S=64` single-chunk stress gate. RTX 5090 source
+validation passes the same `38/38` matrix.
+
+The stress gate exposed an actual `cp.async wait_group` race for the one-chunk
+case. The implementation now waits for the only committed group when `NT=1`;
+multi-chunk execution retains the pipelined wait. Release artifacts must pass
+the same installed test matrix on both torch 2.11 and torch 2.13.

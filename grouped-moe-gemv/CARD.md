@@ -15,6 +15,14 @@ tags:
 Native CUDA FlashRT grouped MoE GEMV kernels for dynamic device-side routing.
 Version 2 covers BF16-activation/NVFP4-weight W4A16 and fully NVFP4 W4A4.
 
+Hardware support is backend-specific:
+
+- SM110 (Jetson AGX Thor): native FlashRT W4A16 decode/grouped GEMV, built
+  with the SM110-only `kUnroll=2` tuning from FlashRT PR #169;
+- SM120/SM121: W4A16 plus block-scaled-MMA W4A4;
+- W4A4 rejects SM110 explicitly instead of dispatching an incompatible
+  device image or silently falling back.
+
 Available functions:
 
 - `w4a16_decode_gemv_bf16`
@@ -46,3 +54,7 @@ Use `quantize_activations_nvfp4_bf16` once for `[M,K]`, followed by
 `grouped_w4a4_gemv_bf16` for all `[M,top_k]` routes. The convenience function
 `grouped_w4a4_gemv_from_bf16` performs both calls and accepts preallocated
 `packed`, `sfa`, and `out` buffers for CUDA Graph capture.
+
+On SM110, call `grouped_w4a16_gemv_bf16` with BF16 activations and the packed
+expert library. This path is allocation-free with a caller-provided `out`
+buffer and supports device-side `expert_idx` mutation during graph replay.

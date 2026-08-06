@@ -249,6 +249,9 @@ void grouped_w4a4_gemv_bf16(torch::Tensor const& activations_packed,
       checked_int(n, "N"), checked_int(k, "K"),
       checked_long(weight_stack.size(1) * weight_stack.size(2), "w_stride"),
       checked_long(sfb_stack.size(1), "sfb_stride"), stream);
+  TORCH_CHECK(rc != 110,
+              "grouped_w4a4_gemv_bf16 requires SM120/SM121 block-scaled "
+              "MMA; use grouped_w4a16_gemv_bf16 on SM110");
   TORCH_CHECK(rc == 0, "grouped_w4a4_gemv_bf16 failed with rc=", rc);
 #else
   TORCH_CHECK(false, "grouped-moe-gemv was not built with CUDA support");
