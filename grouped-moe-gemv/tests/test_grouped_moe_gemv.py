@@ -387,13 +387,18 @@ def _sm110_graph_case(ops) -> int:
     alpha = torch.ones((experts,), device="cuda", dtype=torch.float32)
     idx = torch.arange(slots, device="cuda", dtype=torch.int32) % experts
     out = torch.empty((slots, n), device="cuda", dtype=torch.bfloat16)
-    args = (acts, packed, scales, alpha, idx, n * k // 2, sf_one, n)
+    args = (acts, packed, scales, alpha, idx)
+    kwargs = {
+        "n": n,
+        "w_stride": n * k // 2,
+        "sfb_stride": sf_one,
+    }
     for _ in range(3):
-        ops.grouped_w4a16_gemv_bf16(*args, out=out)
+        ops.grouped_w4a16_gemv_bf16(*args, **kwargs, out=out)
     torch.cuda.synchronize()
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
-        ops.grouped_w4a16_gemv_bf16(*args, out=out)
+        ops.grouped_w4a16_gemv_bf16(*args, **kwargs, out=out)
     graph.replay()
     torch.cuda.synchronize()
     first = out.clone()
@@ -404,7 +409,7 @@ def _sm110_graph_case(ops) -> int:
     graph.replay()
     torch.cuda.synchronize()
     replay = out.clone()
-    eager = ops.grouped_w4a16_gemv_bf16(*args)
+    eager = ops.grouped_w4a16_gemv_bf16(*args, **kwargs)
     torch.cuda.synchronize()
     torch.testing.assert_close(replay, eager, rtol=0, atol=0)
     return 2
