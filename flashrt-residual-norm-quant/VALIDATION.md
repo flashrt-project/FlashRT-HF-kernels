@@ -54,3 +54,6 @@ On 2026-08-06, source full passed on NVIDIA Thor (SM110), PyTorch
 checked both out-of-place and with the production in-place residual contract
 across PI0.5, GROOT, and video-prefill shapes. All rows passed the package's
 strict BF16 operation-order reference.
+
+Cosmos3-Edge coverage uses `(rows=128, dim=2048)` and additionally requires
+bitwise-identical static-output CUDA Graph replay.

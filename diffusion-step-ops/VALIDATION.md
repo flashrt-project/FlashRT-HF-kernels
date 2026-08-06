@@ -14,6 +14,10 @@ Source correctness covers:
   - `(1, 16, 17, 16, 24)`
 - Action-tail boundaries `(32,7)`, `(257,51)` and `(4096,1024)`.
 - Bias/tail matrices `(1,16,7)`, `(51,64,32)` and `(105,257,256)`.
+- Cosmos3-Edge production contracts:
+  - flat velocity/action tail `(1,201,920, 3,840)`;
+  - bias and zero tail `(60,64,9)`;
+  - exact direct output and bitwise CUDA Graph replay.
 - UniPC orders `(0,1)`, `(1,1)`, `(1,2)` and `(2,2)`.
 
 Correctness gates:

@@ -66,6 +66,10 @@ python flashrt-residual-norm-quant/tests/test_residual_norm_quant.py --backend s
 python flashrt-residual-norm-quant/benchmarks/benchmark.py --backend source --shapes all
 ```
 
-Current RTX 5090 source-extension rows pass with FP8 `p99_abs=0` across the
-initial PI0.5/VLA shape grid. Built-artifact and multi-hardware validation are
-pending.
+Current RTX 5090 source-extension rows pass the package's strict BF16/FP8
+distribution gates across the PI0.5, VLA, video, and Cosmos3-Edge shape grid.
+Built artifacts must pass the same gate before publication.
+
+The no-quant BF16 path is also gated at the Cosmos3-Edge production hidden
+size (`rows=128`, `dim=2048`) and preserves the in-place residual contract.
+Its static-output CUDA Graph replay is checked bitwise.
