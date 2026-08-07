@@ -3,6 +3,7 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <cstdlib>
 #include <limits>
 
 #if defined(CUDA_KERNEL)
@@ -242,13 +243,19 @@ void grouped_w4a4_gemv_bf16(torch::Tensor const& activations_packed,
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard guard(activations_packed.device());
   auto stream = at::cuda::getCurrentCUDAStream(activations_packed.get_device()).stream();
+  const auto* properties = at::cuda::getDeviceProperties(activations_packed.get_device());
+  // The block-scaled mma path is SM120-only and asserts on sm_110a (Thor).
+  // Route SM11x devices (and FLASHRT_FORCE_SIMT diagnostics) to the portable
+  // SIMT reference; SM120 keeps the validated mma kernel.
+  const bool force_simt = std::getenv("FLASHRT_FORCE_SIMT") != nullptr ||
+                          properties->major == 11;
   const int rc = flash_rt::gemm::grouped_w4a4_gemv_sm120_bf16(
       activations_packed.data_ptr(), weight_stack.data_ptr(), out.data_ptr(),
       sfa.data_ptr(), sfb_stack.data_ptr(), alpha_stack.data_ptr(),
       expert_idx.data_ptr(), checked_int(m, "M"), checked_int(top_k, "top_k"),
       checked_int(n, "N"), checked_int(k, "K"),
       checked_long(weight_stack.size(1) * weight_stack.size(2), "w_stride"),
-      checked_long(sfb_stack.size(1), "sfb_stride"), stream);
+      checked_long(sfb_stack.size(1), "sfb_stride"), stream, force_simt);
   TORCH_CHECK(rc == 0, "grouped_w4a4_gemv_bf16 failed with rc=", rc);
 #else
   TORCH_CHECK(false, "grouped-moe-gemv was not built with CUDA support");

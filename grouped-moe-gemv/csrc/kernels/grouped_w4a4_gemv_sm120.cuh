@@ -31,6 +31,10 @@ namespace gemm {
 //   expert_idx : (M,top_k) contiguous device int, flattened token-major.
 //   strides    : byte strides into the stacks (w_stride = N*K/2,
 //                sfb_stride = swizzled SF bytes for (N,K)).
+//   force_simt : route every shape to the portable SIMT kernel. The default
+//                block-scaled mma path is SM120-only
+//                (SM120_16x8x64_TN_VS); on SM110 (Thor) that atom asserts, so
+//                callers on non-SM120 devices must pass true.
 //
 // Returns 0 on success, nonzero on caller-side argument error.
 int grouped_w4a4_gemv_sm120_bf16(
@@ -47,7 +51,8 @@ int grouped_w4a4_gemv_sm120_bf16(
     int          K,
     long         w_stride,
     long         sfb_stride,
-    cudaStream_t stream);
+    cudaStream_t stream,
+    bool         force_simt);
 
 }  // namespace gemm
 }  // namespace flash_rt
