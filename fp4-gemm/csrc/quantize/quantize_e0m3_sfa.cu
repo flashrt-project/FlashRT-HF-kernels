@@ -42,12 +42,11 @@ __device__ __forceinline__ __nv_fp8_e4m3 quantize_ue4m3_e0m3(float x) {
     return __nv_fp8_e4m3(fmaxf(x, 0.f));
 }
 
-template <class LayoutSF>
+template <bool IsSfb>
 __global__ void kernel_quantize_e0m3_sfa(
     const __half* __restrict__ src,
     uint8_t* __restrict__ dst_packed,
     uint8_t* __restrict__ dst_sfa,
-    LayoutSF layout,
     int N, int D) {
     const int row = blockIdx.y;
     const int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -71,7 +70,16 @@ __global__ void kernel_quantize_e0m3_sfa(
     if (desired < 1e-12f) desired = 1e-12f;
     __nv_fp8_e4m3 scale_q = quantize_ue4m3_e0m3(desired);
     float scale_dq = static_cast<float>(scale_q);
-    dst_sfa[layout(row, block_idx * 16, 0)] =
+    auto shape = cute::make_shape(IsSfb ? 1 : N, IsSfb ? N : 1, D, 1);
+    int sfa_off;
+    if constexpr (IsSfb) {
+      auto layout = Cfg::tile_atom_to_shape_SFB(shape);
+      sfa_off = layout(row, block_idx * 16, 0);
+    } else {
+      auto layout = Cfg::tile_atom_to_shape_SFA(shape);
+      sfa_off = layout(row, block_idx * 16, 0);
+    }
+    dst_sfa[sfa_off] =
         *reinterpret_cast<uint8_t*>(&scale_q);
 
     const float inv = __frcp_rn(scale_dq);
@@ -97,25 +105,18 @@ int quantize_e0m3_dynamic_sfa_fp16(
   const int threads = 128;
   dim3 grid((n_blocks + threads - 1) / threads, N);
 
-  auto shape = cute::make_shape(
-      is_sfb ? 1 : N,
-      is_sfb ? N : 1,
-      D, 1);
-
   if (is_sfb) {
-    auto layout = Cfg::tile_atom_to_shape_SFB(shape);
-    kernel_quantize_e0m3_sfa<<<grid, threads, 0, stream>>>(
+    kernel_quantize_e0m3_sfa<true><<<grid, threads, 0, stream>>>(
         reinterpret_cast<const __half*>(src_fp16),
         reinterpret_cast<uint8_t*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
-        layout, N, D);
+        N, D);
   } else {
-    auto layout = Cfg::tile_atom_to_shape_SFA(shape);
-    kernel_quantize_e0m3_sfa<<<grid, threads, 0, stream>>>(
+    kernel_quantize_e0m3_sfa<false><<<grid, threads, 0, stream>>>(
         reinterpret_cast<const __half*>(src_fp16),
         reinterpret_cast<uint8_t*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
-        layout, N, D);
+        N, D);
   }
   cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);

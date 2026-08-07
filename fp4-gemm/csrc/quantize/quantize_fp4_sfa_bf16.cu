@@ -44,12 +44,11 @@ __device__ __forceinline__ uint8_t fp32_to_e2m1_bvec(float x) {
     return sign | mant;
 }
 
-template <class LayoutSF>
+template <bool IsSfb>
 __global__ void kernel_quantize_fp4_sfa_bf16_vec(
     const int4* __restrict__ src,      // bf16 [N, D] as int4 (8 elements)
     uint2* __restrict__ dst_packed,    // [N, D/2] bytes as uint2 (1 block)
     uint8_t* __restrict__ dst_sfa,
-    LayoutSF layout,
     int N, int D8) {                   // D8 = D / 8 int4 chunks per row
   const int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
   const int row = blockIdx.y;
@@ -79,7 +78,17 @@ __global__ void kernel_quantize_fp4_sfa_bf16_vec(
   __nv_fp8_e4m3 bs_q = __nv_fp8_e4m3(fmaxf(desired, 0.f));
   const float bs_dq = static_cast<float>(bs_q);
 
-  dst_sfa[layout(row, block_idx * 16, 0)] =
+  const int D = D8 << 3;
+  auto shape = cute::make_shape(IsSfb ? 1 : N, IsSfb ? N : 1, D, 1);
+  int sfa_off;
+  if constexpr (IsSfb) {
+    auto layout = CfgVecB::tile_atom_to_shape_SFB(shape);
+    sfa_off = layout(row, block_idx * 16, 0);
+  } else {
+    auto layout = CfgVecB::tile_atom_to_shape_SFA(shape);
+    sfa_off = layout(row, block_idx * 16, 0);
+  }
+  dst_sfa[sfa_off] =
       *reinterpret_cast<uint8_t*>(&bs_q);
 
   const float inv_bs = 1.f / bs_dq;
@@ -109,25 +118,18 @@ int quantize_fp4_dynamic_sfa_bf16_vec(
   const int threads = 128;
   dim3 grid((n_blocks + threads - 1) / threads, N);
 
-  auto shape = cute::make_shape(
-      is_sfb ? 1 : N,
-      is_sfb ? N : 1,
-      D, 1);
-
   if (is_sfb) {
-    auto layout = CfgVecB::tile_atom_to_shape_SFB(shape);
-    kernel_quantize_fp4_sfa_bf16_vec<<<grid, threads, 0, stream>>>(
+    kernel_quantize_fp4_sfa_bf16_vec<true><<<grid, threads, 0, stream>>>(
         reinterpret_cast<const int4*>(src_bf16),
         reinterpret_cast<uint2*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
-        layout, N, D >> 3);
+        N, D >> 3);
   } else {
-    auto layout = CfgVecB::tile_atom_to_shape_SFA(shape);
-    kernel_quantize_fp4_sfa_bf16_vec<<<grid, threads, 0, stream>>>(
+    kernel_quantize_fp4_sfa_bf16_vec<false><<<grid, threads, 0, stream>>>(
         reinterpret_cast<const int4*>(src_bf16),
         reinterpret_cast<uint2*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
-        layout, N, D >> 3);
+        N, D >> 3);
   }
   const cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);

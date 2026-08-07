@@ -28,12 +28,12 @@ __device__ __forceinline__ float e2m1_to_fp32_dequant(uint8_t value) {
   return (value & 0x8) ? -mag : mag;
 }
 
-template <class LayoutSF>
+template <bool IsSfb>
 __global__ void dequantize_fp4_sfa_kernel(
     const uint8_t* __restrict__ packed,
     const uint8_t* __restrict__ sfa,
     __half* __restrict__ out,
-    LayoutSF layout,
+    int rows,
     int dim) {
   int row = blockIdx.y;
   int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -41,7 +41,15 @@ __global__ void dequantize_fp4_sfa_kernel(
   if (block_idx >= n_blocks) return;
 
   int col_base = block_idx * 16;
-  int sfa_off = layout(row, col_base, 0);
+  auto shape = cute::make_shape(IsSfb ? 1 : rows, IsSfb ? rows : 1, dim, 1);
+  int sfa_off;
+  if constexpr (IsSfb) {
+    auto layout = CfgDequant::tile_atom_to_shape_SFB(shape);
+    sfa_off = layout(row, col_base, 0);
+  } else {
+    auto layout = CfgDequant::tile_atom_to_shape_SFA(shape);
+    sfa_off = layout(row, col_base, 0);
+  }
   __nv_fp8_e4m3 scale_q;
   *reinterpret_cast<uint8_t*>(&scale_q) = sfa[sfa_off];
   float scale = static_cast<float>(scale_q);
@@ -70,15 +78,12 @@ void dequantize_fp4_sfa_fp16(
   int n_blocks = dim / 16;
   dim3 block(256);
   dim3 grid((n_blocks + block.x - 1) / block.x, rows);
-  auto shape = cute::make_shape(is_sfb ? 1 : rows, is_sfb ? rows : 1, dim, 1);
   if (is_sfb) {
-    auto layout = CfgDequant::tile_atom_to_shape_SFB(shape);
-    dequantize_fp4_sfa_kernel<<<grid, block, 0, stream>>>(
-        packed, sfa, out, layout, dim);
+    dequantize_fp4_sfa_kernel<true><<<grid, block, 0, stream>>>(
+        packed, sfa, out, rows, dim);
   } else {
-    auto layout = CfgDequant::tile_atom_to_shape_SFA(shape);
-    dequantize_fp4_sfa_kernel<<<grid, block, 0, stream>>>(
-        packed, sfa, out, layout, dim);
+    dequantize_fp4_sfa_kernel<false><<<grid, block, 0, stream>>>(
+        packed, sfa, out, rows, dim);
   }
 #else
   (void)packed; (void)sfa; (void)out; (void)rows; (void)dim; (void)is_sfb; (void)stream;
