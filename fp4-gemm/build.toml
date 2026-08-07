@@ -15,6 +15,7 @@ include = ["csrc"]
 src = [
   "torch-ext/torch_binding.cpp",
   "torch-ext/torch_binding.h",
+  "csrc/sfa_layout.cuh",
 ]
 
 [kernel.fp4_gemm_sm110]
