@@ -38,25 +38,48 @@ attention output.
 """
 
 import argparse
+import importlib
 import sys
 
 import pytest
 import torch
 
-from minimaxai_msa_blackwell import (  # noqa: E402
-    build_k2q_csr,
-    dequantize_nvfp4_128x4_to_bf16,
-    flash_decode_with_gqa_share_sparse,
-    flash_decode_with_topk_idx,
-    has_native_ops,
-    native_nvfp4_dequant_swizzled_to_bf16,
-    native_topk_from_scores,
-    Nvfp4QuantizedTensor,
-    sparse_atten_func,
-    sparse_atten_nvfp4_kv_func,
-    sparse_decode_atten_func,
-)
-from minimaxai_msa_blackwell.prefill.topk_sparse import flash_prefill_with_gqa_share_sparse  # noqa: E402
+
+def _load_module(artifact):
+    """Import the Hub package, optionally from an installed artifact dir."""
+    if artifact:
+        sys.path.insert(0, artifact)
+    try:
+        module = importlib.import_module("minimaxai_msa_blackwell")
+        prefill = importlib.import_module("minimaxai_msa_blackwell.prefill.topk_sparse")
+    finally:
+        if artifact:
+            sys.path.remove(artifact)
+    globals().update(
+        {
+            "build_k2q_csr": module.build_k2q_csr,
+            "dequantize_nvfp4_128x4_to_bf16": module.dequantize_nvfp4_128x4_to_bf16,
+            "flash_decode_with_gqa_share_sparse": module.flash_decode_with_gqa_share_sparse,
+            "flash_decode_with_topk_idx": module.flash_decode_with_topk_idx,
+            "has_native_ops": module.has_native_ops,
+            "native_nvfp4_dequant_swizzled_to_bf16": module.native_nvfp4_dequant_swizzled_to_bf16,
+            "native_topk_from_scores": module.native_topk_from_scores,
+            "Nvfp4QuantizedTensor": module.Nvfp4QuantizedTensor,
+            "sparse_atten_func": module.sparse_atten_func,
+            "sparse_atten_nvfp4_kv_func": module.sparse_atten_nvfp4_kv_func,
+            "sparse_decode_atten_func": module.sparse_decode_atten_func,
+            "flash_prefill_with_gqa_share_sparse": prefill.flash_prefill_with_gqa_share_sparse,
+        }
+    )
+    return module
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _pytest_loads_hub_package():
+    """pytest mode loads the Hub package once so the parametrized entrypoints
+    below see the same globals script mode injects from main()."""
+    _load_module(None)
+    yield
 
 DEVICE = "cuda"
 DTYPE = torch.bfloat16
@@ -658,8 +681,14 @@ def test_native_nvfp4_dequant_swizzled_to_bf16(rows, cols):
 # ===========================================================================
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--backend", choices=["source", "installed"], default="source",
+                    help="the installed Hub package is the supported path for this "
+                         "Triton-based package; source mode falls back to sys.path")
+    ap.add_argument("--artifact", default=None)
+    ap.add_argument("--mode", choices=["smoke", "full"], default="full",
+                    help="smoke skips the 32768-ctx cases")
     ap.add_argument("--quick", action="store_true",
-                    help="skip the 32768-ctx cases")
+                    help="skip the 32768-ctx cases (alias for --mode smoke)")
     ap.add_argument("--long-context", action="store_true",
                     help="also run 65536/131072 standalone long-context cases")
     args = ap.parse_args()
@@ -667,6 +696,10 @@ def main():
     if not torch.cuda.is_available():
         print("CUDA not available; these Triton kernels require a CUDA GPU.")
         return 1
+
+    _load_module(args.artifact)
+    if args.quick:
+        args.mode = "smoke"
 
     print(f"device={torch.cuda.get_device_name()} dtype={DTYPE}")
     print(f"M3 config: Hq={M3_HQ} Hkv={M3_HKV} D={M3_D} block={M3_BLOCK} "
