@@ -37,6 +37,23 @@ PYTHONPATH=../official/FlashRT pytest internal-tests
 These tests are for source sync confidence and FlashRT parity. They are not
 Hub-compatible CI tests and should not be copied into package `tests/`.
 
+## SM110 (Thor) Triton note
+
+Triton bundles its own `ptxas` (e.g. CUDA 12.8 build) which does not accept
+`--gpu-name=sm_110a`, so any Triton kernel fails to compile on Thor with
+`ptxas fatal: Value 'sm_110a' is not defined for option 'gpu-name'`. Point
+Triton at a ptxas that knows `sm_110a` (the system CUDA 13.2 `ptxas` works):
+
+```bash
+ln -sf /usr/local/cuda-13.2/bin/ptxas \
+  <venv>/lib/python3.10/site-packages/triton/backends/nvidia/bin/ptxas
+# or per-invocation:
+TRITON_PTXAS_PATH=/usr/local/cuda-13.2/bin/ptxas python ...
+```
+
+Without this, Triton-based paths (e.g. MiniMaxAI-msa-blackwell decode/indexer
+tests) fail to JIT on SM110 even though the native CUDA kernels are correct.
+
 ## Dependency Policy
 
 - Do not reuse FlashRT editable install state as a hidden dependency.
