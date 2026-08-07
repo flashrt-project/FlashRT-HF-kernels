@@ -7,27 +7,15 @@
 //  packed store, one SFA byte at the tile-interleaved offset.
 // ============================================================================
 #include "quantize_fp4_sfa_bf16.cuh"
+#include "sfa_layout.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
 
-#if defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED) || defined(__CUDA_ARCH__)
-#  include "cutlass/cutlass.h"
-#  include "cutlass/detail/sm100_blockscaled_layout.hpp"
-#  include "cute/tensor.hpp"
-#  define FV_HAVE_CUTLASS 1
-#else
-#  define FV_HAVE_CUTLASS 0
-#endif
-
 namespace flash_rt {
 namespace fp4 {
 
-#if FV_HAVE_CUTLASS
-
 namespace {
-
-using CfgVecB = cutlass::detail::Sm1xxBlockScaledConfig<16>;
 
 __device__ __forceinline__ uint8_t fp32_to_e2m1_bvec(float x) {
     uint8_t sign = (x < 0.f) ? 0x8u : 0x0u;
@@ -44,7 +32,6 @@ __device__ __forceinline__ uint8_t fp32_to_e2m1_bvec(float x) {
     return sign | mant;
 }
 
-template <bool IsSfb>
 __global__ void kernel_quantize_fp4_sfa_bf16_vec(
     const int4* __restrict__ src,      // bf16 [N, D] as int4 (8 elements)
     uint2* __restrict__ dst_packed,    // [N, D/2] bytes as uint2 (1 block)
@@ -79,15 +66,7 @@ __global__ void kernel_quantize_fp4_sfa_bf16_vec(
   const float bs_dq = static_cast<float>(bs_q);
 
   const int D = D8 << 3;
-  auto shape = cute::make_shape(IsSfb ? 1 : N, IsSfb ? N : 1, D, 1);
-  int sfa_off;
-  if constexpr (IsSfb) {
-    auto layout = CfgVecB::tile_atom_to_shape_SFB(shape);
-    sfa_off = layout(row, block_idx * 16, 0);
-  } else {
-    auto layout = CfgVecB::tile_atom_to_shape_SFA(shape);
-    sfa_off = layout(row, block_idx * 16, 0);
-  }
+  const int sfa_off = sfa_offset_128x64(row, block_idx * 16, D);
   dst_sfa[sfa_off] =
       *reinterpret_cast<uint8_t*>(&bs_q);
 
@@ -105,12 +84,9 @@ __global__ void kernel_quantize_fp4_sfa_bf16_vec(
 
 }  // namespace
 
-#endif  // FV_HAVE_CUTLASS
-
 int quantize_fp4_dynamic_sfa_bf16_vec(
     const void* src_bf16, void* dst_packed, void* dst_sfa,
     int N, int D, bool is_sfb, cudaStream_t stream) {
-#if FV_HAVE_CUTLASS
   if (D % 16 != 0) return -1;
   if ((reinterpret_cast<uintptr_t>(src_bf16) & 15) ||
       (reinterpret_cast<uintptr_t>(dst_packed) & 7)) return -1;
@@ -119,13 +95,13 @@ int quantize_fp4_dynamic_sfa_bf16_vec(
   dim3 grid((n_blocks + threads - 1) / threads, N);
 
   if (is_sfb) {
-    kernel_quantize_fp4_sfa_bf16_vec<true><<<grid, threads, 0, stream>>>(
+    kernel_quantize_fp4_sfa_bf16_vec<<<grid, threads, 0, stream>>>(
         reinterpret_cast<const int4*>(src_bf16),
         reinterpret_cast<uint2*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
         N, D >> 3);
   } else {
-    kernel_quantize_fp4_sfa_bf16_vec<false><<<grid, threads, 0, stream>>>(
+    kernel_quantize_fp4_sfa_bf16_vec<<<grid, threads, 0, stream>>>(
         reinterpret_cast<const int4*>(src_bf16),
         reinterpret_cast<uint2*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
@@ -133,11 +109,6 @@ int quantize_fp4_dynamic_sfa_bf16_vec(
   }
   const cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);
-#else
-  (void)src_bf16; (void)dst_packed; (void)dst_sfa;
-  (void)N; (void)D; (void)is_sfb; (void)stream;
-  return -2;
-#endif
 }
 
 }  // namespace fp4

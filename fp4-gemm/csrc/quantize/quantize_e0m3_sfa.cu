@@ -7,27 +7,15 @@
 //  quantizer translation units).
 // ============================================================================
 #include "quantize_e0m3_sfa.cuh"
+#include "sfa_layout.cuh"
 
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
-#if defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED) || defined(__CUDA_ARCH__)
-#  include "cutlass/cutlass.h"
-#  include "cutlass/detail/sm100_blockscaled_layout.hpp"
-#  include "cute/tensor.hpp"
-#  define FV_HAVE_CUTLASS 1
-#else
-#  define FV_HAVE_CUTLASS 0
-#endif
-
 namespace flash_rt {
 namespace fp4 {
 
-#if FV_HAVE_CUTLASS
-
 namespace {
-
-using Cfg = cutlass::detail::Sm1xxBlockScaledConfig<16>;
 
 // Sign-magnitude uniform INT4: code = s|mmm, value = (s ? -1 : 1) * mmm.
 // Round-to-nearest integer, clamp magnitude to 7; -0 normalizes to +0.
@@ -42,7 +30,6 @@ __device__ __forceinline__ __nv_fp8_e4m3 quantize_ue4m3_e0m3(float x) {
     return __nv_fp8_e4m3(fmaxf(x, 0.f));
 }
 
-template <bool IsSfb>
 __global__ void kernel_quantize_e0m3_sfa(
     const __half* __restrict__ src,
     uint8_t* __restrict__ dst_packed,
@@ -70,15 +57,7 @@ __global__ void kernel_quantize_e0m3_sfa(
     if (desired < 1e-12f) desired = 1e-12f;
     __nv_fp8_e4m3 scale_q = quantize_ue4m3_e0m3(desired);
     float scale_dq = static_cast<float>(scale_q);
-    auto shape = cute::make_shape(IsSfb ? 1 : N, IsSfb ? N : 1, D, 1);
-    int sfa_off;
-    if constexpr (IsSfb) {
-      auto layout = Cfg::tile_atom_to_shape_SFB(shape);
-      sfa_off = layout(row, block_idx * 16, 0);
-    } else {
-      auto layout = Cfg::tile_atom_to_shape_SFA(shape);
-      sfa_off = layout(row, block_idx * 16, 0);
-    }
+    const int sfa_off = sfa_offset_128x64(row, block_idx * 16, D);
     dst_sfa[sfa_off] =
         *reinterpret_cast<uint8_t*>(&scale_q);
 
@@ -94,25 +73,22 @@ __global__ void kernel_quantize_e0m3_sfa(
 
 }  // namespace
 
-#endif  // FV_HAVE_CUTLASS
-
 int quantize_e0m3_dynamic_sfa_fp16(
     const void* src_fp16, void* dst_packed, void* dst_sfa,
     int N, int D, bool is_sfb, cudaStream_t stream) {
-#if FV_HAVE_CUTLASS
   if (D % 16 != 0) return -1;
   const int n_blocks = D / 16;
   const int threads = 128;
   dim3 grid((n_blocks + threads - 1) / threads, N);
 
   if (is_sfb) {
-    kernel_quantize_e0m3_sfa<true><<<grid, threads, 0, stream>>>(
+    kernel_quantize_e0m3_sfa<<<grid, threads, 0, stream>>>(
         reinterpret_cast<const __half*>(src_fp16),
         reinterpret_cast<uint8_t*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
         N, D);
   } else {
-    kernel_quantize_e0m3_sfa<false><<<grid, threads, 0, stream>>>(
+    kernel_quantize_e0m3_sfa<<<grid, threads, 0, stream>>>(
         reinterpret_cast<const __half*>(src_fp16),
         reinterpret_cast<uint8_t*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
@@ -120,11 +96,6 @@ int quantize_e0m3_dynamic_sfa_fp16(
   }
   cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);
-#else
-  (void)src_fp16; (void)dst_packed; (void)dst_sfa;
-  (void)N; (void)D; (void)is_sfb; (void)stream;
-  return -2;
-#endif
 }
 
 }  // namespace fp4

@@ -58,7 +58,7 @@ src = [
 
 [kernel.fp4_gemm_common]
 backend = "cuda"
-depends = ["torch", "cutlass_4_4"]
+depends = ["torch"]
 include = ["csrc"]
 cuda-minver = "12.8"
 cuda-capabilities = ["11.0a", "12.0a"]
