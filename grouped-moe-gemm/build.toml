@@ -21,3 +21,13 @@ src = [
   "csrc/moe_m64_mma_sm120.cu", "csrc/moe_m64_mma_sm120.cuh",
   "csrc/moe_blocktile_mma_sm120.cu", "csrc/moe_blocktile_mma_sm120.cuh",
 ]
+
+[kernel.grouped_moe_gemm_portable]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "12.8"
+cuda-capabilities = ["11.0a"]
+src = [
+  "csrc/portable_moe_simt.cu", "csrc/portable_moe_simt.cuh",
+]

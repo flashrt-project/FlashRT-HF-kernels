@@ -24,7 +24,8 @@ def load_source_ops(registration_include=None):
         "CUTLASS_INCLUDE",
         "/home/heima/suliang/PI/official/FlashRT/third_party/cutlass/include",
     )
-    os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0a"
+    major, minor = torch.cuda.get_device_capability()
+    os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}a"
     ns = "grouped_moe_gemm_source_test"
     load(
         name=ns,

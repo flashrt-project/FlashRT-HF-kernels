@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, sys
+import argparse, importlib, os, sys
 from pathlib import Path
 import torch
 
@@ -46,7 +46,16 @@ def deq(p, sf, alpha=1.0):
     return vals * ue(sf.int()).repeat_interleave(16, 1) * alpha
 
 
-def run(ops):
+def run(ops, force_simt=False):
+    if force_simt:
+        os.environ["FLASHRT_FORCE_SIMT"] = "1"
+    try:
+        _run_cases(ops)
+    finally:
+        os.environ.pop("FLASHRT_FORCE_SIMT", None)
+
+
+def _run_cases(ops):
     torch.manual_seed(19)
     dev = "cuda"
     checks = 0
@@ -126,6 +135,16 @@ def run(ops):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
+    p.add_argument("--backend", choices=["source", "installed"], default="source")
+    p.add_argument("--artifact", default=None)
     p.add_argument("--registration-include")
     a = p.parse_args()
-    run(load_source_ops(a.registration_include))
+    if a.backend == "installed":
+        if a.artifact:
+            sys.path.insert(0, a.artifact)
+        ops = importlib.import_module("grouped_moe_gemm")
+        sys.path.pop(0)
+        run(ops, force_simt=False)
+    else:
+        run(load_source_ops(a.registration_include), force_simt=False)
+        run(load_source_ops(a.registration_include), force_simt=True)
