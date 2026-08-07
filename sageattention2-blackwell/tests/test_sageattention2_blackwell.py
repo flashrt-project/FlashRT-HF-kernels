@@ -222,8 +222,11 @@ def main() -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
     major, _minor = torch.cuda.get_device_capability(0)
-    if major < 12:
-        raise SystemExit("sageattention2-blackwell requires Blackwell-class CUDA capability")
+    if major < 10:
+        raise SystemExit(
+            "sageattention2-blackwell requires Blackwell-class CUDA "
+            "capability (SM100/SM103/SM110/SM120)"
+        )
 
     torch.manual_seed(2026)
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
