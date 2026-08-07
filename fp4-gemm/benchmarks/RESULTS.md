@@ -1,5 +1,25 @@
 # fp4-gemm Benchmark Results
 
+## SM110 Bias Epilogue Dispatch (2026-08-07)
+
+Source RC on NVIDIA Thor, Torch `2.11.0+cu130`, CUDA 13.0. Timings are from
+the final public APIs with preallocated outputs, 20 warmup iterations, 100
+measured iterations, and the median of five CUDA-event rounds. The prior
+column is the former fixed `128x64x256` tile measured by the same harness.
+
+| Shape `(M,N,K)` | Family | Prior us | Tuned us | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| `(41,6144,1536)` | bias | 20.727 | 15.540 | 1.334x |
+| `(41,6144,1536)` | bias+residual | 22.668 | 16.519 | 1.372x |
+| `(41,6144,1536)` | bias+GELU->FP4 | 22.648 | 16.533 | 1.370x |
+| `(41,1536,6144)` | bias | 20.620 | 14.477 | 1.424x |
+| `(41,1536,6144)` | bias+residual | 20.650 | 15.249 | 1.354x |
+| `(41,1536,6144)` | bias+GELU->FP4 | 20.900 | 16.084 | 1.299x |
+
+The final dispatch uses the `K=128` tile for the small-K residual path and the
+short-M expanding GELU path; other rows use the `K=256` tile. Correctness and
+model-shape acceptance are documented separately in `VALIDATION.md`.
+
 Installed kernel-builder artifact benchmark on NVIDIA GeForce RTX 5090,
 PyTorch `2.11.0+cu128`.
 

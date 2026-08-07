@@ -145,6 +145,27 @@ def _fp8_gelu_mlp_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("fp8_gelu_mlp_v2_bf16"))
+def _fp8_gelu_mlp_v2_bf16_fake(
+    input: torch.Tensor,
+    up_weight: torch.Tensor,
+    up_bias: torch.Tensor,
+    down_weight: torch.Tensor,
+    down_bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    up_weight_scale: torch.Tensor,
+    hidden_scale: torch.Tensor,
+    down_weight_scale: torch.Tensor,
+    hidden_bf16: torch.Tensor,
+    hidden_fp8: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    return _fp8_gelu_mlp_bf16_fake(
+        input, up_weight, up_bias, down_weight, down_bias, input_scale,
+        up_weight_scale, hidden_scale, down_weight_scale, hidden_bf16,
+        hidden_fp8, out)
+
+
 @torch.library.register_fake(add_op_namespace_prefix("bf16_fp8_gelu_mlp_bf16"))
 def _bf16_fp8_gelu_mlp_bf16_fake(
     input: torch.Tensor,
@@ -171,6 +192,29 @@ def _bf16_fp8_gelu_mlp_bf16_fake(
     if out.shape != (padded_m, down_weight.shape[0]):
         raise RuntimeError("out has an invalid padded shape")
     return None
+
+
+@torch.library.register_fake(
+    add_op_namespace_prefix("bf16_fp8_gelu_mlp_v2_bf16"))
+def _bf16_fp8_gelu_mlp_v2_bf16_fake(
+    input: torch.Tensor,
+    up_weight: torch.Tensor,
+    up_bias: torch.Tensor,
+    down_weight: torch.Tensor,
+    down_bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    up_weight_scale: torch.Tensor,
+    hidden_scale: torch.Tensor,
+    down_weight_scale: torch.Tensor,
+    input_fp8: torch.Tensor,
+    hidden_bf16: torch.Tensor,
+    hidden_fp8: torch.Tensor,
+    out: torch.Tensor,
+) -> None:
+    return _bf16_fp8_gelu_mlp_bf16_fake(
+        input, up_weight, up_bias, down_weight, down_bias, input_scale,
+        up_weight_scale, hidden_scale, down_weight_scale, input_fp8,
+        hidden_bf16, hidden_fp8, out)
 
 
 def _scalar_scale_like(input: torch.Tensor, value: float = 1.0) -> torch.Tensor:
@@ -433,11 +477,125 @@ def bf16_fp8_gelu_mlp_bf16(
     return out[:logical_m]
 
 
+def fp8_gelu_mlp_v2_bf16(
+    input: torch.Tensor,
+    up_weight: torch.Tensor,
+    up_bias: torch.Tensor,
+    down_weight: torch.Tensor,
+    down_bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    up_weight_scale: torch.Tensor,
+    hidden_scale: torch.Tensor,
+    down_weight_scale: torch.Tensor,
+    hidden_bf16: torch.Tensor | None = None,
+    hidden_fp8: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """``fp8_gelu_mlp_bf16`` with the down bias in the GEMM epilogue.
+
+    Same contract and buffers as the v1 entry; one launch and one full
+    write of ``out`` less per call on targets whose cublasLt path
+    accepts the BIAS epilogue (elsewhere the runtime falls back to the
+    v1 two-launch tail, still correct).
+    """
+
+    if hidden_bf16 is None:
+        hidden_bf16 = torch.empty(
+            (input.shape[0], up_weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    if hidden_fp8 is None:
+        hidden_fp8 = torch.empty_like(hidden_bf16, dtype=_fp8_dtype())
+    if out is None:
+        out = torch.empty(
+            (input.shape[0], down_weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    ops.fp8_gelu_mlp_v2_bf16(
+        input,
+        up_weight,
+        up_bias,
+        down_weight,
+        down_bias,
+        input_scale,
+        up_weight_scale,
+        hidden_scale,
+        down_weight_scale,
+        hidden_bf16,
+        hidden_fp8,
+        out,
+    )
+    return out
+
+
+def bf16_fp8_gelu_mlp_v2_bf16(
+    input: torch.Tensor,
+    up_weight: torch.Tensor,
+    up_bias: torch.Tensor,
+    down_weight: torch.Tensor,
+    down_bias: torch.Tensor,
+    input_scale: torch.Tensor,
+    up_weight_scale: torch.Tensor,
+    hidden_scale: torch.Tensor,
+    down_weight_scale: torch.Tensor,
+    input_fp8: torch.Tensor | None = None,
+    hidden_bf16: torch.Tensor | None = None,
+    hidden_fp8: torch.Tensor | None = None,
+    out: torch.Tensor | None = None,
+    *,
+    pad_to: int | None = None,
+) -> torch.Tensor:
+    """``bf16_fp8_gelu_mlp_bf16`` with the down bias in the epilogue.
+
+    Identical padding and buffer contract to the v1 entry.
+    """
+
+    logical_m = input.shape[0]
+    padded_m = _midm_padded_rows(input) if pad_to is None else pad_to
+    if padded_m < logical_m:
+        raise ValueError("pad_to must be >= input.shape[0]")
+    device = input.device
+    if input_fp8 is None:
+        input_fp8 = torch.empty(
+            (padded_m, input.shape[1]), device=device, dtype=_fp8_dtype()
+        )
+    if hidden_bf16 is None:
+        hidden_bf16 = torch.empty(
+            (padded_m, up_weight.shape[0]), device=device, dtype=torch.bfloat16
+        )
+    if hidden_fp8 is None:
+        hidden_fp8 = torch.empty_like(hidden_bf16, dtype=_fp8_dtype())
+    if out is None:
+        out = torch.empty(
+            (padded_m, down_weight.shape[0]), device=device, dtype=torch.bfloat16
+        )
+    ops.bf16_fp8_gelu_mlp_v2_bf16(
+        input,
+        up_weight,
+        up_bias,
+        down_weight,
+        down_bias,
+        input_scale,
+        up_weight_scale,
+        hidden_scale,
+        down_weight_scale,
+        input_fp8,
+        hidden_bf16,
+        hidden_fp8,
+        out,
+    )
+    return out[:logical_m]
+
+
 __all__ = [
     "bf16_fp8_linear_bias_bf16",
     "bf16_fp8_gelu_mlp_bf16",
+    "bf16_fp8_gelu_mlp_v2_bf16",
     "fp8_gemm_bf16",
     "fp8_gelu_mlp_bf16",
+    "fp8_gelu_mlp_v2_bf16",
     "fp8_linear_bias_bf16",
     "fp8_linear_bias_gelu_quant_bf16",
 ]

@@ -16,6 +16,7 @@ Required before publishing:
      --backend source --shapes all --compile-baseline
    python flashrt-fp8-ffn/benchmarks/benchmark_linear_bias.py \
      --backend source --shapes all --compile-baseline --compare-fvk
+   python flashrt-fp8-ffn/benchmarks/benchmark_mlp_v2.py --backend source
    ```
 
    The BF16-entry matrix covers M `8, 51, 64, 105, 128` for both
@@ -35,6 +36,14 @@ Required before publishing:
    reported. The current compile-stable reference graph-breaks the
    `GELU -> FP8 requant` and final BF16 bias/cast boundaries, while keeping the
    FP8 dequant GEMM regions compiled.
+
+   The v2 MLP gate must additionally run with
+   `FLASHRT_FP8_FFN_REQUIRE_BIAS_EPILOGUE=1` so an unsupported cuBLASLt
+   descriptor cannot silently pass through the v1 fallback. V2 is compared
+   against a reference that adds the down bias in the FP32 accumulator before
+   the final BF16 cast. V1-to-v2 differences are expected at adjacent BF16
+   bins and must retain p99 relative error <= `0.01` and cosine >= `0.9999`.
+   Both v2 entries must pass fullgraph compile and CUDA Graph replay.
 
    The linear+bias matrix covers M `1, 8, 51, 64, 105, 128, 256, 512`, QKV
    expansion and output projections. Every row must pass max/mean/p99 absolute

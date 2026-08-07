@@ -45,10 +45,8 @@ using ArchTag = cutlass::arch::Sm100;
 using OperatorClass = cutlass::arch::OpClassBlockScaledTensorOp;
 constexpr int SFVecSize = 16;
 
-using MmaTileShape = Shape<_128, _64, _256>;
-using ClusterShape = Shape<_1, _1, _1>;
-
-template <class FusionOp, class ElemC, class ElemD, int AlignCD>
+template <class FusionOp, class ElemC, class ElemD, int AlignCD,
+          class MmaTileShape, class ClusterShape>
 struct BiasGemm {
   using CollectiveEpilogue =
       typename cutlass::epilogue::collective::CollectiveBuilder<
@@ -79,7 +77,13 @@ struct BiasGemm {
 using ElementCD = cutlass::bfloat16_t;
 using FusionBias = cutlass::epilogue::fusion::LinCombPerColBias<
     ElementCD, ElementCompute, ElementCD, ElementCD, ElementCompute>;
-using GemmBias = BiasGemm<FusionBias, ElementCD, ElementCD, 8>::Gemm;
+using Cluster1 = Shape<_1, _1, _1>;
+using Tile128K128 = Shape<_128, _128, _128>;
+using Tile128K256 = Shape<_128, _128, _256>;
+
+template <class Tile>
+using GemmBiasT = typename BiasGemm<
+    FusionBias, ElementCD, ElementCD, 8, Tile, Cluster1>::Gemm;
 
 // ── bias+gelu: fp4 + SFA out ───────────────────────────────────────────────
 using ElementDQ = cutlass::float_e2m1_t;
@@ -89,7 +93,9 @@ using FusionGelu =
         cutlass::epilogue::thread::GELU_taylor, SFVecSize,
         ElementDQ, ElementCompute, ElementSFD, cutlass::layout::RowMajor,
         ElementCD, ElementDQ, ElementCompute>;
-using GemmGelu = BiasGemm<FusionGelu, ElementDQ, ElementDQ, 32>::Gemm;
+template <class Tile>
+using GemmGeluT = typename BiasGemm<
+    FusionGelu, ElementDQ, ElementDQ, 32, Tile, Cluster1>::Gemm;
 
 template <class Gemm>
 static int run_gemm(typename Gemm::Arguments& args, cudaStream_t stream) {
@@ -143,6 +149,70 @@ static typename Gemm::Arguments make_args(
 
 }  // namespace bias_bf16_gemm
 
+namespace {
+
+template <class Tile>
+int run_bias_tile(
+    void const* A_packed, void const* SFA,
+    void const* B_packed, void const* SFB,
+    void const* bias_bf16, void* D_bf16,
+    int M, int N, int K, cudaStream_t stream) {
+  using namespace bias_bf16_gemm;
+  using Gemm = GemmBiasT<Tile>;
+  auto args = make_args<Gemm, ElementCD, ElementCD>(
+      A_packed, SFA, B_packed, SFB, D_bf16, D_bf16, M, N, K);
+  args.epilogue.thread.alpha = 1.0f;
+  args.epilogue.thread.beta = 0.0f;
+  args.epilogue.thread.bias_ptr =
+      reinterpret_cast<ElementCD const*>(bias_bf16);
+  return run_gemm<Gemm>(args, stream);
+}
+
+template <class Tile>
+int run_bias_res_tile(
+    void const* A_packed, void const* SFA,
+    void const* B_packed, void const* SFB,
+    void const* bias_bf16, void const* C_bf16, void* D_bf16,
+    int M, int N, int K, cudaStream_t stream) {
+  using namespace bias_bf16_gemm;
+  using Gemm = GemmBiasT<Tile>;
+  auto args = make_args<Gemm, ElementCD, ElementCD>(
+      A_packed, SFA, B_packed, SFB, C_bf16, D_bf16, M, N, K);
+  args.epilogue.thread.alpha = 1.0f;
+  args.epilogue.thread.beta = 1.0f;
+  args.epilogue.thread.bias_ptr =
+      reinterpret_cast<ElementCD const*>(bias_bf16);
+  return run_gemm<Gemm>(args, stream);
+}
+
+template <class Tile>
+int run_bias_gelu_tile(
+    void const* A_packed, void const* SFA,
+    void const* B_packed, void const* SFB,
+    void const* bias_bf16, void* D_packed, void* D_SFD,
+    int M, int N, int K, cudaStream_t stream) {
+  using namespace bias_bf16_gemm;
+  using Gemm = GemmGeluT<Tile>;
+  auto args = make_args<Gemm, ElementDQ, ElementDQ>(
+      A_packed, SFA, B_packed, SFB, D_packed, D_packed, M, N, K);
+  args.epilogue.thread.alpha = 1.0f;
+  args.epilogue.thread.beta = 0.0f;
+  args.epilogue.thread.bias_ptr =
+      reinterpret_cast<ElementCD const*>(bias_bf16);
+  static float* d_norm = nullptr;
+  if (!d_norm) {
+    if (cudaMalloc(&d_norm, sizeof(float)) != cudaSuccess) return -1;
+    float h = 1.0f;
+    cudaMemcpyAsync(d_norm, &h, sizeof(float), cudaMemcpyHostToDevice, stream);
+  }
+  args.epilogue.thread.block_scale_factor_ptr =
+      reinterpret_cast<ElementSFD*>(D_SFD);
+  args.epilogue.thread.norm_constant_ptr = d_norm;
+  return run_gemm<Gemm>(args, stream);
+}
+
+}  // namespace
+
 int cutlass_fp4_gemm_bias_bf16(
     void const* A_packed, void const* SFA,
     void const* B_packed, void const* SFB,
@@ -150,13 +220,9 @@ int cutlass_fp4_gemm_bias_bf16(
     void* D_bf16,
     int M, int N, int K, cudaStream_t stream) {
   using namespace bias_bf16_gemm;
-  auto args = make_args<GemmBias, ElementCD, ElementCD>(
-      A_packed, SFA, B_packed, SFB, D_bf16, D_bf16, M, N, K);
-  args.epilogue.thread.alpha = 1.0f;
-  args.epilogue.thread.beta = 0.0f;
-  args.epilogue.thread.bias_ptr =
-      reinterpret_cast<ElementCD const*>(bias_bf16);
-  return run_gemm<GemmBias>(args, stream);
+  return run_bias_tile<Tile128K256>(
+      A_packed, SFA, B_packed, SFB, bias_bf16, D_bf16,
+      M, N, K, stream);
 }
 
 int cutlass_fp4_gemm_bias_res_bf16(
@@ -166,13 +232,14 @@ int cutlass_fp4_gemm_bias_res_bf16(
     void const* C_bf16, void* D_bf16,
     int M, int N, int K, cudaStream_t stream) {
   using namespace bias_bf16_gemm;
-  auto args = make_args<GemmBias, ElementCD, ElementCD>(
-      A_packed, SFA, B_packed, SFB, C_bf16, D_bf16, M, N, K);
-  args.epilogue.thread.alpha = 1.0f;
-  args.epilogue.thread.beta = 1.0f;
-  args.epilogue.thread.bias_ptr =
-      reinterpret_cast<ElementCD const*>(bias_bf16);
-  return run_gemm<GemmBias>(args, stream);
+  if (K <= 1024) {
+    return run_bias_res_tile<Tile128K128>(
+        A_packed, SFA, B_packed, SFB, bias_bf16, C_bf16, D_bf16,
+        M, N, K, stream);
+  }
+  return run_bias_res_tile<Tile128K256>(
+      A_packed, SFA, B_packed, SFB, bias_bf16, C_bf16, D_bf16,
+      M, N, K, stream);
 }
 
 int cutlass_fp4_gemm_bias_gelu_fp4out_bf16(
@@ -182,26 +249,14 @@ int cutlass_fp4_gemm_bias_gelu_fp4out_bf16(
     void* D_packed, void* D_SFD,
     int M, int N, int K, cudaStream_t stream) {
   using namespace bias_bf16_gemm;
-  auto args = make_args<GemmGelu, ElementDQ, ElementDQ>(
-      A_packed, SFA, B_packed, SFB, D_packed, D_packed, M, N, K);
-  args.epilogue.thread.alpha = 1.0f;
-  args.epilogue.thread.beta = 0.0f;
-  args.epilogue.thread.bias_ptr =
-      reinterpret_cast<ElementCD const*>(bias_bf16);
-  // The block-scale epilogue divides by a device-resident norm constant;
-  // 1.0 keeps the native per-16 dynamic scale. Allocated once, first call
-  // must happen before any CUDA Graph capture (warmup covers this).
-  static float* d_norm = nullptr;
-  if (!d_norm) {
-    if (cudaMalloc(&d_norm, sizeof(float)) != cudaSuccess) return -1;
-    float h = 1.0f;
-    cudaMemcpyAsync(d_norm, &h, sizeof(float), cudaMemcpyHostToDevice,
-                    stream);
+  if (M <= 64 && N > K) {
+    return run_bias_gelu_tile<Tile128K128>(
+        A_packed, SFA, B_packed, SFB, bias_bf16, D_packed, D_SFD,
+        M, N, K, stream);
   }
-  args.epilogue.thread.block_scale_factor_ptr =
-      reinterpret_cast<bias_bf16_gemm::ElementSFD*>(D_SFD);
-  args.epilogue.thread.norm_constant_ptr = d_norm;
-  return run_gemm<GemmGelu>(args, stream);
+  return run_bias_gelu_tile<Tile128K256>(
+      A_packed, SFA, B_packed, SFB, bias_bf16, D_packed, D_SFD,
+      M, N, K, stream);
 }
 
 }  // namespace fp4

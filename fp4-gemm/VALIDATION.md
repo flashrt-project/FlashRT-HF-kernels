@@ -60,6 +60,20 @@ support and the corrected CUTLASS 4.5.2 fixed-output hash. HF Jobs, the
 SM110 aarch64 artifact build, and cold Hub loads must pass before the rebuilt
 Hub release is considered complete.
 
+## SM110 BF16 Bias Epilogue Tile Gate
+
+The release candidate selects between `128x128x128` and `128x128x256` MMA
+tiles inside the existing public APIs; no tuning-only symbols are exported.
+An exhaustive six-candidate internal sweep covered GROOT `M=41/51` up/down and
+VLA `M=105` shapes. All 72 candidate rows were exact against the former stable
+tile. The final public dispatch then passed the expanded Thor model gate:
+`54/54`, including PI0.5, GROOT, Cosmos Edge, and LingBot shapes.
+
+For BF16 bias and residual outputs, max/mean/p99 error was zero. The FP4 GELU
+output uses the package's established quantized-output contract; on GROOT
+`M=41` rows cosine was `0.999403-0.999437` with p99 absolute error
+`0.1875-0.375`. Final timings are recorded in `benchmarks/RESULTS.md`.
+
 ## BF16 Direct Producer
 
 RTX 5090, 100 warmup iterations and 1000 measured iterations:
