@@ -73,9 +73,15 @@ The blockwise path retains its independent unrestricted-M contract.
 
 On SM110, the public per-tensor path uses the production CUTLASS Sq/T1/Wide
 family and supports the validated model-shape matrix. The current full sweep
-covers `M in {1,8,16,32,51,64,105,277,1024}` and representative `K,N` rows
-from PI0.5, GROOT N1.6/N1.7, Cosmos Edge, and LingBot VLA. SM110 blockwise
-scaling is not claimed.
+covers the large-M boundary `65`, exact PI0.5 prefill rows `712/768/970`, and
+representative `K,N` rows from PI0.5, GROOT N1.6/N1.7, Cosmos Edge, and
+LingBot VLA. It also gates BF16 bias, in-place bias+residual, and tanh-GELU
+bias epilogues on SigLIP dimensions `1152/3456/4304`. SM110 blockwise scaling
+is not claimed.
+
+The August 8 Thor source gate passed `39/39` with zero failures. Plain large-M
+GEMM was bitwise equal to the reference, and every PI0.5 prefill auto tile was
+within 2% of the fastest validated package/native tile.
 
 ## Thor SM110 Increment
 

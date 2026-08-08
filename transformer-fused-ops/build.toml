@@ -51,4 +51,6 @@ src = [
   "csrc/kernels/vec_fp16_backbone.cuh",
   "csrc/kernels/vec_fp16_dispatch.cu",
   "csrc/kernels/vec_fp16_dispatch.cuh",
+  "csrc/kernels/vec_bf16_producers.cu",
+  "csrc/kernels/vec_bf16_producers.cuh",
 ]

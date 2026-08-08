@@ -22,6 +22,9 @@ FlashRT native CUDA fused helper kernels for transformer hot paths.
 - `layer_norm_quant_fp8_static_fp16(x, weight, bias, scale, eps=1e-6, out=None)`
 - `rope_rotate_half_fp16_(x, cos, sin)`
 - `quantize_fp8_static_fp16(x, scale, out=None)`
+- `quantize_fp8_static_bf16(x, scale, out=None)`
+- `layer_norm_quant_fp8_static_bf16(x, weight, bias, scale, eps=1e-6, out=None)`
+- `gate_geglu_merged_quant_fp8_static_bf16(merged, scale, out=None)`
 - `residual_add_fp16_(residual, x)`
 - `repeat_interleave_heads_fp16(x, repeat, out=None)`
 
@@ -41,8 +44,19 @@ GQA head expansion. These entries require SM110 and CUDA 13; unsupported
 architectures fail before launch. Static `out=` buffers and the in-place
 entries are suitable for CUDA Graph replay.
 
+The additive SM110 BF16 producer family covers PI0.5 prefill and SigLIP hot
+paths. `quantize_fp8_static_bf16` computes
+`clamp(x / scale, -448, 448)` into FP8 E4M3. The LayerNorm entry performs FP32
+statistics, rounds the normalized value to BF16, and emits FP8 without an
+intermediate tensor. The merged GeGLU entry splits `(M,2H)` into gate/up,
+applies the native tanh-GELU approximation, multiplies by up, and emits static
+FP8 `(M,H)`. All three require SM110 and support static `out=` buffers.
+
 ## Validation
 
 ```bash
 python transformer-fused-ops/tests/test_transformer_fused_ops.py --backend source --mode full
 ```
+
+The full SM110 grid includes non-vector-aligned tails and PI0.5/SigLIP shapes,
+plus `torch.compile(fullgraph=True)` and CUDA Graph replay gates.

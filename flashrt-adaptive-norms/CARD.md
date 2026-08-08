@@ -4,7 +4,7 @@ This package provides FlashRT adaptive normalization kernels for Hugging Face
 Kernel Hub.
 
 It is intended for DiT, VLA, video, and world-model blocks that use RMSNorm
-plus per-row style scale/shift/gate parameters.
+plus per-row or single-row-broadcast style scale/shift/gate parameters.
 
 ## Kernels
 
@@ -19,8 +19,8 @@ plus per-row style scale/shift/gate parameters.
 - BF16-capable NVIDIA GPUs
 - FP8-capable NVIDIA GPUs for the FP8 output API
 
-Current local source validation is on RTX 5090. Broader hardware rows should be
-added after installed-artifact validation.
+The per-row and broadcast contracts are source-validated on RTX 5090 and
+Jetson AGX Thor SM110.
 
 ## Upstream
 

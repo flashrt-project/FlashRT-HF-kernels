@@ -16,6 +16,17 @@ RoPE, static FP8 quantization, in-place residual add, and GQA head expansion.
 The production rows include `M=41`, `S=277`, hidden dimensions `128/1536`,
 and a CUDA-Graph-safe static-buffer contract.
 
+The additive PI0.5/SigLIP BF16 producer gate covers:
+
+- static FP8 quantization, including a non-vector-aligned `1x127` tail;
+- fused BF16 LayerNorm to FP8 at `512x1152`, `712x2048`, and `768x4304`;
+- merged tanh-GeGLU to FP8 at hidden dimensions `4096/4304/3456`;
+- `torch.compile(fullgraph=True)` and CUDA Graph replay for all three API
+  families.
+
+The August 8 Thor source gate passed `54/54`; the representative producer
+benchmark reported FP8 p99 error zero and `5.97x..12.20x` over PyTorch eager.
+
 MoE weighted-sum rows cover `(tokens, topk, hidden, stride)` values
 `(1,1,128,128)`, `(3,4,320,384)`, and `(17,8,2048,2112)`, including padded
 expert-row strides. The reference gathers the same routed rows and accumulates

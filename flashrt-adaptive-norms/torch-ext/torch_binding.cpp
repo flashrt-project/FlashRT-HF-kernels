@@ -67,8 +67,9 @@ void check_common(
   const int64_t dim = x.size(1);
   TORCH_CHECK(weight.dim() == 1 && weight.size(0) == dim,
               "weight must have shape (dim,)");
-  TORCH_CHECK(style.sizes() == torch::IntArrayRef({rows, 3 * dim}),
-              "style must have shape (rows, 3 * dim)");
+  TORCH_CHECK(style.dim() == 2 && style.size(1) == 3 * dim &&
+                  (style.size(0) == 1 || style.size(0) == rows),
+              "style must have shape (rows, 3 * dim) or (1, 3 * dim)");
   TORCH_CHECK(gate_out.sizes() == x.sizes(),
               "gate_out must have the same shape as x");
   check_same_device(x, weight, "x", "weight");
@@ -100,6 +101,7 @@ void ada_rms_norm_style_bf16(
       out.data_ptr(),
       gate_out.data_ptr(),
       static_cast<int>(x.size(0)),
+      static_cast<int>(style.size(0)),
       static_cast<int>(x.size(1)),
       static_cast<float>(eps),
       stream);
@@ -144,6 +146,7 @@ void gate_residual_ada_norm_fp8_static_bf16(
       out.data_ptr(),
       gate_out.data_ptr(),
       static_cast<int>(residual.size(0)),
+      static_cast<int>(style.size(0)),
       static_cast<int>(residual.size(1)),
       static_cast<float>(eps),
       reinterpret_cast<const float*>(scale.data_ptr()),

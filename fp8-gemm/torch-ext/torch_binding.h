@@ -17,6 +17,27 @@ void fp8_linear_residual_bf16(
     int64_t variant,
     torch::Tensor& residual);
 
+void fp8_linear_bias_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& out);
+
+void fp8_linear_bias_residual_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& residual);
+
+void fp8_linear_bias_gelu_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& out);
+
 void fp8_blockwise_linear_bf16(
     torch::Tensor const& input,
     torch::Tensor const& weight,

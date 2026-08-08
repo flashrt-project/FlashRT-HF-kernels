@@ -37,3 +37,16 @@ The GROOT N1.7 FP16 vector-family installed gate passed 38/38. A representative
 LayerNorm wrapper/raw measurement was `5.0586/5.0558 us` (`1.0006x`) in direct
 mode and `2.7327/2.7282 us` (`1.0016x`) under CUDA Graph. Correctness and
 static-buffer semantics are gated independently in `VALIDATION.md`.
+
+## SM110 BF16 Producer Update
+
+Source benchmark on NVIDIA Thor, PyTorch 2.13.0+cu130, August 8, 2026:
+
+| Operation | Shape | Kernel us | Eager us | Speedup | Max abs | P99 abs | Cosine |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| static FP8 quantize | `768x4304` | 18.459 | 225.205 | 12.20x | 0 | 0 | 1.0000001 |
+| LayerNorm to FP8 | `512x1152` | 14.353 | 85.703 | 5.97x | 0 | 0 | 1.0000000 |
+| merged GeGLU to FP8 | `768x6912` | 71.646 | 870.980 | 12.16x | 0 | 0 | 1.0000000 |
+
+The full source gate passed `54/54`, including non-vector-aligned tails,
+PI0.5/SigLIP shapes, `torch.compile(fullgraph=True)`, and CUDA Graph replay.

@@ -12,6 +12,10 @@ struct VecFp16Registration {
     quantize_fp8_fp16_dispatch = &quantize_fp8_static_fp16_vec;
     residual_add_fp16_dispatch = &residual_add_fp16_vec;
     repeat_heads_fp16_dispatch = &gpu_repeat_interleave_heads_vec;
+    quantize_fp8_bf16_dispatch = &quantize_fp8_static_bf16_vec;
+    layer_norm_fp8_bf16_dispatch = &layer_norm_fp8_static_bf16_vec;
+    gate_geglu_fp8_bf16_dispatch =
+        &gate_geglu_merged_fp8_static_bf16_vec;
   }
 };
 

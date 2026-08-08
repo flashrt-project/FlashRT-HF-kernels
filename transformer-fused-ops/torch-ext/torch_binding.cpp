@@ -28,6 +28,9 @@ flash_rt::hub::RopeFp16Dispatch flash_rt::hub::rope_fp16_dispatch = nullptr;
 flash_rt::hub::QuantizeFp8Fp16Dispatch flash_rt::hub::quantize_fp8_fp16_dispatch = nullptr;
 flash_rt::hub::ResidualAddFp16Dispatch flash_rt::hub::residual_add_fp16_dispatch = nullptr;
 flash_rt::hub::RepeatHeadsFp16Dispatch flash_rt::hub::repeat_heads_fp16_dispatch = nullptr;
+flash_rt::hub::QuantizeFp8Bf16Dispatch flash_rt::hub::quantize_fp8_bf16_dispatch = nullptr;
+flash_rt::hub::LayerNormFp8Bf16Dispatch flash_rt::hub::layer_norm_fp8_bf16_dispatch = nullptr;
+flash_rt::hub::GateGegluFp8Bf16Dispatch flash_rt::hub::gate_geglu_fp8_bf16_dispatch = nullptr;
 
 namespace {
 
@@ -510,6 +513,97 @@ void quantize_fp8_static_fp16(torch::Tensor const& x,
 #endif
 }
 
+void quantize_fp8_static_bf16(torch::Tensor const& x,
+                              torch::Tensor const& scale,
+                              torch::Tensor& out) {
+  check_bf16(x, "x");
+  check_f32(scale, "scale");
+  check_fp8(out, "out");
+  TORCH_CHECK(scale.numel() == 1, "scale must contain one FP32 value");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must match x");
+  same_device(x, scale, "x", "scale");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "quantize_fp8_static_bf16");
+  TORCH_CHECK(flash_rt::hub::quantize_fp8_bf16_dispatch,
+              "SM110 BF16 FP8 quantizer source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::quantize_fp8_bf16_dispatch(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<__nv_fp8_e4m3*>(out.data_ptr()), scale.data_ptr<float>(),
+      checked_int(x.numel(), "numel"), stream);
+  TORCH_CHECK(rc == 0, "quantize_fp8_static_bf16 failed with rc=", rc);
+#endif
+}
+
+void layer_norm_quant_fp8_static_bf16(
+    torch::Tensor const& x, torch::Tensor const& weight,
+    torch::Tensor const& bias, torch::Tensor const& scale, double eps,
+    torch::Tensor& out) {
+  check_bf16(x, "x");
+  check_bf16(weight, "weight");
+  check_bf16(bias, "bias");
+  check_f32(scale, "scale");
+  check_fp8(out, "out");
+  TORCH_CHECK(x.dim() == 2 &&
+                  weight.sizes() == torch::IntArrayRef({x.size(1)}) &&
+                  bias.sizes() == weight.sizes(),
+              "x must be (rows, dim), weight and bias must be (dim,)");
+  TORCH_CHECK(scale.numel() == 1, "scale must contain one FP32 value");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must match x");
+  same_device(x, weight, "x", "weight");
+  same_device(x, bias, "x", "bias");
+  same_device(x, scale, "x", "scale");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  require_sm110(x, "layer_norm_quant_fp8_static_bf16");
+  TORCH_CHECK(flash_rt::hub::layer_norm_fp8_bf16_dispatch,
+              "SM110 BF16 LayerNorm-FP8 source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::hub::layer_norm_fp8_bf16_dispatch(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(weight.data_ptr()),
+      static_cast<const __nv_bfloat16*>(bias.data_ptr()),
+      static_cast<__nv_fp8_e4m3*>(out.data_ptr()), scale.data_ptr<float>(),
+      checked_int(x.size(0), "rows"), checked_int(x.size(1), "dim"),
+      static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0,
+              "layer_norm_quant_fp8_static_bf16 failed with rc=", rc);
+#endif
+}
+
+void gate_geglu_merged_quant_fp8_static_bf16(
+    torch::Tensor const& merged, torch::Tensor const& scale,
+    torch::Tensor& out) {
+  check_bf16(merged, "merged");
+  check_f32(scale, "scale");
+  check_fp8(out, "out");
+  TORCH_CHECK(merged.dim() == 2 && merged.size(1) % 2 == 0,
+              "merged must have shape (rows, 2 * hidden)");
+  TORCH_CHECK(scale.numel() == 1, "scale must contain one FP32 value");
+  TORCH_CHECK(out.sizes() ==
+                  torch::IntArrayRef({merged.size(0), merged.size(1) / 2}),
+              "out must have shape (rows, hidden)");
+  same_device(merged, scale, "merged", "scale");
+  same_device(merged, out, "merged", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(merged.device());
+  require_sm110(merged, "gate_geglu_merged_quant_fp8_static_bf16");
+  TORCH_CHECK(flash_rt::hub::gate_geglu_fp8_bf16_dispatch,
+              "SM110 BF16 GeGLU-FP8 source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(merged.get_device()).stream();
+  const int rc = flash_rt::hub::gate_geglu_fp8_bf16_dispatch(
+      static_cast<const __nv_bfloat16*>(merged.data_ptr()),
+      static_cast<__nv_fp8_e4m3*>(out.data_ptr()), scale.data_ptr<float>(),
+      checked_int(merged.size(0), "rows"),
+      checked_int(merged.size(1) / 2, "hidden"), stream);
+  TORCH_CHECK(rc == 0,
+              "gate_geglu_merged_quant_fp8_static_bf16 failed with rc=", rc);
+#endif
+}
+
 void residual_add_fp16_(torch::Tensor& residual, torch::Tensor const& x) {
   check_fp16(residual, "residual");
   check_fp16(x, "x");
@@ -573,6 +667,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("layer_norm_quant_fp8_static_fp16(Tensor x, Tensor weight, Tensor bias, Tensor scale, float eps, Tensor! out) -> ()");
   ops.def("rope_rotate_half_fp16_(Tensor(a!) x, Tensor cos, Tensor sin) -> ()");
   ops.def("quantize_fp8_static_fp16(Tensor x, Tensor scale, Tensor! out) -> ()");
+  ops.def("quantize_fp8_static_bf16(Tensor x, Tensor scale, Tensor! out) -> ()");
+  ops.def("layer_norm_quant_fp8_static_bf16(Tensor x, Tensor weight, Tensor bias, Tensor scale, float eps, Tensor! out) -> ()");
+  ops.def("gate_geglu_merged_quant_fp8_static_bf16(Tensor merged, Tensor scale, Tensor! out) -> ()");
   ops.def("residual_add_fp16_(Tensor(a!) residual, Tensor x) -> ()");
   ops.def("repeat_interleave_heads_fp16(Tensor x, int repeat, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
@@ -595,6 +692,11 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("layer_norm_quant_fp8_static_fp16", torch::kCUDA, &layer_norm_quant_fp8_static_fp16);
   ops.impl("rope_rotate_half_fp16_", torch::kCUDA, &rope_rotate_half_fp16_);
   ops.impl("quantize_fp8_static_fp16", torch::kCUDA, &quantize_fp8_static_fp16);
+  ops.impl("quantize_fp8_static_bf16", torch::kCUDA, &quantize_fp8_static_bf16);
+  ops.impl("layer_norm_quant_fp8_static_bf16", torch::kCUDA,
+           &layer_norm_quant_fp8_static_bf16);
+  ops.impl("gate_geglu_merged_quant_fp8_static_bf16", torch::kCUDA,
+           &gate_geglu_merged_quant_fp8_static_bf16);
   ops.impl("residual_add_fp16_", torch::kCUDA, &residual_add_fp16_);
   ops.impl("repeat_interleave_heads_fp16", torch::kCUDA, &repeat_interleave_heads_fp16);
 #endif

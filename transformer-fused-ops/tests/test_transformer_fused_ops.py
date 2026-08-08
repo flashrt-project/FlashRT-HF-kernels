@@ -126,6 +126,34 @@ class SourceOps:
         self.ops.quantize_fp8_static_fp16(x, scale, out)
         return out
 
+    def quantize_fp8_static_bf16(self, x, scale, out=None):
+        if out is None:
+            out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+        self.ops.quantize_fp8_static_bf16(x, scale, out)
+        return out
+
+    def layer_norm_quant_fp8_static_bf16(
+        self, x, weight, bias, scale, eps=1e-6, out=None
+    ):
+        if out is None:
+            out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+        self.ops.layer_norm_quant_fp8_static_bf16(
+            x, weight, bias, scale, float(eps), out
+        )
+        return out
+
+    def gate_geglu_merged_quant_fp8_static_bf16(
+        self, merged, scale, out=None
+    ):
+        if out is None:
+            out = torch.empty(
+                (merged.shape[0], merged.shape[1] // 2),
+                device=merged.device,
+                dtype=torch.float8_e4m3fn,
+            )
+        self.ops.gate_geglu_merged_quant_fp8_static_bf16(merged, scale, out)
+        return out
+
     def residual_add_fp16_(self, residual, x):
         self.ops.residual_add_fp16_(residual, x)
         return residual
@@ -163,6 +191,7 @@ def load_source_ops() -> SourceOps:
     if torch.cuda.get_device_capability(0) == (11, 0):
         sources.extend([
             str(PACKAGE / "csrc" / "kernels" / "vec_fp16_backbone.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "vec_bf16_producers.cu"),
             str(PACKAGE / "csrc" / "kernels" / "vec_fp16_dispatch.cu"),
         ])
     load(
@@ -193,6 +222,27 @@ def assert_close(name: str, got: torch.Tensor, ref: torch.Tensor, atol: float = 
     cos = float(torch.nn.functional.cosine_similarity(got.float().flatten(), ref.float().flatten(), dim=0).item())
     if max_abs > atol or cos < 0.999:
         raise AssertionError(f"{name}: max_abs={max_abs:.8f} cos={cos:.8f}")
+
+
+def assert_fp8_distribution(
+    name: str, got: torch.Tensor, ref: torch.Tensor, max_mismatch_fraction: float
+) -> None:
+    got_f = got.float()
+    ref_f = ref.float()
+    diff = (got_f - ref_f).abs().flatten()
+    mismatch = int((diff != 0).sum().item())
+    fraction = mismatch / diff.numel()
+    p99 = float(torch.quantile(diff, 0.99).item())
+    cosine = float(
+        torch.nn.functional.cosine_similarity(
+            got_f.flatten(), ref_f.flatten(), dim=0
+        ).item()
+    )
+    if p99 != 0.0 or fraction > max_mismatch_fraction or cosine < 0.9999:
+        raise AssertionError(
+            f"{name}: mismatch={mismatch}/{diff.numel()} fraction={fraction:.8f} "
+            f"p99={p99:.8f} max={float(diff.max().item()):.8f} cosine={cosine:.8f}"
+        )
 
 
 def rope_ref(x, cos, sin, rope_dim):
@@ -233,6 +283,84 @@ def run(ops, mode: str) -> int:
     count += 1
 
     if torch.cuda.get_device_capability(0) == (11, 0):
+        for shape in ((1, 127), (51, 1536), (712, 2048), (768, 4304)):
+            x_bf16 = (torch.randn(shape, device="cuda") * 0.5).to(torch.bfloat16)
+            scale_bf16 = torch.tensor([0.025], device="cuda", dtype=torch.float32)
+            quantized = ops.quantize_fp8_static_bf16(x_bf16, scale_bf16)
+            quantized_ref = (
+                x_bf16.float().div(scale_bf16).clamp(-448.0, 448.0)
+            ).to(torch.float8_e4m3fn)
+            if not torch.equal(quantized, quantized_ref):
+                raise AssertionError(f"quantize_fp8_static_bf16 mismatch for {shape}")
+            count += 1
+
+        for norm_rows, dim in ((512, 1152), (712, 2048), (768, 4304)):
+            x_bf16 = torch.randn(
+                (norm_rows, dim), device="cuda", dtype=torch.bfloat16
+            )
+            weight_bf16 = torch.randn(
+                (dim,), device="cuda", dtype=torch.bfloat16
+            )
+            bias_bf16 = torch.randn(
+                (dim,), device="cuda", dtype=torch.bfloat16
+            )
+            scale_bf16 = torch.tensor(
+                [0.04], device="cuda", dtype=torch.float32
+            )
+            fused_bf16 = ops.layer_norm_quant_fp8_static_bf16(
+                x_bf16, weight_bf16, bias_bf16, scale_bf16
+            )
+            norm_ref = torch.nn.functional.layer_norm(
+                x_bf16.float(), (dim,), weight_bf16.float(),
+                bias_bf16.float(), 1e-6
+            ).to(torch.bfloat16)
+            fused_ref = (
+                norm_ref.float().div(scale_bf16).clamp(-448.0, 448.0)
+            ).to(torch.float8_e4m3fn)
+            assert_fp8_distribution(
+                f"layer_norm_quant_fp8_static_bf16_{norm_rows}_{dim}",
+                fused_bf16,
+                fused_ref,
+                0.002,
+            )
+            count += 1
+
+        for geglu_rows, hidden in ((51, 4096), (512, 4304), (768, 3456)):
+            merged = (torch.randn(
+                (geglu_rows, 2 * hidden), device="cuda"
+            ) * 0.25).to(torch.bfloat16)
+            scale_bf16 = torch.tensor(
+                [0.025], device="cuda", dtype=torch.float32
+            )
+            geglu = ops.gate_geglu_merged_quant_fp8_static_bf16(
+                merged, scale_bf16
+            )
+            gate, up = merged.float().chunk(2, dim=-1)
+            geglu_ref = (
+                (
+                    gate
+                    / (
+                        1.0
+                        + torch.exp(
+                            -1.5957691216057308
+                            * gate
+                            * (1.0 + 0.044715 * gate.square())
+                        )
+                    )
+                    * up
+                )
+                .div(scale_bf16)
+                .clamp(-448.0, 448.0)
+                .to(torch.float8_e4m3fn)
+            )
+            assert_fp8_distribution(
+                f"gate_geglu_merged_quant_fp8_static_bf16_{geglu_rows}_{hidden}",
+                geglu,
+                geglu_ref,
+                0.001,
+            )
+            count += 1
+
         for norm_rows, dim in ((277 * 16, 128), (277, 2048), (1024, 1024)):
             x16 = torch.randn((norm_rows, dim), device="cuda", dtype=torch.float16)
             w16 = torch.randn((dim,), device="cuda", dtype=torch.float16)
@@ -295,6 +423,94 @@ def run(ops, mode: str) -> int:
         if not torch.equal(got_residual, expected_residual):
             raise AssertionError("residual_add_fp16_ mismatch")
         count += 3
+
+        compile_x_bf16 = torch.randn(
+            (51, 1536), device="cuda", dtype=torch.bfloat16
+        )
+        compile_scale_bf16 = torch.tensor(
+            [0.025], device="cuda", dtype=torch.float32
+        )
+
+        def invoke_bf16(value, scale):
+            return ops.quantize_fp8_static_bf16(value, scale)
+
+        eager_bf16 = invoke_bf16(compile_x_bf16, compile_scale_bf16)
+        compiled_bf16 = torch.compile(invoke_bf16, fullgraph=True)(
+            compile_x_bf16, compile_scale_bf16
+        )
+        if not torch.equal(compiled_bf16, eager_bf16):
+            raise AssertionError("BF16 quantize compile mismatch")
+
+        graph_out = torch.empty_like(
+            compile_x_bf16, dtype=torch.float8_e4m3fn
+        )
+        ops.quantize_fp8_static_bf16(compile_x_bf16, compile_scale_bf16)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            ops.quantize_fp8_static_bf16(
+                compile_x_bf16, compile_scale_bf16, out=graph_out
+            )
+        graph.replay()
+        if not torch.equal(graph_out, eager_bf16):
+            raise AssertionError("BF16 quantize CUDA Graph mismatch")
+
+        compile_norm_x = torch.randn(
+            (51, 128), device="cuda", dtype=torch.bfloat16
+        )
+        compile_norm_w = torch.randn(
+            (128,), device="cuda", dtype=torch.bfloat16
+        )
+        compile_norm_b = torch.randn_like(compile_norm_w)
+
+        def invoke_ln(value, weight, bias, scale):
+            return ops.layer_norm_quant_fp8_static_bf16(
+                value, weight, bias, scale
+            )
+
+        eager_ln = invoke_ln(
+            compile_norm_x, compile_norm_w, compile_norm_b,
+            compile_scale_bf16
+        )
+        compiled_ln = torch.compile(invoke_ln, fullgraph=True)(
+            compile_norm_x, compile_norm_w, compile_norm_b,
+            compile_scale_bf16
+        )
+        if not torch.equal(compiled_ln, eager_ln):
+            raise AssertionError("BF16 LayerNorm producer compile mismatch")
+        graph_ln = torch.empty_like(eager_ln)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            ops.layer_norm_quant_fp8_static_bf16(
+                compile_norm_x, compile_norm_w, compile_norm_b,
+                compile_scale_bf16, out=graph_ln
+            )
+        graph.replay()
+        if not torch.equal(graph_ln, eager_ln):
+            raise AssertionError("BF16 LayerNorm producer CUDA Graph mismatch")
+
+        compile_merged = torch.randn(
+            (51, 256), device="cuda", dtype=torch.bfloat16
+        )
+
+        def invoke_geglu(value, scale):
+            return ops.gate_geglu_merged_quant_fp8_static_bf16(value, scale)
+
+        eager_geglu = invoke_geglu(compile_merged, compile_scale_bf16)
+        compiled_geglu = torch.compile(invoke_geglu, fullgraph=True)(
+            compile_merged, compile_scale_bf16
+        )
+        if not torch.equal(compiled_geglu, eager_geglu):
+            raise AssertionError("BF16 GeGLU producer compile mismatch")
+        graph_geglu = torch.empty_like(eager_geglu)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            ops.gate_geglu_merged_quant_fp8_static_bf16(
+                compile_merged, compile_scale_bf16, out=graph_geglu
+            )
+        graph.replay()
+        if not torch.equal(graph_geglu, eager_geglu):
+            raise AssertionError("BF16 GeGLU producer CUDA Graph mismatch")
+        count += 6
 
     q = torch.randn((8, 4, 128), device="cuda").to(torch.bfloat16)
     k = torch.randn((8, 2, 128), device="cuda").to(torch.bfloat16)

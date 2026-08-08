@@ -19,7 +19,8 @@ Fused gate path: residual += x * gate -> AdaRMSNorm(residual) -> static FP8
 
 - `x`, `residual`, `gate`: contiguous BF16 matrices, shape `(rows, dim)`
 - `weight`: contiguous BF16 vector, shape `(dim,)`
-- `style`: contiguous BF16 matrix, shape `(rows, 3 * dim)`
+- `style`: contiguous BF16 matrix, shape `(rows, 3 * dim)` or `(1, 3 * dim)`
+  for a style row broadcast across all rows
   - first `dim`: style scale
   - second `dim`: style shift
   - third `dim`: gate output
@@ -58,6 +59,16 @@ residual, out_fp8, gate_out = ops.gate_residual_ada_norm_fp8_static_bf16(
 )
 ```
 
+For prompt/style values shared by every token, pass a single row directly;
+the kernel broadcasts it without materializing a `rows x 3*dim` tensor:
+
+```python
+shared_style = torch.randn((1, 3 * dim), device="cuda", dtype=torch.bfloat16)
+out_bf16, gate_out = ops.ada_rms_norm_style_bf16(
+    x, weight, shared_style
+)
+```
+
 ## Validation
 
 ```bash
@@ -65,8 +76,8 @@ python flashrt-adaptive-norms/tests/test_adaptive_norms.py --backend source --mo
 python flashrt-adaptive-norms/benchmarks/benchmark.py --backend source --shapes all
 ```
 
-Current RTX 5090 source-extension validation passes the full source grid.
+RTX 5090 and Thor SM110 source-extension validation passes the full source
+grid for both per-row and single-row broadcast style.
 Residual and gate outputs are bit-level exact. FP8 output uses a boundary-aware
 gate because PyTorch and CUDA FP8 casters can choose adjacent FP8 values for
-rare tie cases; p99_abs is zero across the source grid. Built-artifact and
-multi-hardware validation are pending.
+rare tie cases; p99_abs is zero across the source grid.

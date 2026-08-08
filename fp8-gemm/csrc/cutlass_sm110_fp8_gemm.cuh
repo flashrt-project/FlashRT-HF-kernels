@@ -21,5 +21,11 @@ int cutlass_fp8_wide_bf16out(void* A, void* B, void* D, int M, int N, int K,
                              float alpha, float beta, cudaStream_t stream);
 int cutlass_fp8_t1_bf16out(void* A, void* B, void* D, int M, int N, int K,
                            float alpha, float beta, cudaStream_t stream);
+int cutlass_fp8_wide_bias_bf16out(
+    void* A, void* B, void* bias, void* D, int M, int N, int K,
+    float alpha, float beta, cudaStream_t stream);
+int cutlass_fp8_wide_bias_gelu_bf16out(
+    void* A, void* B, void* bias, void* D, int M, int N, int K,
+    float alpha, cudaStream_t stream);
 
 }  // extern "C"

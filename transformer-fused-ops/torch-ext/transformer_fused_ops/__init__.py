@@ -174,6 +174,28 @@ def _quantize_fp8_static_fp16_fake(x, scale, out) -> None:
         raise RuntimeError("output must match x and scale must contain one value")
 
 
+@torch.library.register_fake(add_op_namespace_prefix("quantize_fp8_static_bf16"))
+def _quantize_fp8_static_bf16_fake(x, scale, out) -> None:
+    if scale.numel() != 1 or out.shape != x.shape:
+        raise RuntimeError("output must match x and scale must contain one value")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_quant_fp8_static_bf16"))
+def _layer_norm_quant_fp8_static_bf16_fake(x, weight, bias, scale, eps: float, out) -> None:
+    if x.dim() != 2 or weight.shape != (x.shape[1],) or bias.shape != weight.shape:
+        raise RuntimeError("expected x (rows,dim), weight/bias (dim,)")
+    if scale.numel() != 1 or out.shape != x.shape:
+        raise RuntimeError("output must match x and scale must contain one value")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gate_geglu_merged_quant_fp8_static_bf16"))
+def _gate_geglu_merged_quant_fp8_static_bf16_fake(merged, scale, out) -> None:
+    if merged.dim() != 2 or merged.shape[1] % 2:
+        raise RuntimeError("merged must have shape (rows, 2 * hidden)")
+    if scale.numel() != 1 or out.shape != (merged.shape[0], merged.shape[1] // 2):
+        raise RuntimeError("output must have shape (rows, hidden) and scale must be scalar")
+
+
 @torch.library.register_fake(add_op_namespace_prefix("residual_add_fp16_"))
 def _residual_add_fp16_fake(residual, x) -> None:
     if residual.shape != x.shape:
@@ -352,6 +374,38 @@ def quantize_fp8_static_fp16(x, scale, *, out=None):
     return out
 
 
+def quantize_fp8_static_bf16(x, scale, *, out=None):
+    """Quantize contiguous BF16 input with a static FP32 scale."""
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.quantize_fp8_static_bf16(x, scale, out)
+    return out
+
+
+def layer_norm_quant_fp8_static_bf16(
+    x, weight, bias, scale, *, eps: float = 1e-6, out=None
+):
+    """LayerNorm BF16 input and emit static-scale FP8 without an intermediate."""
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.layer_norm_quant_fp8_static_bf16(
+        x, weight, bias, scale, float(eps), out
+    )
+    return out
+
+
+def gate_geglu_merged_quant_fp8_static_bf16(merged, scale, *, out=None):
+    """Apply tanh-approximate GeGLU to merged BF16 gate/up and emit FP8."""
+    if out is None:
+        out = torch.empty(
+            (merged.shape[0], merged.shape[1] // 2),
+            device=merged.device,
+            dtype=torch.float8_e4m3fn,
+        )
+    ops.gate_geglu_merged_quant_fp8_static_bf16(merged, scale, out)
+    return out
+
+
 def residual_add_fp16_(residual, x):
     ops.residual_add_fp16_(residual, x)
     return residual
@@ -385,6 +439,9 @@ __all__ = [
     "layer_norm_fp16",
     "layer_norm_quant_fp8_static_fp16",
     "quantize_fp8_static_fp16",
+    "quantize_fp8_static_bf16",
+    "layer_norm_quant_fp8_static_bf16",
+    "gate_geglu_merged_quant_fp8_static_bf16",
     "repeat_interleave_heads_fp16",
     "residual_add_fp16_",
     "rms_norm_fp16",
