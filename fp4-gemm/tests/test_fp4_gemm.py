@@ -1020,9 +1020,14 @@ def run_pi05_thor_batch3_cases(ops, full_shapes: bool) -> list[Metrics]:
     ]
     if full_shapes:
         shapes += [
+            ("decoder_qkv_m64", 64, 2560, 1024, 10),
+            ("decoder_o_m64", 64, 1024, 2048, 10),
+            ("decoder_gate_up_m64", 64, 8192, 1024, 10),
+            ("decoder_down_m64", 64, 1024, 4096, 10),
             ("encoder_gate_up_m576", 576, 16384, 2048, 7),
             ("encoder_gate_up_m970", 970, 16384, 2048, 7),
             ("encoder_down_m576", 576, 2048, 16384, 7),
+            ("encoder_down_m970", 970, 2048, 16384, 7),
             ("siglip_m512", 512, 4304, 1152, 7),
             ("siglip_m768", 768, 4304, 1152, 7),
         ]

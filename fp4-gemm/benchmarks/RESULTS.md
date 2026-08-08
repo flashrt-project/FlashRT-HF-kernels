@@ -112,8 +112,9 @@ have identical arithmetic contracts.
 | SigLIP `(768,4304,1152)` | v7 | 34.984 | 34.996 | 1.000x |
 | decoder O FP4-output `(10,1024,2048)` | native | 10.244 | 10.262 | 0.998x |
 
-The strict source gate passed `67/67`. All nine BF16-output GEMM shapes were
-exact against GEMM over the same dequantized inputs. FP4-output reached cosine
-`0.995382`; the bind-time MSE packer reduced reconstruction MSE from
-`0.000570887` to `0.000449985`. BF16 v7/v10 and FP4-output CUDA Graph replay
-were bit-identical.
+The strict source gate passed `72/72` and covers both ends of the decoder
+`M=10..64` and encoder `M=576..970` bands. All BF16-output GEMM shapes are
+checked against GEMM over the same dequantized inputs. FP4-output reached
+cosine `0.995382`; the
+bind-time MSE packer reduced reconstruction MSE from `0.000570887` to
+`0.000449985`. BF16 v7/v10 and FP4-output CUDA Graph replay were bit-identical.
