@@ -663,15 +663,22 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("moe_weighted_sum_bf16_to_fp32(Tensor expert_output, Tensor row_indices, Tensor router_weight, Tensor! out) -> ()");
   ops.def("relu2_quantize_fp8_static_bf16(Tensor input, Tensor scale, Tensor! output) -> ()");
   ops.def("rms_norm_fp16(Tensor x, Tensor weight, float eps, Tensor! out) -> ()");
+  ops.def("rms_norm_fp16_vec(Tensor x, Tensor weight, float eps, Tensor! out) -> ()");
   ops.def("layer_norm_fp16(Tensor x, Tensor weight, Tensor bias, float eps, Tensor! out) -> ()");
+  ops.def("layer_norm_fp16_vec(Tensor x, Tensor weight, Tensor bias, float eps, Tensor! out) -> ()");
   ops.def("layer_norm_quant_fp8_static_fp16(Tensor x, Tensor weight, Tensor bias, Tensor scale, float eps, Tensor! out) -> ()");
+  ops.def("layer_norm_fp8_static_fp16_vec(Tensor x, Tensor weight, Tensor bias, Tensor scale, float eps, Tensor! out) -> ()");
   ops.def("rope_rotate_half_fp16_(Tensor(a!) x, Tensor cos, Tensor sin) -> ()");
+  ops.def("rope_rotate_half_fp16_vec(Tensor(a!) x, Tensor cos, Tensor sin) -> ()");
   ops.def("quantize_fp8_static_fp16(Tensor x, Tensor scale, Tensor! out) -> ()");
+  ops.def("quantize_fp8_static_fp16_vec(Tensor x, Tensor scale, Tensor! out) -> ()");
   ops.def("quantize_fp8_static_bf16(Tensor x, Tensor scale, Tensor! out) -> ()");
   ops.def("layer_norm_quant_fp8_static_bf16(Tensor x, Tensor weight, Tensor bias, Tensor scale, float eps, Tensor! out) -> ()");
   ops.def("gate_geglu_merged_quant_fp8_static_bf16(Tensor merged, Tensor scale, Tensor! out) -> ()");
   ops.def("residual_add_fp16_(Tensor(a!) residual, Tensor x) -> ()");
+  ops.def("residual_add_fp16_vec(Tensor(a!) residual, Tensor x) -> ()");
   ops.def("repeat_interleave_heads_fp16(Tensor x, int repeat, Tensor! out) -> ()");
+  ops.def("gpu_repeat_interleave_heads_vec(Tensor x, int repeat, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("rms_norm_gated_silu_bf16", torch::kCUDA, &rms_norm_gated_silu_bf16);
   ops.impl("silu_mul_bf16", torch::kCUDA, &silu_mul_bf16);
@@ -688,17 +695,27 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
            &moe_weighted_sum_bf16_to_fp32);
   ops.impl("relu2_quantize_fp8_static_bf16", torch::kCUDA, &relu2_quantize_fp8_static_bf16);
   ops.impl("rms_norm_fp16", torch::kCUDA, &rms_norm_fp16);
+  ops.impl("rms_norm_fp16_vec", torch::kCUDA, &rms_norm_fp16);
   ops.impl("layer_norm_fp16", torch::kCUDA, &layer_norm_fp16);
+  ops.impl("layer_norm_fp16_vec", torch::kCUDA, &layer_norm_fp16);
   ops.impl("layer_norm_quant_fp8_static_fp16", torch::kCUDA, &layer_norm_quant_fp8_static_fp16);
+  ops.impl("layer_norm_fp8_static_fp16_vec", torch::kCUDA,
+           &layer_norm_quant_fp8_static_fp16);
   ops.impl("rope_rotate_half_fp16_", torch::kCUDA, &rope_rotate_half_fp16_);
+  ops.impl("rope_rotate_half_fp16_vec", torch::kCUDA, &rope_rotate_half_fp16_);
   ops.impl("quantize_fp8_static_fp16", torch::kCUDA, &quantize_fp8_static_fp16);
+  ops.impl("quantize_fp8_static_fp16_vec", torch::kCUDA,
+           &quantize_fp8_static_fp16);
   ops.impl("quantize_fp8_static_bf16", torch::kCUDA, &quantize_fp8_static_bf16);
   ops.impl("layer_norm_quant_fp8_static_bf16", torch::kCUDA,
            &layer_norm_quant_fp8_static_bf16);
   ops.impl("gate_geglu_merged_quant_fp8_static_bf16", torch::kCUDA,
            &gate_geglu_merged_quant_fp8_static_bf16);
   ops.impl("residual_add_fp16_", torch::kCUDA, &residual_add_fp16_);
+  ops.impl("residual_add_fp16_vec", torch::kCUDA, &residual_add_fp16_);
   ops.impl("repeat_interleave_heads_fp16", torch::kCUDA, &repeat_interleave_heads_fp16);
+  ops.impl("gpu_repeat_interleave_heads_vec", torch::kCUDA,
+           &repeat_interleave_heads_fp16);
 #endif
 }
 

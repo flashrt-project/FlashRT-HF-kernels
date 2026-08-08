@@ -23,6 +23,20 @@ def _forward_static_fake(q, k, v, logits, out, scale: float) -> None:
         raise RuntimeError("logits stride must cover sequence_kv")
 
 
+@torch.library.register_fake(add_op_namespace_prefix("attention_mha_fp16_masked"))
+def _attention_mha_fp16_masked_fake(q, k, v, logits, out, scale: float) -> None:
+    _forward_static_fake(q, k, v, logits, out, scale)
+
+
+@torch.library.register_fake(add_op_namespace_prefix("attention_mha_bf16_masked"))
+def _attention_mha_bf16_masked_fake(
+    q, k, v, logits, out, scale: float, qkv_token_stride: int
+) -> None:
+    _forward_static_fake(q, k, v, logits, out, scale)
+    if qkv_token_stride != q.stride(0):
+        raise RuntimeError("qkv_token_stride must match q.stride(0)")
+
+
 @torch.library.register_fake(add_op_namespace_prefix("forward_seqused_static"))
 def _forward_seqused_static_fake(q, k, v, valid_k, logits, out, scale: float) -> None:
     del scale
@@ -58,6 +72,43 @@ def forward_static(
     return out
 
 
+def attention_mha_fp16_masked(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    logits: torch.Tensor,
+    out: torch.Tensor,
+    scale: Optional[float] = None,
+) -> torch.Tensor:
+    """Run the deterministic valid-column FP16 masked MHA kernel."""
+    if scale is None:
+        scale = 1.0 / math.sqrt(q.shape[-1])
+    ops.attention_mha_fp16_masked(q, k, v, logits, out, float(scale))
+    return out
+
+
+def attention_mha_bf16_masked(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    logits: torch.Tensor,
+    out: torch.Tensor,
+    qkv_token_stride: Optional[int] = None,
+    scale: Optional[float] = None,
+) -> torch.Tensor:
+    """Run BF16 masked MHA directly from contiguous or fused-QKV views."""
+    if scale is None:
+        scale = 1.0 / math.sqrt(q.shape[-1])
+    if qkv_token_stride is None:
+        qkv_token_stride = q.stride(0)
+    ops.attention_mha_bf16_masked(
+        q, k, v, logits, out, float(scale), int(qkv_token_stride)
+    )
+    return out
+
+
 def forward(q, k, v, *, scale: Optional[float] = None):
     """Convenience allocation wrapper; use ``forward_static`` in hot paths."""
     logits = allocate_workspace(q, k)
@@ -83,6 +134,8 @@ def forward_seqused_static(
 
 
 __all__ = [
+    "attention_mha_bf16_masked",
+    "attention_mha_fp16_masked",
     "allocate_workspace",
     "forward",
     "forward_static",

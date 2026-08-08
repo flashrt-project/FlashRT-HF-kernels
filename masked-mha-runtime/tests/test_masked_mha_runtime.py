@@ -38,6 +38,24 @@ class SourceOps:
         self.ops.forward_static(q, k, v, logits, out, float(scale))
         return out
 
+    def attention_mha_fp16_masked(self, q, k, v, *, logits, out, scale=None):
+        scale = q.shape[-1] ** -0.5 if scale is None else scale
+        self.ops.attention_mha_fp16_masked(
+            q, k, v, logits, out, float(scale)
+        )
+        return out
+
+    def attention_mha_bf16_masked(
+        self, q, k, v, *, logits, out, qkv_token_stride=None, scale=None
+    ):
+        scale = q.shape[-1] ** -0.5 if scale is None else scale
+        if qkv_token_stride is None:
+            qkv_token_stride = q.stride(0)
+        self.ops.attention_mha_bf16_masked(
+            q, k, v, logits, out, float(scale), int(qkv_token_stride)
+        )
+        return out
+
     def forward_seqused_static(
         self, q, k, v, valid_k, *, logits, out, scale=None
     ):
@@ -117,6 +135,32 @@ def run_case(ops, dtype, sq, sk, heads, dim, fused_stride=False):
     out = torch.empty_like(q, memory_format=torch.contiguous_format)
     got = ops.forward_static(q, k, v, logits=logits, out=out)
     torch.cuda.synchronize()
+    alias_logits = ops.allocate_workspace(q, k)
+    alias_logits.fill_(float("nan"))
+    alias_out = torch.empty_like(q, memory_format=torch.contiguous_format)
+    if dtype is torch.float16:
+        alias_got = ops.attention_mha_fp16_masked(
+            q, k, v, logits=alias_logits, out=alias_out
+        )
+    else:
+        alias_got = ops.attention_mha_bf16_masked(
+            q, k, v, logits=alias_logits, out=alias_out,
+            qkv_token_stride=q.stride(0),
+        )
+    torch.cuda.synchronize()
+    if not torch.equal(alias_got, got):
+        raise AssertionError("explicit masked MHA entry differs from forward_static")
+    if dtype is torch.bfloat16:
+        try:
+            ops.attention_mha_bf16_masked(
+                q, k, v, logits=alias_logits, out=alias_out,
+                qkv_token_stride=q.stride(0) + 1,
+            )
+        except RuntimeError as exc:
+            if "qkv_token_stride" not in str(exc):
+                raise
+        else:
+            raise AssertionError("invalid qkv_token_stride was not rejected")
     ref = torch.nn.functional.scaled_dot_product_attention(
         q.permute(1, 0, 2).unsqueeze(0).float(),
         k.permute(1, 0, 2).unsqueeze(0).float(),
@@ -138,9 +182,15 @@ def run_case(ops, dtype, sq, sk, heads, dim, fused_stride=False):
     graph = torch.cuda.CUDAGraph()
     torch.cuda.synchronize()
     with torch.cuda.graph(graph):
-        ops.forward_static(
-            static_q, static_k, static_v, logits=logits, out=out
-        )
+        if dtype is torch.float16:
+            ops.attention_mha_fp16_masked(
+                static_q, static_k, static_v, logits=logits, out=out
+            )
+        else:
+            ops.attention_mha_bf16_masked(
+                static_q, static_k, static_v, logits=logits, out=out,
+                qkv_token_stride=static_q.stride(0),
+            )
     graph.replay()
     first = out.clone()
     graph.replay()

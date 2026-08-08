@@ -143,18 +143,21 @@ def _relu2_quantize_fp8_static_fake(
 
 
 @torch.library.register_fake(add_op_namespace_prefix("rms_norm_fp16"))
+@torch.library.register_fake(add_op_namespace_prefix("rms_norm_fp16_vec"))
 def _rms_norm_fp16_fake(x, weight, eps: float, out) -> None:
     if x.dim() != 2 or weight.shape != (x.shape[1],) or out.shape != x.shape:
         raise RuntimeError("expected x/out (rows,dim), weight (dim,)")
 
 
 @torch.library.register_fake(add_op_namespace_prefix("layer_norm_fp16"))
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_fp16_vec"))
 def _layer_norm_fp16_fake(x, weight, bias, eps: float, out) -> None:
     if x.dim() != 2 or weight.shape != (x.shape[1],) or bias.shape != weight.shape or out.shape != x.shape:
         raise RuntimeError("expected x/out (rows,dim), weight/bias (dim,)")
 
 
 @torch.library.register_fake(add_op_namespace_prefix("layer_norm_quant_fp8_static_fp16"))
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_fp8_static_fp16_vec"))
 def _layer_norm_quant_fp8_static_fp16_fake(x, weight, bias, scale, eps: float, out) -> None:
     if x.dim() != 2 or weight.shape != (x.shape[1],) or bias.shape != weight.shape or out.shape != x.shape:
         raise RuntimeError("expected x/out (rows,dim), weight/bias (dim,)")
@@ -163,12 +166,14 @@ def _layer_norm_quant_fp8_static_fp16_fake(x, weight, bias, scale, eps: float, o
 
 
 @torch.library.register_fake(add_op_namespace_prefix("rope_rotate_half_fp16_"))
+@torch.library.register_fake(add_op_namespace_prefix("rope_rotate_half_fp16_vec"))
 def _rope_rotate_half_fp16_fake(x, cos, sin) -> None:
     if x.dim() != 3 or cos.shape != (x.shape[0], x.shape[2]) or sin.shape != cos.shape:
         raise RuntimeError("expected x (sequence,heads,head_dim), cos/sin (sequence,head_dim)")
 
 
 @torch.library.register_fake(add_op_namespace_prefix("quantize_fp8_static_fp16"))
+@torch.library.register_fake(add_op_namespace_prefix("quantize_fp8_static_fp16_vec"))
 def _quantize_fp8_static_fp16_fake(x, scale, out) -> None:
     if scale.numel() != 1 or out.shape != x.shape:
         raise RuntimeError("output must match x and scale must contain one value")
@@ -197,12 +202,14 @@ def _gate_geglu_merged_quant_fp8_static_bf16_fake(merged, scale, out) -> None:
 
 
 @torch.library.register_fake(add_op_namespace_prefix("residual_add_fp16_"))
+@torch.library.register_fake(add_op_namespace_prefix("residual_add_fp16_vec"))
 def _residual_add_fp16_fake(residual, x) -> None:
     if residual.shape != x.shape:
         raise RuntimeError("residual and x must have the same shape")
 
 
 @torch.library.register_fake(add_op_namespace_prefix("repeat_interleave_heads_fp16"))
+@torch.library.register_fake(add_op_namespace_prefix("gpu_repeat_interleave_heads_vec"))
 def _repeat_interleave_heads_fp16_fake(x, repeat: int, out) -> None:
     if x.dim() != 3 or out.shape != (x.shape[0], x.shape[1] * repeat, x.shape[2]):
         raise RuntimeError("output shape must be (sequence, heads * repeat, head_dim)")
@@ -344,10 +351,24 @@ def rms_norm_fp16(x, weight, *, eps: float = 1e-6, out=None):
     return out
 
 
+def rms_norm_fp16_vec(x, weight, *, eps: float = 1e-6, out=None):
+    if out is None:
+        out = torch.empty_like(x)
+    ops.rms_norm_fp16_vec(x, weight, float(eps), out)
+    return out
+
+
 def layer_norm_fp16(x, weight, bias, *, eps: float = 1e-6, out=None):
     if out is None:
         out = torch.empty_like(x)
     ops.layer_norm_fp16(x, weight, bias, float(eps), out)
+    return out
+
+
+def layer_norm_fp16_vec(x, weight, bias, *, eps: float = 1e-6, out=None):
+    if out is None:
+        out = torch.empty_like(x)
+    ops.layer_norm_fp16_vec(x, weight, bias, float(eps), out)
     return out
 
 
@@ -362,8 +383,24 @@ def layer_norm_quant_fp8_static_fp16(
     return out
 
 
+def layer_norm_fp8_static_fp16_vec(
+    x, weight, bias, scale, *, eps: float = 1e-6, out=None
+):
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.layer_norm_fp8_static_fp16_vec(
+        x, weight, bias, scale, float(eps), out
+    )
+    return out
+
+
 def rope_rotate_half_fp16_(x, cos, sin):
     ops.rope_rotate_half_fp16_(x, cos, sin)
+    return x
+
+
+def rope_rotate_half_fp16_vec(x, cos, sin):
+    ops.rope_rotate_half_fp16_vec(x, cos, sin)
     return x
 
 
@@ -371,6 +408,13 @@ def quantize_fp8_static_fp16(x, scale, *, out=None):
     if out is None:
         out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
     ops.quantize_fp8_static_fp16(x, scale, out)
+    return out
+
+
+def quantize_fp8_static_fp16_vec(x, scale, *, out=None):
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.quantize_fp8_static_fp16_vec(x, scale, out)
     return out
 
 
@@ -411,6 +455,11 @@ def residual_add_fp16_(residual, x):
     return residual
 
 
+def residual_add_fp16_vec(residual, x):
+    ops.residual_add_fp16_vec(residual, x)
+    return residual
+
+
 def repeat_interleave_heads_fp16(x, repeat: int, *, out=None):
     if out is None:
         out = torch.empty(
@@ -419,6 +468,17 @@ def repeat_interleave_heads_fp16(x, repeat: int, *, out=None):
             dtype=x.dtype,
         )
     ops.repeat_interleave_heads_fp16(x, int(repeat), out)
+    return out
+
+
+def gpu_repeat_interleave_heads_vec(x, repeat: int, *, out=None):
+    if out is None:
+        out = torch.empty(
+            (x.shape[0], x.shape[1] * repeat, x.shape[2]),
+            device=x.device,
+            dtype=x.dtype,
+        )
+    ops.gpu_repeat_interleave_heads_vec(x, int(repeat), out)
     return out
 
 
@@ -437,13 +497,20 @@ __all__ = [
     "router_topk_bf16",
     "moe_weighted_sum_bf16_to_fp32",
     "layer_norm_fp16",
+    "layer_norm_fp16_vec",
+    "layer_norm_fp8_static_fp16_vec",
     "layer_norm_quant_fp8_static_fp16",
     "quantize_fp8_static_fp16",
+    "quantize_fp8_static_fp16_vec",
     "quantize_fp8_static_bf16",
     "layer_norm_quant_fp8_static_bf16",
     "gate_geglu_merged_quant_fp8_static_bf16",
     "repeat_interleave_heads_fp16",
+    "gpu_repeat_interleave_heads_vec",
     "residual_add_fp16_",
+    "residual_add_fp16_vec",
     "rms_norm_fp16",
+    "rms_norm_fp16_vec",
     "rope_rotate_half_fp16_",
+    "rope_rotate_half_fp16_vec",
 ]

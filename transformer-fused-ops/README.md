@@ -18,15 +18,22 @@ FlashRT native CUDA fused helper kernels for transformer hot paths.
 - `moe_weighted_sum_bf16_to_fp32`
 - `relu2_quantize_fp8_static_bf16(input, scale, out=None)`
 - `rms_norm_fp16(x, weight, eps=1e-6, out=None)`
+- `rms_norm_fp16_vec(x, weight, eps=1e-6, out=None)`
 - `layer_norm_fp16(x, weight, bias, eps=1e-6, out=None)`
+- `layer_norm_fp16_vec(x, weight, bias, eps=1e-6, out=None)`
 - `layer_norm_quant_fp8_static_fp16(x, weight, bias, scale, eps=1e-6, out=None)`
+- `layer_norm_fp8_static_fp16_vec(x, weight, bias, scale, eps=1e-6, out=None)`
 - `rope_rotate_half_fp16_(x, cos, sin)`
+- `rope_rotate_half_fp16_vec(x, cos, sin)`
 - `quantize_fp8_static_fp16(x, scale, out=None)`
+- `quantize_fp8_static_fp16_vec(x, scale, out=None)`
 - `quantize_fp8_static_bf16(x, scale, out=None)`
 - `layer_norm_quant_fp8_static_bf16(x, weight, bias, scale, eps=1e-6, out=None)`
 - `gate_geglu_merged_quant_fp8_static_bf16(merged, scale, out=None)`
 - `residual_add_fp16_(residual, x)`
+- `residual_add_fp16_vec(residual, x)`
 - `repeat_interleave_heads_fp16(x, repeat, out=None)`
+- `gpu_repeat_interleave_heads_vec(x, repeat, out=None)`
 
 These are Tensor APIs meant for static-buffer runtimes and CUDA Graph friendly
 model demos. Unsupported shapes fail explicitly.
@@ -43,6 +50,11 @@ ViT/LLM normalization, split-half RoPE, FP8 production, residual update, and
 GQA head expansion. These entries require SM110 and CUDA 13; unsupported
 architectures fail before launch. Static `out=` buffers and the in-place
 entries are suitable for CUDA Graph replay.
+
+The explicit `_vec` names are additive aliases for runtime capability
+discovery. They dispatch the exact same native CUDA implementations as the
+established model-neutral names; callers can bind either surface without a
+performance or numerical change.
 
 The additive SM110 BF16 producer family covers PI0.5 prefill and SigLIP hot
 paths. `quantize_fp8_static_bf16` computes

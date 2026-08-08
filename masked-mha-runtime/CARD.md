@@ -13,6 +13,8 @@ removing the per-call `-inf` pre-fill. BF16 accepts fused-QKV token strides.
 
 - `forward(q, k, v, *, scale=None)`
 - `forward_static(q, k, v, *, logits, out, scale=None)`
+- `attention_mha_fp16_masked(q, k, v, *, logits, out, scale=None)`
+- `attention_mha_bf16_masked(q, k, v, *, logits, out, qkv_token_stride=None, scale=None)`
 - `allocate_workspace(q, k)`
 - `forward_seqused_static(q, k, v, valid_k, *, logits, out, scale=None)`
 

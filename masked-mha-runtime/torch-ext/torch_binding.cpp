@@ -95,6 +95,25 @@ void masked_mha_forward_static(
   C10_CUDA_KERNEL_LAUNCH_CHECK();
 }
 
+void attention_mha_fp16_masked_op(
+    torch::Tensor const& q, torch::Tensor const& k, torch::Tensor const& v,
+    torch::Tensor& logits, torch::Tensor& out, double scale) {
+  TORCH_CHECK(q.scalar_type() == torch::kFloat16,
+              "attention_mha_fp16_masked requires FP16 q/k/v");
+  masked_mha_forward_static(q, k, v, logits, out, scale);
+}
+
+void attention_mha_bf16_masked_op(
+    torch::Tensor const& q, torch::Tensor const& k, torch::Tensor const& v,
+    torch::Tensor& logits, torch::Tensor& out, double scale,
+    int64_t qkv_token_stride) {
+  TORCH_CHECK(q.scalar_type() == torch::kBFloat16,
+              "attention_mha_bf16_masked requires BF16 q/k/v");
+  TORCH_CHECK(qkv_token_stride == q.stride(0),
+              "qkv_token_stride must match q.stride(0)");
+  masked_mha_forward_static(q, k, v, logits, out, scale);
+}
+
 void masked_mha_forward_seqused_static(
     torch::Tensor const& q, torch::Tensor const& k, torch::Tensor const& v,
     torch::Tensor const& valid_k, torch::Tensor& logits, torch::Tensor& out,
@@ -144,8 +163,14 @@ void masked_mha_forward_seqused_static(
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("forward_static(Tensor q, Tensor k, Tensor v, Tensor! logits, Tensor! out, float scale) -> ()");
+  ops.def("attention_mha_fp16_masked(Tensor q, Tensor k, Tensor v, Tensor! logits, Tensor! out, float scale) -> ()");
+  ops.def("attention_mha_bf16_masked(Tensor q, Tensor k, Tensor v, Tensor! logits, Tensor! out, float scale, int qkv_token_stride) -> ()");
   ops.def("forward_seqused_static(Tensor q, Tensor k, Tensor v, Tensor valid_k, Tensor! logits, Tensor! out, float scale) -> ()");
   ops.impl("forward_static", torch::kCUDA, &masked_mha_forward_static);
+  ops.impl("attention_mha_fp16_masked", torch::kCUDA,
+           &attention_mha_fp16_masked_op);
+  ops.impl("attention_mha_bf16_masked", torch::kCUDA,
+           &attention_mha_bf16_masked_op);
   ops.impl("forward_seqused_static", torch::kCUDA,
            &masked_mha_forward_seqused_static);
 }

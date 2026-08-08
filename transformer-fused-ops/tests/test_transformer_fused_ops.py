@@ -105,9 +105,19 @@ class SourceOps:
         self.ops.rms_norm_fp16(x, weight, float(eps), out)
         return out
 
+    def rms_norm_fp16_vec(self, x, weight, eps=1e-6):
+        out = torch.empty_like(x)
+        self.ops.rms_norm_fp16_vec(x, weight, float(eps), out)
+        return out
+
     def layer_norm_fp16(self, x, weight, bias, eps=1e-6):
         out = torch.empty_like(x)
         self.ops.layer_norm_fp16(x, weight, bias, float(eps), out)
+        return out
+
+    def layer_norm_fp16_vec(self, x, weight, bias, eps=1e-6):
+        out = torch.empty_like(x)
+        self.ops.layer_norm_fp16_vec(x, weight, bias, float(eps), out)
         return out
 
     def layer_norm_quant_fp8_static_fp16(self, x, weight, bias, scale, eps=1e-6):
@@ -117,13 +127,29 @@ class SourceOps:
         )
         return out
 
+    def layer_norm_fp8_static_fp16_vec(self, x, weight, bias, scale, eps=1e-6):
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+        self.ops.layer_norm_fp8_static_fp16_vec(
+            x, weight, bias, scale, float(eps), out
+        )
+        return out
+
     def rope_rotate_half_fp16_(self, x, cos, sin):
         self.ops.rope_rotate_half_fp16_(x, cos, sin)
+        return x
+
+    def rope_rotate_half_fp16_vec(self, x, cos, sin):
+        self.ops.rope_rotate_half_fp16_vec(x, cos, sin)
         return x
 
     def quantize_fp8_static_fp16(self, x, scale):
         out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
         self.ops.quantize_fp8_static_fp16(x, scale, out)
+        return out
+
+    def quantize_fp8_static_fp16_vec(self, x, scale):
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+        self.ops.quantize_fp8_static_fp16_vec(x, scale, out)
         return out
 
     def quantize_fp8_static_bf16(self, x, scale, out=None):
@@ -158,6 +184,10 @@ class SourceOps:
         self.ops.residual_add_fp16_(residual, x)
         return residual
 
+    def residual_add_fp16_vec(self, residual, x):
+        self.ops.residual_add_fp16_vec(residual, x)
+        return residual
+
     def repeat_interleave_heads_fp16(self, x, repeat):
         out = torch.empty(
             (x.shape[0], x.shape[1] * repeat, x.shape[2]),
@@ -165,6 +195,15 @@ class SourceOps:
             dtype=x.dtype,
         )
         self.ops.repeat_interleave_heads_fp16(x, int(repeat), out)
+        return out
+
+    def gpu_repeat_interleave_heads_vec(self, x, repeat):
+        out = torch.empty(
+            (x.shape[0], x.shape[1] * repeat, x.shape[2]),
+            device=x.device,
+            dtype=x.dtype,
+        )
+        self.ops.gpu_repeat_interleave_heads_vec(x, int(repeat), out)
         return out
 
 
@@ -372,11 +411,15 @@ def run(ops, mode: str) -> int:
                 * w16.float()
             ).half()
             assert_close(f"rms_norm_fp16_{norm_rows}_{dim}", rms, rms_ref, 0.0078125)
+            if not torch.equal(ops.rms_norm_fp16_vec(x16, w16), rms):
+                raise AssertionError("rms_norm_fp16_vec alias mismatch")
             ln = ops.layer_norm_fp16(x16, w16, b16)
             ln_ref = torch.nn.functional.layer_norm(
                 x16.float(), (dim,), w16.float(), b16.float(), 1e-6
             ).half()
             assert_close(f"layer_norm_fp16_{norm_rows}_{dim}", ln, ln_ref, 0.015625)
+            if not torch.equal(ops.layer_norm_fp16_vec(x16, w16, b16), ln):
+                raise AssertionError("layer_norm_fp16_vec alias mismatch")
             scale16 = torch.tensor([0.01], device="cuda", dtype=torch.float32)
             ln_fp8 = ops.layer_norm_quant_fp8_static_fp16(
                 x16, w16, b16, scale16
@@ -384,7 +427,12 @@ def run(ops, mode: str) -> int:
             staged_fp8 = ops.quantize_fp8_static_fp16(ln, scale16)
             if not torch.equal(ln_fp8.view(torch.uint8), staged_fp8.view(torch.uint8)):
                 raise AssertionError("fused LayerNorm-FP8 differs from staged native ops")
-            count += 3
+            ln_fp8_vec = ops.layer_norm_fp8_static_fp16_vec(
+                x16, w16, b16, scale16
+            )
+            if not torch.equal(ln_fp8_vec.view(torch.uint8), ln_fp8.view(torch.uint8)):
+                raise AssertionError("layer_norm_fp8_static_fp16_vec alias mismatch")
+            count += 6
 
         sequence, heads, head_dim = 277, 16, 128
         rope_x = torch.randn(
@@ -409,6 +457,11 @@ def run(ops, mode: str) -> int:
         ).half()
         got_rope = ops.rope_rotate_half_fp16_(rope_x.clone(), cos16, sin16)
         assert_close("rope_rotate_half_fp16", got_rope, rope_expected, 0.00390625)
+        got_rope_vec = ops.rope_rotate_half_fp16_vec(
+            rope_x.clone(), cos16, sin16
+        )
+        if not torch.equal(got_rope_vec, got_rope):
+            raise AssertionError("rope_rotate_half_fp16_vec alias mismatch")
 
         repeat_src = torch.randn(
             (277, 8, 128), device="cuda", dtype=torch.float16
@@ -416,13 +469,25 @@ def run(ops, mode: str) -> int:
         repeated = ops.repeat_interleave_heads_fp16(repeat_src, 2)
         if not torch.equal(repeated, repeat_src.repeat_interleave(2, dim=1)):
             raise AssertionError("repeat_interleave_heads_fp16 mismatch")
+        if not torch.equal(
+            ops.gpu_repeat_interleave_heads_vec(repeat_src, 2), repeated
+        ):
+            raise AssertionError("gpu_repeat_interleave_heads_vec alias mismatch")
         residual = torch.randn((41, 1536), device="cuda", dtype=torch.float16)
         update = torch.randn_like(residual)
         expected_residual = (residual.float() + update.float()).half()
         got_residual = ops.residual_add_fp16_(residual.clone(), update)
         if not torch.equal(got_residual, expected_residual):
             raise AssertionError("residual_add_fp16_ mismatch")
-        count += 3
+        if not torch.equal(
+            ops.residual_add_fp16_vec(residual.clone(), update), got_residual
+        ):
+            raise AssertionError("residual_add_fp16_vec alias mismatch")
+        quant_vec = ops.quantize_fp8_static_fp16_vec(residual, scale16)
+        quant_base = ops.quantize_fp8_static_fp16(residual, scale16)
+        if not torch.equal(quant_vec.view(torch.uint8), quant_base.view(torch.uint8)):
+            raise AssertionError("quantize_fp8_static_fp16_vec alias mismatch")
+        count += 7
 
         compile_x_bf16 = torch.randn(
             (51, 1536), device="cuda", dtype=torch.bfloat16
