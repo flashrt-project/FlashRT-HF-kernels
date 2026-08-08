@@ -22,3 +22,10 @@ producers, rotate-half RoPE, residual add, and GQA head expansion. Existing
 SM120 transformer and MoE APIs are unchanged. All public wrappers use Tensor
 arguments and preserve caller-owned in-place/static-buffer semantics where the
 native source does.
+
+The vector source was reverified byte-for-byte against FlashRT revision
+`ff7795a88c257ccf7195c3c066ce69b7fe84be95`. SHA256 for
+`vec_fp16_backbone.cu` is
+`ebf2576bf0ec946d3c79a025bf830be22f06a74d3467f3d1ac68496b217245ff`.
+The explicit `*_vec` API additions are binding aliases only; they do not fork
+or modify the native implementation.

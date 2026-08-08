@@ -50,3 +50,25 @@ Source benchmark on NVIDIA Thor, PyTorch 2.13.0+cu130, August 8, 2026:
 
 The full source gate passed `54/54`, including non-vector-aligned tails,
 PI0.5/SigLIP shapes, `torch.compile(fullgraph=True)`, and CUDA Graph replay.
+
+## GROOT Thor explicit vector entries
+
+Clean installed artifact built from source commit
+`6ab0803f010b2af49474577dddef866938c3bdcd` on NVIDIA Thor (SM110), PyTorch
+2.13.0+cu130. Each explicit `*_vec` entry was measured against the established
+package entry that dispatches the same FlashRT native implementation. Timings
+use preallocated buffers, CUDA Graph replay, and an A-B-B-A measurement order.
+
+| Operation | Shape | Established us | Explicit us | Explicit/established |
+|---|---:|---:|---:|---:|
+| RMSNorm FP16 | `41x1536` | 10.277 | 10.253 | 0.998x |
+| LayerNorm FP16 | `41x1536` | 11.257 | 11.495 | 1.021x |
+| LayerNorm to FP8 | `41x1536` | 12.810 | 12.796 | 0.999x |
+| Static FP8 quantize | `41x1536` | 5.957 | 5.462 | 0.917x |
+| Rotate-half RoPE | `41x8x128` | 6.171 | 6.152 | 0.997x |
+| Residual add FP16 | `41x1536` | 3.262 | 3.050 | 0.935x |
+| Repeat GQA heads | `41x4x128`, factor 2 | 6.180 | 6.153 | 0.996x |
+
+All seven explicit entries passed bitwise alias parity. The source and clean
+installed-artifact gates both passed `67/67`; the explicit RMSNorm and static
+FP8 quantize calls also passed `torch.compile(fullgraph=True)`.
