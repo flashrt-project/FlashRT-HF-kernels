@@ -1007,6 +1007,41 @@ def run_fp16_kvcache_shape(ops, label: str, seq_len: int, device_position: bool)
         print(f"PASS {label}/cuda_graph bitwise replay")
 
 
+def run_unaligned_kvcache_fallback(ops) -> None:
+    batch, seq_len, q_heads, kv_heads, head_dim = 1, 3, 8, 1, 256
+    width = (q_heads + 2 * kv_heads) * head_dim
+
+    def offset_tensor(shape, dtype):
+        elements = math.prod(shape)
+        base = torch.empty(elements + 1, device="cuda", dtype=dtype)
+        value = base[1:].view(shape)
+        if not value.is_contiguous() or value.data_ptr() % 16 == 0:
+            raise AssertionError("failed to construct unaligned contiguous tensor")
+        return value
+
+    for dtype, method in (
+        (torch.bfloat16, ops.qkv_split_rope_kvcache_bf16),
+        (torch.float16, ops.qkv_split_rope_kvcache_fp16),
+    ):
+        packed = offset_tensor((batch, seq_len, width), dtype).normal_()
+        rope = offset_tensor((seq_len, head_dim), dtype)
+        angles = torch.randn((seq_len, head_dim // 2), device="cuda")
+        rope.copy_(torch.stack((angles.cos(), angles.sin()), -1).flatten(-2))
+        q_out = offset_tensor((batch, seq_len, q_heads, head_dim), dtype)
+        k_cache = offset_tensor((batch, seq_len + 2, kv_heads, head_dim), dtype)
+        v_cache = offset_tensor((batch, seq_len + 2, kv_heads, head_dim), dtype)
+        method(
+            packed, rope, q_heads, kv_heads, head_dim, 1,
+            q_out=q_out, k_cache=k_cache, v_cache=v_cache,
+        )
+        exp_q, exp_k, exp_v = ref_qkv_split_rope_kvcache(
+            packed, rope, q_heads, kv_heads, head_dim
+        )
+        assert_close_distribution(f"unaligned/{dtype}/q", q_out, exp_q)
+        assert_close_distribution(f"unaligned/{dtype}/k", k_cache[:, 1:4], exp_k)
+        assert_close_distribution(f"unaligned/{dtype}/v", v_cache[:, 1:4], exp_v)
+
+
 def run_qk_norm_rope_strided(ops) -> None:
     rows, q_heads, k_heads, head_dim = 51, 16, 2, 128
     q_width = q_heads * head_dim + 256
@@ -1337,8 +1372,11 @@ def run(args) -> None:
         ops, "bias_rope_fp16_small", 1, 17, 4, 2, 64
     )
     run_kvcache_shape(ops, "pi05_decoder_gqa", 1, 10, 8, 1, 256)
+    run_kvcache_shape(ops, "pi05_thor_decoder_gqa", 1, 50, 8, 1, 256)
     run_fp16_kvcache_shape(ops, "pi05_fp16_static", 10, False)
+    run_fp16_kvcache_shape(ops, "pi05_thor_fp16_static", 50, False)
     run_fp16_kvcache_shape(ops, "pi05_fp16_devpos", 1, True)
+    run_unaligned_kvcache_fallback(ops)
     run_qk_norm_rope_strided(ops)
     if args.mode == "full":
         run_decode_shape(ops, "decode_vla", 24, args.eps)
