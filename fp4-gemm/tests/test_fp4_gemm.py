@@ -99,6 +99,9 @@ class SourceOps:
     def quantize_fp4_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_fp4_sfa_fp16(x, packed, sfa, bool(is_sfb))
 
+    def quantize_fp4_sfa_mse_fp16(self, x, packed, sfa, is_sfb=False):
+        self._ops.quantize_fp4_sfa_mse_fp16(x, packed, sfa, bool(is_sfb))
+
     def quantize_e0m3_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_e0m3_sfa_fp16(x, packed, sfa, bool(is_sfb))
 
@@ -114,6 +117,16 @@ class SourceOps:
     def nvfp4_gemm_fp16(self, a, b, sfa, sfb, out, alpha=1.0, variant=-1):
         self._ops.nvfp4_gemm_fp16(
             a, b, sfa, sfb, out, float(alpha), int(variant)
+        )
+
+    def nvfp4_gemm_variant_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=7):
+        self._ops.nvfp4_gemm_variant_bf16(
+            a, b, sfa, sfb, out, float(alpha), int(variant)
+        )
+
+    def nvfp4_gemm_nvfp4(self, a, b, sfa, sfb, out_packed, out_sfa):
+        self._ops.nvfp4_gemm_nvfp4(
+            a, b, sfa, sfb, out_packed, out_sfa
         )
 
     def nvfp4_gemm_geglu_nvfp4_fp16(
@@ -213,6 +226,11 @@ class InstalledOps:
             x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
         )
 
+    def quantize_fp4_sfa_mse_fp16(self, x, packed, sfa, is_sfb=False):
+        self._module.quantize_fp4_sfa_mse_fp16(
+            x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
+        )
+
     def quantize_e0m3_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._module.quantize_e0m3_sfa_fp16(
             x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
@@ -243,6 +261,16 @@ class InstalledOps:
         self._module.nvfp4_gemm_fp16(
             a, b, sfa, sfb, alpha=float(alpha), out=out,
             variant=int(variant),
+        )
+
+    def nvfp4_gemm_variant_bf16(self, a, b, sfa, sfb, out, alpha=1.0, variant=7):
+        self._module.nvfp4_gemm_variant_bf16(
+            a, b, sfa, sfb, alpha=float(alpha), out=out, variant=int(variant)
+        )
+
+    def nvfp4_gemm_nvfp4(self, a, b, sfa, sfb, out_packed, out_sfa):
+        self._module.nvfp4_gemm_nvfp4(
+            a, b, sfa, sfb, out_packed=out_packed, out_sfa=out_sfa
         )
 
     def nvfp4_gemm_geglu_nvfp4_fp16(
@@ -352,6 +380,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_bias_bf16_sm100.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_variants.cu"),
+            str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_bf16_variants_sm100.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_fp4out.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_geglu_il_sm100.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_fp4_gemm_siglip_ffn_sm100.cu"),
@@ -978,6 +1007,144 @@ def check_bf16_quantizer(ops) -> dict[str, object]:
     return {"rows": rows, "passed": all(row["passed"] for row in rows)}
 
 
+def run_pi05_thor_batch3_cases(ops, full_shapes: bool) -> list[Metrics]:
+    """Validate native BF16 v7/v10, FP4-out, and MSE weight packing."""
+
+    if torch.cuda.get_device_capability(0) != (11, 0):
+        return []
+    shapes = [
+        ("decoder_qkv", 10, 2560, 1024, 10),
+        ("decoder_o", 10, 1024, 2048, 10),
+        ("decoder_gate_up", 10, 8192, 1024, 10),
+        ("decoder_down", 10, 1024, 4096, 10),
+    ]
+    if full_shapes:
+        shapes += [
+            ("encoder_gate_up_m576", 576, 16384, 2048, 7),
+            ("encoder_gate_up_m970", 970, 16384, 2048, 7),
+            ("encoder_down_m576", 576, 2048, 16384, 7),
+            ("siglip_m512", 512, 4304, 1152, 7),
+            ("siglip_m768", 768, 4304, 1152, 7),
+        ]
+
+    results: list[Metrics] = []
+    for index, (name, m, n, k, variant) in enumerate(shapes):
+        a, b = make_inputs(m, n, k, seed=2026080900 + index)
+        a_packed, sfa = ops.alloc_fp4(m, k)
+        b_packed, sfb = ops.alloc_fp4(n, k)
+        ops.quantize_fp4_sfa_fp16(a, a_packed, sfa, False)
+        ops.quantize_fp4_sfa_fp16(b, b_packed, sfb, True)
+        out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+        ops.nvfp4_gemm_variant_bf16(
+            a_packed, b_packed, sfa, sfb, out, variant=variant
+        )
+        a_deq = torch.empty_like(a)
+        b_deq = torch.empty_like(b)
+        ops.dequantize_fp4_sfa_fp16(a_packed, sfa, a_deq, False)
+        ops.dequantize_fp4_sfa_fp16(b_packed, sfb, b_deq, True)
+        expected = (a_deq.float() @ b_deq.float().T).to(torch.bfloat16)
+        torch.cuda.synchronize()
+        max_abs, mean_abs, p99_abs, cosine = metrics(out, expected)
+        passed = cosine >= 0.9995 and mean_abs <= 0.02 * max(
+            1.0, float(expected.float().abs().mean())
+        )
+        results.append(Metrics(
+            shape=name, M=m, N=n, K=k, workload="native_bf16_variant",
+            variant=variant, max_abs=max_abs, mean_abs=mean_abs,
+            p99_abs=p99_abs, cosine=cosine, passed=passed,
+        ))
+        if index == 0:
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                ops.nvfp4_gemm_variant_bf16(
+                    a_packed, b_packed, sfa, sfb, out, variant=variant
+                )
+            graph.replay()
+            torch.cuda.synchronize()
+            first = out.clone()
+            graph.replay()
+            torch.cuda.synchronize()
+            graph_exact = torch.equal(first, out)
+            results.append(Metrics(
+                shape=f"{name}_graph", M=m, N=n, K=k,
+                workload="native_bf16_variant_graph", variant=variant,
+                max_abs=0.0 if graph_exact else float("nan"),
+                mean_abs=0.0 if graph_exact else float("nan"),
+                p99_abs=0.0 if graph_exact else float("nan"),
+                cosine=1.0 if graph_exact else float("nan"),
+                passed=graph_exact,
+            ))
+
+    m, n, k = 10, 1024, 2048
+    a, b = make_inputs(m, n, k, seed=2026080990)
+    a_packed, sfa = ops.alloc_fp4(m, k)
+    b_packed, sfb = ops.alloc_fp4(n, k)
+    ops.quantize_fp4_sfa_fp16(a, a_packed, sfa, False)
+    ops.quantize_fp4_sfa_fp16(b, b_packed, sfb, True)
+    out_packed, out_sfa = ops.alloc_fp4(m, n)
+    ops.nvfp4_gemm_nvfp4(
+        a_packed, b_packed, sfa, sfb, out_packed, out_sfa
+    )
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.nvfp4_gemm_nvfp4(
+            a_packed, b_packed, sfa, sfb, out_packed, out_sfa
+        )
+    graph.replay()
+    torch.cuda.synchronize()
+    first_packed = out_packed.clone()
+    first_sfa = out_sfa.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    graph_exact = torch.equal(first_packed, out_packed) and torch.equal(
+        first_sfa, out_sfa
+    )
+    out_deq = torch.empty((m, n), device="cuda", dtype=torch.float16)
+    a_deq = torch.empty_like(a)
+    b_deq = torch.empty_like(b)
+    ops.dequantize_fp4_sfa_fp16(out_packed, out_sfa, out_deq, False)
+    ops.dequantize_fp4_sfa_fp16(a_packed, sfa, a_deq, False)
+    ops.dequantize_fp4_sfa_fp16(b_packed, sfb, b_deq, True)
+    expected = (a_deq.float() @ b_deq.float().T).half()
+    torch.cuda.synchronize()
+    max_abs, mean_abs, p99_abs, cosine = metrics(out_deq, expected)
+    results.append(Metrics(
+        shape="decoder_o_fp4out", M=m, N=n, K=k,
+        workload="native_fp4out", variant=None, max_abs=max_abs,
+        mean_abs=mean_abs, p99_abs=p99_abs, cosine=cosine,
+        passed=cosine >= 0.99,
+    ))
+    results.append(Metrics(
+        shape="decoder_o_fp4out_graph", M=m, N=n, K=k,
+        workload="native_fp4out_graph", variant=None,
+        max_abs=0.0 if graph_exact else float("nan"),
+        mean_abs=0.0 if graph_exact else float("nan"),
+        p99_abs=0.0 if graph_exact else float("nan"),
+        cosine=1.0 if graph_exact else float("nan"), passed=graph_exact,
+    ))
+
+    weight = make_inputs(32, 32, 512, seed=2026080991)[1]
+    rtn_packed, rtn_sfa = ops.alloc_fp4(weight.shape[0], weight.shape[1])
+    mse_packed, mse_sfa = ops.alloc_fp4(weight.shape[0], weight.shape[1])
+    ops.quantize_fp4_sfa_fp16(weight, rtn_packed, rtn_sfa, True)
+    ops.quantize_fp4_sfa_mse_fp16(weight, mse_packed, mse_sfa, True)
+    rtn = torch.empty_like(weight)
+    mse = torch.empty_like(weight)
+    ops.dequantize_fp4_sfa_fp16(rtn_packed, rtn_sfa, rtn, True)
+    ops.dequantize_fp4_sfa_fp16(mse_packed, mse_sfa, mse, True)
+    rtn_error = float((rtn.float() - weight.float()).square().mean())
+    mse_error = float((mse.float() - weight.float()).square().mean())
+    results.append(Metrics(
+        shape="weight_m32_k512", M=32, N=32, K=512,
+        workload="mse_weight_pack", variant=None,
+        max_abs=mse_error, mean_abs=rtn_error, p99_abs=0.0,
+        cosine=float(torch.nn.functional.cosine_similarity(
+            mse.float().flatten(), weight.float().flatten(), dim=0)),
+        passed=mse_error <= rtn_error + 1e-8,
+    ))
+    return results
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -1009,6 +1176,9 @@ def main() -> int:
             ))
     if capability == (11, 0):
         results.extend(run_pi05_sm110_native_cases(
+            ops, full_shapes=args.mode == "thor-models"
+        ))
+        results.extend(run_pi05_thor_batch3_cases(
             ops, full_shapes=args.mode == "thor-models"
         ))
     sm110_additive_rows, sm110_additive_gate = run_sm110_e0m3_cosmos_cases(ops)

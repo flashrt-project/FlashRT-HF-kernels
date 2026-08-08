@@ -58,9 +58,11 @@ __global__ void adarms_nvfp4_bf16_kernel(
     uint8_t* __restrict__ sfa,
     __nv_bfloat16* __restrict__ gate,
     LayoutSF layout,
-    int dim) {
+    int dim, int style_rows) {
   const int row = blockIdx.x;
-  const __nv_bfloat16* scale = style + static_cast<long long>(row) * 3 * dim;
+  const int style_row = style_rows == 1 ? 0 : row;
+  const __nv_bfloat16* scale =
+      style + static_cast<long long>(style_row) * 3 * dim;
   const __nv_bfloat16* shift = scale + dim;
   const __nv_bfloat16* next_gate = shift + dim;
   uint8_t* packed_row = packed + static_cast<long long>(row) * (dim / 2);
@@ -135,16 +137,16 @@ inline void check_adarms_bf16_launch(const char* name) {
 void adarms_nvfp4_native_bf16(
     const __nv_bfloat16* x, const __nv_bfloat16* style,
     uint8_t* packed, uint8_t* sfa, __nv_bfloat16* gate,
-    int rows, int dim, cudaStream_t stream) {
+    int rows, int dim, int style_rows, cudaStream_t stream) {
 #if FLASHRT_ADARMS_BF16_HAVE_CUTLASS
   auto shape = cute::make_shape(rows, 1, dim, 1);
   auto layout = AdaRmsBf16Config::tile_atom_to_shape_SFA(shape);
   adarms_nvfp4_bf16_kernel<false><<<rows, 256, 0, stream>>>(
-      x, nullptr, nullptr, style, packed, sfa, gate, layout, dim);
+      x, nullptr, nullptr, style, packed, sfa, gate, layout, dim, style_rows);
   check_adarms_bf16_launch("adarms_nvfp4_native_bf16");
 #else
   (void)x; (void)style; (void)packed; (void)sfa; (void)gate;
-  (void)rows; (void)dim; (void)stream;
+  (void)rows; (void)dim; (void)style_rows; (void)stream;
 #endif
 }
 
@@ -152,16 +154,18 @@ void gate_res_adarms_nvfp4_native_bf16(
     const __nv_bfloat16* x, const __nv_bfloat16* previous_gate,
     __nv_bfloat16* residual, const __nv_bfloat16* style,
     uint8_t* packed, uint8_t* sfa, __nv_bfloat16* gate,
-    int rows, int dim, cudaStream_t stream) {
+    int rows, int dim, int style_rows, cudaStream_t stream) {
 #if FLASHRT_ADARMS_BF16_HAVE_CUTLASS
   auto shape = cute::make_shape(rows, 1, dim, 1);
   auto layout = AdaRmsBf16Config::tile_atom_to_shape_SFA(shape);
   adarms_nvfp4_bf16_kernel<true><<<rows, 256, 0, stream>>>(
-      x, previous_gate, residual, style, packed, sfa, gate, layout, dim);
+      x, previous_gate, residual, style, packed, sfa, gate, layout, dim,
+      style_rows);
   check_adarms_bf16_launch("gate_res_adarms_nvfp4_native_bf16");
 #else
   (void)x; (void)previous_gate; (void)residual; (void)style;
-  (void)packed; (void)sfa; (void)gate; (void)rows; (void)dim; (void)stream;
+  (void)packed; (void)sfa; (void)gate; (void)rows; (void)dim;
+  (void)style_rows; (void)stream;
 #endif
 }
 

@@ -21,6 +21,7 @@
 #include "fused_fp4/dequantize_fp4_sfa.cuh"
 #include "fused_fp4/adarms_fp8_static_fp16.cuh"
 #include "fused_fp4/pi05_e0m3_act.cuh"
+#include "fused_fp4/pi05_bf16_fp4_producers.cuh"
 #include "fused_fp4/cosmos3_edge_fp4.cuh"
 #include "fused_fp4/silu_mul_two_fp4_to_fp4.cuh"
 #include "quantize/quantize_bf16_to_nvfp4_linear.cuh"
@@ -411,6 +412,197 @@ void silu_mul_two_mul_fp4_to_fp4(
 #endif
 }
 
+void geglu_two_mul_nvfp4_native(
+    torch::Tensor const& gate_packed,
+    torch::Tensor const& gate_sfa,
+    torch::Tensor const& up_packed,
+    torch::Tensor const& up_sfa,
+    torch::Tensor const& inv_s,
+    torch::Tensor& out_packed,
+    torch::Tensor& out_sfa) {
+  check_cuda_contiguous(inv_s, "inv_s");
+  TORCH_CHECK(inv_s.scalar_type() == torch::kFloat16,
+              "inv_s must have dtype torch.float16");
+  auto shape = check_two_fp4_inputs(
+      gate_packed, gate_sfa, up_packed, up_sfa, out_packed, out_sfa);
+  TORCH_CHECK(inv_s.sizes() == torch::IntArrayRef({shape.hidden}),
+              "inv_s must have shape (hidden,)");
+  check_same_device(gate_packed, inv_s, "gate_packed", "inv_s");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(gate_packed.device());
+  auto stream = at::cuda::getCurrentCUDAStream(gate_packed.get_device()).stream();
+  flash_rt::fused_fp4::silu_mul_two_mul_fp4_to_fp4_lut_native(
+      static_cast<const uint8_t*>(gate_packed.data_ptr()),
+      static_cast<const uint8_t*>(gate_sfa.data_ptr()),
+      static_cast<const uint8_t*>(up_packed.data_ptr()),
+      static_cast<const uint8_t*>(up_sfa.data_ptr()),
+      static_cast<const __half*>(inv_s.data_ptr()),
+      static_cast<uint8_t*>(out_packed.data_ptr()),
+      static_cast<uint8_t*>(out_sfa.data_ptr()),
+      checked_int(shape.rows, "rows"), checked_int(shape.hidden, "hidden"),
+      stream);
+#endif
+}
+
+void gelu_mul_nvfp4_bf16(
+    torch::Tensor const& merged,
+    c10::optional<torch::Tensor> const& inv_s,
+    torch::Tensor& packed,
+    torch::Tensor& sfa) {
+  check_bf16_matrix(merged, "merged");
+  TORCH_CHECK(merged.size(1) % 32 == 0,
+              "merged.shape[1] must be divisible by 32");
+  const int64_t rows = merged.size(0);
+  const int64_t hidden = merged.size(1) / 2;
+  const void* inv_s_ptr = nullptr;
+  if (inv_s.has_value()) {
+    check_cuda_contiguous(*inv_s, "inv_s");
+    TORCH_CHECK(inv_s->scalar_type() == torch::kBFloat16 &&
+                    inv_s->sizes() == torch::IntArrayRef({hidden}),
+                "inv_s must be BF16 with shape (hidden,)");
+    check_same_device(merged, *inv_s, "merged", "inv_s");
+    inv_s_ptr = inv_s->data_ptr();
+  }
+  check_packed_sfa(packed, sfa, merged, rows, hidden);
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(merged.device());
+  auto stream = at::cuda::getCurrentCUDAStream(merged.get_device()).stream();
+  const int rc = flash_rt::fused_fp4::gelu_mul_nvfp4_bf16(
+      static_cast<const __nv_bfloat16*>(merged.data_ptr()),
+      static_cast<const __nv_bfloat16*>(inv_s_ptr),
+      static_cast<uint8_t*>(packed.data_ptr()),
+      static_cast<uint8_t*>(sfa.data_ptr()), checked_int(rows, "rows"),
+      checked_int(hidden, "hidden"), stream);
+  TORCH_CHECK(rc == 0, "gelu_mul_nvfp4_bf16 failed with rc=", rc);
+#endif
+}
+
+void rms_norm_mul_nvfp4_bf16(
+    torch::Tensor const& x, torch::Tensor const& inv_s, double eps,
+    torch::Tensor& packed, torch::Tensor& sfa) {
+  check_bf16_matrix(x, "x");
+  check_cuda_contiguous(inv_s, "inv_s");
+  TORCH_CHECK(inv_s.scalar_type() == torch::kBFloat16 &&
+                  inv_s.sizes() == torch::IntArrayRef({x.size(1)}),
+              "inv_s must be BF16 with shape (dim,)");
+  check_same_device(x, inv_s, "x", "inv_s");
+  check_packed_sfa(packed, sfa, x, x.size(0), x.size(1));
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::fused_fp4::rms_norm_mul_nvfp4_bf16(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(inv_s.data_ptr()),
+      static_cast<uint8_t*>(packed.data_ptr()),
+      static_cast<uint8_t*>(sfa.data_ptr()), checked_int(x.size(0), "rows"),
+      checked_int(x.size(1), "dim"), static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0, "rms_norm_mul_nvfp4_bf16 failed with rc=", rc);
+#endif
+}
+
+void residual_add_rms_norm_nvfp4_bf16(
+    torch::Tensor& residual, torch::Tensor const& x,
+    c10::optional<torch::Tensor> const& inv_s, double eps,
+    torch::Tensor& packed, torch::Tensor& sfa) {
+  check_bf16_matrix(residual, "residual");
+  check_bf16_matrix(x, "x");
+  TORCH_CHECK(residual.sizes() == x.sizes(), "residual must match x shape");
+  const void* inv_s_ptr = nullptr;
+  if (inv_s.has_value()) {
+    check_cuda_contiguous(*inv_s, "inv_s");
+    TORCH_CHECK(inv_s->scalar_type() == torch::kBFloat16 &&
+                    inv_s->sizes() == torch::IntArrayRef({x.size(1)}),
+                "inv_s must be BF16 with shape (dim,)");
+    check_same_device(x, *inv_s, "x", "inv_s");
+    inv_s_ptr = inv_s->data_ptr();
+  }
+  check_same_device(residual, x, "residual", "x");
+  check_packed_sfa(packed, sfa, x, x.size(0), x.size(1));
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::fused_fp4::residual_add_rms_norm_nvfp4_bf16(
+      static_cast<__nv_bfloat16*>(residual.data_ptr()),
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(inv_s_ptr),
+      static_cast<uint8_t*>(packed.data_ptr()),
+      static_cast<uint8_t*>(sfa.data_ptr()), checked_int(x.size(0), "rows"),
+      checked_int(x.size(1), "dim"), static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0,
+              "residual_add_rms_norm_nvfp4_bf16 failed with rc=", rc);
+#endif
+}
+
+void layer_norm_fp8_bf16(
+    torch::Tensor const& x, torch::Tensor const& gamma,
+    torch::Tensor const& beta, double eps, torch::Tensor& out) {
+  check_bf16_matrix(x, "x");
+  check_cuda_contiguous(gamma, "gamma");
+  check_cuda_contiguous(beta, "beta");
+  check_cuda_contiguous(out, "out");
+  TORCH_CHECK(gamma.scalar_type() == torch::kBFloat16 &&
+                  beta.scalar_type() == torch::kBFloat16 &&
+                  gamma.sizes() == torch::IntArrayRef({x.size(1)}) &&
+                  beta.sizes() == gamma.sizes(),
+              "gamma and beta must be BF16 with shape (dim,)");
+  TORCH_CHECK(out.scalar_type() == c10::ScalarType::Float8_e4m3fn &&
+                  out.sizes() == x.sizes(),
+              "out must be float8_e4m3fn and match x shape");
+  check_same_device(x, gamma, "x", "gamma");
+  check_same_device(x, beta, "x", "beta");
+  check_same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::fused_fp4::layer_norm_fp8_vec_bf16(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(gamma.data_ptr()),
+      static_cast<const __nv_bfloat16*>(beta.data_ptr()), out.data_ptr(),
+      checked_int(x.size(0), "rows"), checked_int(x.size(1), "dim"),
+      static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0, "layer_norm_fp8_bf16 failed with rc=", rc);
+#endif
+}
+
+void layer_norm_nvfp4_bf16(
+    torch::Tensor const& x, torch::Tensor const& gamma,
+    torch::Tensor const& beta, c10::optional<torch::Tensor> const& inv_s,
+    double eps, torch::Tensor& packed, torch::Tensor& sfa) {
+  check_bf16_matrix(x, "x");
+  check_cuda_contiguous(gamma, "gamma");
+  check_cuda_contiguous(beta, "beta");
+  TORCH_CHECK(gamma.scalar_type() == torch::kBFloat16 &&
+                  beta.scalar_type() == torch::kBFloat16 &&
+                  gamma.sizes() == torch::IntArrayRef({x.size(1)}) &&
+                  beta.sizes() == gamma.sizes(),
+              "gamma and beta must be BF16 with shape (dim,)");
+  const void* inv_s_ptr = nullptr;
+  if (inv_s.has_value()) {
+    check_cuda_contiguous(*inv_s, "inv_s");
+    TORCH_CHECK(inv_s->scalar_type() == torch::kBFloat16 &&
+                    inv_s->sizes() == gamma.sizes(),
+                "inv_s must be BF16 with shape (dim,)");
+    check_same_device(x, *inv_s, "x", "inv_s");
+    inv_s_ptr = inv_s->data_ptr();
+  }
+  check_same_device(x, gamma, "x", "gamma");
+  check_same_device(x, beta, "x", "beta");
+  check_packed_sfa(packed, sfa, x, x.size(0), x.size(1));
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::fused_fp4::layer_norm_mul_nvfp4_vec_bf16(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(gamma.data_ptr()),
+      static_cast<const __nv_bfloat16*>(beta.data_ptr()),
+      static_cast<const __nv_bfloat16*>(inv_s_ptr),
+      static_cast<uint8_t*>(packed.data_ptr()),
+      static_cast<uint8_t*>(sfa.data_ptr()), checked_int(x.size(0), "rows"),
+      checked_int(x.size(1), "dim"), static_cast<float>(eps), stream);
+  TORCH_CHECK(rc == 0, "layer_norm_nvfp4_bf16 failed with rc=", rc);
+#endif
+}
+
 void adaptive_rms_norm_nvfp4_fp16(
     torch::Tensor const& x,
     torch::Tensor const& style,
@@ -498,8 +690,9 @@ void adaptive_rms_norm_nvfp4_bf16(
   const int64_t dim = x.size(1);
   TORCH_CHECK(dim == 1024,
               "adaptive_rms_norm_nvfp4_bf16 currently supports dim=1024");
-  TORCH_CHECK(style.sizes() == torch::IntArrayRef({rows, 3 * dim}),
-              "style must have shape (rows, 3 * dim)");
+  TORCH_CHECK(style.dim() == 2 && style.size(1) == 3 * dim &&
+                  (style.size(0) == 1 || style.size(0) == rows),
+              "style must have shape (1, 3 * dim) or (rows, 3 * dim)");
   TORCH_CHECK(gate.sizes() == x.sizes(), "gate must match x shape");
   check_packed_sfa(packed, sfa, x, rows, dim);
   check_same_device(x, style, "x", "style");
@@ -513,7 +706,8 @@ void adaptive_rms_norm_nvfp4_bf16(
       static_cast<uint8_t*>(packed.data_ptr()),
       static_cast<uint8_t*>(sfa.data_ptr()),
       static_cast<__nv_bfloat16*>(gate.data_ptr()),
-      checked_int(rows, "rows"), checked_int(dim, "dim"), stream);
+      checked_int(rows, "rows"), checked_int(dim, "dim"),
+      checked_int(style.size(0), "style_rows"), stream);
 #endif
 }
 
@@ -537,8 +731,9 @@ void gated_residual_adaptive_rms_norm_nvfp4_bf16(
   TORCH_CHECK(previous_gate.sizes() == x.sizes() &&
                   residual.sizes() == x.sizes() && gate.sizes() == x.sizes(),
               "previous_gate, residual, and gate must match x shape");
-  TORCH_CHECK(style.sizes() == torch::IntArrayRef({rows, 3 * dim}),
-              "style must have shape (rows, 3 * dim)");
+  TORCH_CHECK(style.dim() == 2 && style.size(1) == 3 * dim &&
+                  (style.size(0) == 1 || style.size(0) == rows),
+              "style must have shape (1, 3 * dim) or (rows, 3 * dim)");
   check_packed_sfa(packed, sfa, x, rows, dim);
   check_same_device(x, previous_gate, "x", "previous_gate");
   check_same_device(x, residual, "x", "residual");
@@ -555,7 +750,8 @@ void gated_residual_adaptive_rms_norm_nvfp4_bf16(
       static_cast<uint8_t*>(packed.data_ptr()),
       static_cast<uint8_t*>(sfa.data_ptr()),
       static_cast<__nv_bfloat16*>(gate.data_ptr()),
-      checked_int(rows, "rows"), checked_int(dim, "dim"), stream);
+      checked_int(rows, "rows"), checked_int(dim, "dim"),
+      checked_int(style.size(0), "style_rows"), stream);
 #endif
 }
 
@@ -1133,6 +1329,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("silu_mul_mul_fp4_sfa_v2_fp16(Tensor merged, Tensor inv_s, Tensor! packed, Tensor! sfa) -> ()");
   ops.def("silu_mul_two_fp4_to_fp4(Tensor gate_packed, Tensor gate_sfa, Tensor up_packed, Tensor up_sfa, Tensor! out_packed, Tensor! out_sfa) -> ()");
   ops.def("silu_mul_two_mul_fp4_to_fp4(Tensor gate_packed, Tensor gate_sfa, Tensor up_packed, Tensor up_sfa, Tensor inv_s, Tensor! out_packed, Tensor! out_sfa) -> ()");
+  ops.def("geglu_two_mul_nvfp4_native(Tensor gate_packed, Tensor gate_sfa, Tensor up_packed, Tensor up_sfa, Tensor inv_s, Tensor! out_packed, Tensor! out_sfa) -> ()");
+  ops.def("gelu_mul_nvfp4_bf16(Tensor merged, Tensor? inv_s, Tensor! packed, Tensor! sfa) -> ()");
+  ops.def("rms_norm_mul_nvfp4_bf16(Tensor x, Tensor inv_s, float eps, Tensor! packed, Tensor! sfa) -> ()");
+  ops.def("residual_add_rms_norm_nvfp4_bf16(Tensor! residual, Tensor x, Tensor? inv_s, float eps, Tensor! packed, Tensor! sfa) -> ()");
+  ops.def("layer_norm_fp8_bf16(Tensor x, Tensor gamma, Tensor beta, float eps, Tensor! out) -> ()");
+  ops.def("layer_norm_nvfp4_bf16(Tensor x, Tensor gamma, Tensor beta, Tensor? inv_s, float eps, Tensor! packed, Tensor! sfa) -> ()");
   ops.def("adaptive_rms_norm_nvfp4_fp16(Tensor x, Tensor style, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
   ops.def("gated_residual_adaptive_rms_norm_nvfp4_fp16(Tensor x, Tensor previous_gate, Tensor! residual, Tensor style, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
   ops.def("adaptive_rms_norm_nvfp4_bf16(Tensor x, Tensor style, Tensor! packed, Tensor! sfa, Tensor! gate) -> ()");
@@ -1163,6 +1365,12 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("silu_mul_mul_fp4_sfa_v2_fp16", torch::kCUDA, &silu_mul_mul_fp4_sfa_v2_fp16);
   ops.impl("silu_mul_two_fp4_to_fp4", torch::kCUDA, &silu_mul_two_fp4_to_fp4);
   ops.impl("silu_mul_two_mul_fp4_to_fp4", torch::kCUDA, &silu_mul_two_mul_fp4_to_fp4);
+  ops.impl("geglu_two_mul_nvfp4_native", torch::kCUDA, &geglu_two_mul_nvfp4_native);
+  ops.impl("gelu_mul_nvfp4_bf16", torch::kCUDA, &gelu_mul_nvfp4_bf16);
+  ops.impl("rms_norm_mul_nvfp4_bf16", torch::kCUDA, &rms_norm_mul_nvfp4_bf16);
+  ops.impl("residual_add_rms_norm_nvfp4_bf16", torch::kCUDA, &residual_add_rms_norm_nvfp4_bf16);
+  ops.impl("layer_norm_fp8_bf16", torch::kCUDA, &layer_norm_fp8_bf16);
+  ops.impl("layer_norm_nvfp4_bf16", torch::kCUDA, &layer_norm_nvfp4_bf16);
   ops.impl("adaptive_rms_norm_nvfp4_fp16", torch::kCUDA, &adaptive_rms_norm_nvfp4_fp16);
   ops.impl("gated_residual_adaptive_rms_norm_nvfp4_fp16", torch::kCUDA, &gated_residual_adaptive_rms_norm_nvfp4_fp16);
   ops.impl("adaptive_rms_norm_nvfp4_bf16", torch::kCUDA, &adaptive_rms_norm_nvfp4_bf16);

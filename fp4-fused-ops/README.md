@@ -37,6 +37,12 @@ chains.
 - `silu_mul_mul_fp4_sfa_v2_fp16(merged, inv_s, packed=None, sfa=None)`
 - `silu_mul_two_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, out_packed=None, out_sfa=None)`
 - `silu_mul_two_mul_fp4_to_fp4(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed=None, out_sfa=None)`
+- `geglu_two_mul_nvfp4_native(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed=None, out_sfa=None)`
+- `gelu_mul_nvfp4_bf16(merged, inv_s=None, packed=None, sfa=None)`
+- `rms_norm_mul_nvfp4_bf16(x, inv_s, eps=1e-6, packed=None, sfa=None)`
+- `residual_add_rms_norm_nvfp4_bf16(residual, x, inv_s=None, eps=1e-6, packed=None, sfa=None)`
+- `layer_norm_fp8_bf16(x, gamma, beta, eps=1e-5, out=None)`
+- `layer_norm_nvfp4_bf16(x, gamma, beta, inv_s=None, eps=1e-5, packed=None, sfa=None)`
 - `adaptive_rms_norm_nvfp4_fp16(x, style, packed=None, sfa=None, gate=None)`
 - `gated_residual_adaptive_rms_norm_nvfp4_fp16(x, previous_gate, residual, style, ...)`
 - `adaptive_rms_norm_nvfp4_bf16(x, style, packed=None, sfa=None, gate=None)`
@@ -71,9 +77,10 @@ Tensor contract:
   shapes should use `residual_add_rms_norm_fp4_sfa_v2_fp16`.
 - All dimensions must be divisible by 16. Unsupported shapes raise instead of
   silently taking a slow or partial path.
-- Adaptive RMSNorm producers require `dim=1024`; `style` is `(rows, 3 * dim)`
-  containing scale, shift, and gate. FP16 and BF16 input/gate contracts are
-  separate additive entry points; neither silently casts.
+- Adaptive RMSNorm producers require `dim=1024`; `style` contains scale,
+  shift, and gate. The BF16 native entries accept `(1, 3 * dim)` for PI0.5
+  step-style broadcast or `(rows, 3 * dim)`; the established FP16 entries keep
+  their exact `(rows, 3 * dim)` contract. Neither path silently casts.
 - Automatically allocated SFA buffers are zero-initialized because CUTLASS
   tile padding is intentionally not written by every producer.
 - Linear NVFP4 uses E2M1 values and linear UE4M3 scale bytes per 16 channels.
@@ -101,6 +108,15 @@ dequant = ops.dequantize_fp4_sfa_fp16(packed, sfa)
 video = torch.randn((1, 128, 5, 9, 11), device="cuda", dtype=torch.bfloat16)
 gamma = torch.ones((128,), device="cuda", dtype=torch.bfloat16)
 packed_video, linear_scales = ops.rms_silu_nvfp4_ndhwc_bf16(video, gamma)
+
+# PI0.5 BF16 decoder producer with one style row broadcast across tokens.
+x = torch.randn((10, 1024), device="cuda", dtype=torch.bfloat16)
+style = torch.randn((1, 3072), device="cuda", dtype=torch.bfloat16)
+packed, sfa, gate = ops.adaptive_rms_norm_nvfp4_bf16(x, style)
+
+# BF16 GeGLU output remains on the packed FP4 wire for the down projection.
+merged = torch.randn((10, 8192), device="cuda", dtype=torch.bfloat16)
+hidden_packed, hidden_sfa = ops.gelu_mul_nvfp4_bf16(merged)
 ```
 
 ## Validation
@@ -126,3 +142,11 @@ Validation checks:
 - v2 fast paths are checked against v1 where the v1 kernel is valid;
 - unsupported shapes are rejected explicitly.
 - new NCDHW/cache outputs and linear NVFP4 bytes match raw launchers bitwise.
+- BF16 style-row broadcast is byte-identical to explicitly expanded style;
+- BF16 LayerNorm/RMSNorm/GeGLU producer outputs are checked with max, mean,
+  p99 and cosine metrics against staged BF16 math;
+- `layer_norm_fp8_bf16` is the intentional exception: as a fused producer it
+  quantizes the FP32 normalization result directly, matching the native FP16
+  vector kernel and avoiding an unobservable BF16 materialization;
+- the native split-GU LUT combiner and gated-residual BF16 producer pass
+  deterministic CUDA Graph replay checks on SM110.

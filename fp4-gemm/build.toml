@@ -40,6 +40,8 @@ src = [
   "csrc/gemm/fp4/cutlass_fp4_gemm.cu",
   "csrc/gemm/fp4/cutlass_fp4_gemm.cuh",
   "csrc/gemm/fp4/cutlass_fp4_gemm_variants.cu",
+  "csrc/gemm/fp4/cutlass_fp4_gemm_bf16_variants_sm100.cu",
+  "csrc/gemm/fp4/cutlass_fp4_gemm_bf16_variants_sm100.cuh",
   "csrc/gemm/fp4/cutlass_fp4_gemm_fp4out.cu",
   "csrc/gemm/fp4/cutlass_fp4_gemm_fp4out.cuh",
   "csrc/gemm/fp4/cutlass_fp4_gemm_geglu_il_sm100.cu",

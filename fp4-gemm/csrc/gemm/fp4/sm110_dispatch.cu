@@ -3,6 +3,8 @@
 #include "gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cuh"
 #include "gemm/fp4/cutlass_fp4_gemm_bias_bf16_sm100.cuh"
 #include "gemm/fp4/cutlass_fp4_gemm.cuh"
+#include "gemm/fp4/cutlass_fp4_gemm_bf16_variants_sm100.cuh"
+#include "gemm/fp4/cutlass_fp4_gemm_fp4out.cuh"
 #include "gemm/fp4/cutlass_fp4_gemm_geglu_il_sm100.cuh"
 #include "gemm/fp4/cutlass_fp4_gemm_siglip_ffn_sm100.cuh"
 #include "gemm/fp4/cutlass_fp4_gemm_e0m3w_sm100.cuh"
@@ -60,6 +62,9 @@ struct Sm110DispatchRegistration {
     sm110_quantize_bf16_dispatch =
         &fp4::quantize_fp4_dynamic_sfa_bf16_vec;
     sm110_gemm_fp16_dispatch = &fp4::cutlass_fp4_gemm_variant;
+    sm110_gemm_bf16_variant_dispatch =
+        &fp4::cutlass_fp4_gemm_bf16_variant;
+    sm110_gemm_fp4out_dispatch = &fp4::cutlass_fp4_gemm_fp4out;
     sm110_gemm_geglu_fp4_dispatch = &launch_geglu_fp4_sm110;
     sm110_gemm_bias_gelu_fp4_fp16_dispatch =
         &fp4::cutlass_fp4_gemm_bias_gelu_fp4out;

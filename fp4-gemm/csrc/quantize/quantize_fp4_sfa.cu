@@ -33,6 +33,12 @@ __device__ __forceinline__ uint8_t fp32_to_e2m1_sfa(float x) {
     return sign | mant;
 }
 
+__device__ __forceinline__ float e2m1_to_fp32_sfa(uint8_t value) {
+    static constexpr float table[8] = {0.f, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f};
+    const float magnitude = table[value & 0x7u];
+    return (value & 0x8u) ? -magnitude : magnitude;
+}
+
 __device__ __forceinline__ __nv_fp8_e4m3 quantize_ue4m3_sfa(float x) {
     float v = fmaxf(x, 0.f);
     return __nv_fp8_e4m3(v);
@@ -98,6 +104,61 @@ __global__ void kernel_quantize_fp4_sfa(
   }
 }
 
+
+__global__ void kernel_quantize_fp4_sfa_mse_fp16(
+    const __half* __restrict__ src,
+    uint8_t* __restrict__ dst_packed,
+    uint8_t* __restrict__ dst_sfa,
+    int N, int D) {
+  const int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int row = blockIdx.y;
+  const int n_blocks = D / 16;
+  if (row >= N || block_idx >= n_blocks) return;
+
+  const int base = row * D + block_idx * 16;
+  float values[16];
+  float amax = 0.f;
+  #pragma unroll
+  for (int i = 0; i < 16; ++i) {
+    values[i] = __half2float(src[base + i]);
+    amax = fmaxf(amax, fabsf(values[i]));
+  }
+
+  constexpr float multipliers[9] = {
+      .375f, .5f, .625f, .75f, .875f, 1.f, 1.125f, 1.25f, 1.5f};
+  float best_error = INFINITY;
+  __nv_fp8_e4m3 best_scale = __nv_fp8_e4m3(1e-12f);
+  #pragma unroll
+  for (int candidate = 0; candidate < 9; ++candidate) {
+    const __nv_fp8_e4m3 scale_q = quantize_ue4m3_sfa(
+        fmaxf(amax * (1.f / 6.f) * multipliers[candidate], 1e-12f));
+    const float scale = dequantize_ue4m3_sfa(scale_q);
+    const float inverse = 1.f / scale;
+    float error = 0.f;
+    #pragma unroll
+    for (int i = 0; i < 16; ++i) {
+      const uint8_t q = fp32_to_e2m1_sfa(values[i] * inverse);
+      const float delta = e2m1_to_fp32_sfa(q) * scale - values[i];
+      error += delta * delta;
+    }
+    if (error < best_error) {
+      best_error = error;
+      best_scale = scale_q;
+    }
+  }
+
+  const float inverse = 1.f / dequantize_ue4m3_sfa(best_scale);
+  dst_sfa[sfa_offset_128x64(row, block_idx * 16, D)] =
+      *reinterpret_cast<uint8_t*>(&best_scale);
+  const int out_base = row * (D / 2) + block_idx * 8;
+  #pragma unroll
+  for (int pair = 0; pair < 8; ++pair) {
+    const uint8_t lo = fp32_to_e2m1_sfa(values[2 * pair] * inverse);
+    const uint8_t hi = fp32_to_e2m1_sfa(values[2 * pair + 1] * inverse);
+    dst_packed[out_base + pair] = static_cast<uint8_t>(lo | (hi << 4));
+  }
+}
+
 int quantize_fp4_dynamic_sfa_fp16(
     const void* src_fp16, void* dst_packed, void* dst_sfa,
     int N, int D, bool is_sfb, cudaStream_t stream) {
@@ -145,6 +206,21 @@ int quantize_fp4_dynamic_sfa_bf16(
   }
   cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);
+}
+
+int quantize_fp4_dynamic_sfa_mse_fp16(
+    const void* src_fp16, void* dst_packed, void* dst_sfa,
+    int N, int D, bool is_sfb, cudaStream_t stream) {
+  (void)is_sfb;  // SFA/SFB use the same integer mapping for this 2-D contract.
+  if (D % 16 != 0) return -1;
+  constexpr int threads = 128;
+  dim3 grid((D / 16 + threads - 1) / threads, N);
+  kernel_quantize_fp4_sfa_mse_fp16<<<grid, threads, 0, stream>>>(
+      reinterpret_cast<const __half*>(src_fp16),
+      reinterpret_cast<uint8_t*>(dst_packed),
+      reinterpret_cast<uint8_t*>(dst_sfa), N, D);
+  const cudaError_t error = cudaGetLastError();
+  return error == cudaSuccess ? 0 : -static_cast<int>(error);
 }
 
 }  // namespace fp4

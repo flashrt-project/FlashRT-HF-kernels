@@ -42,6 +42,16 @@ def _linear_fp16_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, var
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_variant_bf16"))
+def _linear_variant_bf16_fake(a, b, sfa, sfb, out, alpha: float = 1.0, variant: int = 7) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_nvfp4"))
+def _linear_fp4out_fake(a, b, sfa, sfb, out_packed, out_sfa) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_geglu_nvfp4_fp16"))
 def _geglu_fp4_fake(a, b, sfa, sfb, scratch, out_packed, out_sfa, skinny: bool = False) -> None:
     return None
@@ -91,6 +101,11 @@ def _bias_residual_fake(a, b, sfa, sfb, bias, residual, out) -> None:
 
 @torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_fp16"))
 def _quant_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb: bool = False) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_mse_fp16"))
+def _quant_mse_fake(x, packed, sfa, is_sfb: bool = False) -> None:
     return None
 
 
@@ -155,6 +170,19 @@ def quantize_fp4_sfa_fp16(
     if packed is None or sfa is None:
         packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
     ops.quantize_fp4_sfa_fp16(x, packed, sfa, bool(is_sfb))
+    return packed, sfa
+
+
+def quantize_fp4_sfa_mse_fp16(
+    x: torch.Tensor,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    is_sfb: bool = False,
+):
+    """Pack FP16 weights using per-block reconstruction-MSE scale search."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.quantize_fp4_sfa_mse_fp16(x, packed, sfa, bool(is_sfb))
     return packed, sfa
 
 
@@ -274,6 +302,52 @@ def nvfp4_gemm_fp16(
         a_packed, b_packed, sfa, sfb, out, float(alpha), int(variant)
     )
     return out
+
+
+def nvfp4_gemm_variant_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+    variant: int = 7,
+) -> torch.Tensor:
+    """SM110 native NVFP4 GEMM with BF16 output.
+
+    ``variant=7`` serves large-M encoder/SigLIP shapes; ``variant=10`` is
+    the narrow-N PI0.5 decoder tile. The indices match FlashRT native.
+    """
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.bfloat16,
+        )
+    ops.nvfp4_gemm_variant_bf16(
+        a_packed, b_packed, sfa, sfb, out, float(alpha), int(variant)
+    )
+    return out
+
+
+def nvfp4_gemm_nvfp4(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    out_packed: torch.Tensor | None = None,
+    out_sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """SM110 NVFP4 GEMM with an NVFP4 output and CUTLASS SFA layout."""
+    if out_packed is None or out_sfa is None:
+        out_packed, out_sfa = _alloc_fp4(
+            a_packed.shape[0], b_packed.shape[0], a_packed.device
+        )
+    ops.nvfp4_gemm_nvfp4(
+        a_packed, b_packed, sfa, sfb, out_packed, out_sfa
+    )
+    return out_packed, out_sfa
 
 
 def nvfp4_gemm_geglu_nvfp4_fp16(
@@ -533,6 +607,8 @@ __all__ = [
     "fp4_w4a4_gemv_warpsplit_bf16",
     "nvfp4_gemm_bf16",
     "nvfp4_gemm_fp16",
+    "nvfp4_gemm_variant_bf16",
+    "nvfp4_gemm_nvfp4",
     "nvfp4_gemm_geglu_nvfp4_fp16",
     "nvfp4_gemm_bias_gelu_nvfp4_fp16",
     "nvfp4_gemm_bias_residual_fp16",
@@ -545,6 +621,7 @@ __all__ = [
     "nvfp4_gemm_streamk_bf16",
     "nvfp4_gemm_streamk_bias_bf16",
     "quantize_fp4_sfa_fp16",
+    "quantize_fp4_sfa_mse_fp16",
     "quantize_e0m3_sfa_fp16",
     "quantize_fp4_sfa_bf16",
     "sfa_size_bytes",

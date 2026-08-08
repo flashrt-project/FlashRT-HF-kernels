@@ -12,9 +12,12 @@ paths.
 - `sfa_size_bytes(rows, dim)`
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
+- `quantize_fp4_sfa_mse_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_e0m3_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
 - `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
+- `nvfp4_gemm_variant_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, variant=7, out=None)`
+- `nvfp4_gemm_nvfp4(a_packed, b_packed, sfa, sfb, out_packed=None, out_sfa=None)`
 - `nvfp4_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
 - `nvfp4_gemm_geglu_nvfp4_fp16(a_packed, b_interleaved_packed, sfa, sfb, skinny=False, ...)`
 - `nvfp4_gemm_bias_gelu_nvfp4_fp16(a_packed, b_packed, sfa, sfb, bias, ...)`
@@ -70,6 +73,21 @@ TMA contract; direct `4304` GEMM calls are unsupported.
 E0M3 weight GEMM and the ReLU-squared FP4-output epilogue are SM110-only.
 `a_format=1` consumes E2M1 activations; `a_format=0` consumes E0M3 activations.
 
+The additive PI0.5 SM110 BF16 schedule API exposes the production tile IDs
+directly:
+
+- `variant=10`: `128x64x256`, tuned for decoder `M=10..64` and narrow `N`;
+- `variant=7`: `128x128x256`, tuned for encoder/SigLIP `M=512..970`;
+- other IDs are rejected by `nvfp4_gemm_variant_bf16` instead of silently
+  selecting an unqualified tile.
+
+`nvfp4_gemm_nvfp4` keeps the GEMM result in packed E2M1 plus SFA form for a
+following low-bit combiner/GEMM. Call it once eagerly before CUDA Graph capture
+to initialize its immutable scale constant; subsequent launches allocate no
+workspace and are graph safe. `nvfp4_gemm_geglu_nvfp4_fp16(..., skinny=True)`
+is the public Tensor API for the native `cutlass_fp4_gemm_geglu_il_hw_v10`
+interleaved-weight epilogue.
+
 ## Minimal Usage
 
 ```python
@@ -85,6 +103,16 @@ a_packed, sfa = ops.quantize_fp4_sfa_fp16(x, is_sfb=False)
 b_packed, sfb = ops.quantize_fp4_sfa_fp16(w, is_sfb=True)
 
 y = ops.nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0)
+
+# PI0.5 Thor decoder schedule, BF16 output.
+y_decoder = ops.nvfp4_gemm_variant_bf16(
+    a_packed, b_packed, sfa, sfb, variant=10
+)
+
+# Split-GU path: preserve packed FP4 output for the next fused consumer.
+out_packed, out_sfa = ops.nvfp4_gemm_nvfp4(
+    a_packed, b_packed, sfa, sfb
+)
 ```
 
 For BF16 model activations, use the direct producer so the hot path does not
@@ -98,6 +126,13 @@ a_packed, sfa = ops.quantize_fp4_sfa_bf16(x_bf16)
 The BF16 entry writes the same E2M1 bytes and CUTLASS SFA/SFB layout as
 `quantize_fp4_sfa_fp16(x_bf16.to(torch.float16))` for finite FP16-range
 inputs. It is an additive API; the existing FP16 producer remains unchanged.
+On SM110 this entry dispatches the vectorized 16-element-block implementation
+(two 16-byte BF16 loads and one 8-byte packed store), not the scalar fallback.
+
+`quantize_fp4_sfa_mse_fp16` is intended for offline/bind-time weight packing.
+It searches a compact per-block scale set and is release-gated to produce no
+higher reconstruction MSE than the default RTN packer. It is not a runtime
+activation hot-path operation.
 
 The quantize/dequantize helpers are included for examples and validation. A
 production runtime should keep weights prepacked and should avoid quantizing in
@@ -130,6 +165,11 @@ low-bit values.
 The producer gate also checks the BF16 direct entry byte-for-byte against the
 established FP16 compatibility chain at decode widths 5120, 6144 and 17408,
 plus multi-row activation and SFB layouts.
+
+The SM110 PI0.5 gate additionally covers all decoder v10, encoder/SigLIP v7,
+FP4-output, MSE-packing and CUDA Graph replay paths. Performance is compared
+against the matching FlashRT native v7/v10/FP4-output kernels on the same Thor,
+not only against PyTorch eager.
 
 Release artifacts cover the standard x86 matrix (Torch 2.11/2.12/2.13 over
 the supported CUDA 12.8/13.x variants) and native Thor aarch64 builds for

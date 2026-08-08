@@ -89,3 +89,31 @@ The FP4 quantizer Tensor wrapper/raw registered-op measurement was
 allocation and dispatch. With caller-owned buffers under CUDA Graph, the
 measurement was `3.2988/3.3003 us` (`0.9995x`), which is the production GROOT
 hot-path contract.
+
+## PI0.5 Thor Batch 3 BF16 schedules
+
+Source release candidate on NVIDIA Jetson AGX Thor, PyTorch `2.13.0+cu130`,
+CUDA 13.0. The package BF16 Tensor API is compared with the corresponding
+FlashRT native FP16 v7/v10 or FP4-output launcher using preallocated buffers,
+CUDA Graph replay, A-B-B-A ordering, and the minimum of repeated runs. This is
+a schedule/parity gate across two input dtypes, not a claim that BF16 and FP16
+have identical arithmetic contracts.
+
+| Shape/family | Tile | Hub us | Native us | Hub/native |
+| --- | ---: | ---: | ---: | ---: |
+| decoder QKV `(10,2560,1024)` | v10 | 10.286 | 10.279 | 1.001x |
+| decoder O `(10,1024,2048)` | v10 | 10.222 | 9.907 | 1.032x |
+| decoder gate/up `(10,8192,1024)` | v10 | 20.515 | 20.516 | 1.000x |
+| decoder down `(10,1024,4096)` | v10 | 11.333 | 11.308 | 1.002x |
+| encoder gate/up `(576,16384,2048)` | v7 | 283.417 | 276.545 | 1.025x |
+| encoder gate/up `(970,16384,2048)` | v7 | 376.212 | 373.363 | 1.008x |
+| encoder down `(576,2048,16384)` | v7 | 170.183 | 167.915 | 1.014x |
+| SigLIP `(512,4304,1152)` | v7 | 26.785 | 30.475 | 0.879x |
+| SigLIP `(768,4304,1152)` | v7 | 34.984 | 34.996 | 1.000x |
+| decoder O FP4-output `(10,1024,2048)` | native | 10.244 | 10.262 | 0.998x |
+
+The strict source gate passed `67/67`. All nine BF16-output GEMM shapes were
+exact against GEMM over the same dequantized inputs. FP4-output reached cosine
+`0.995382`; the bind-time MSE packer reduced reconstruction MSE from
+`0.000570887` to `0.000449985`. BF16 v7/v10 and FP4-output CUDA Graph replay
+were bit-identical.

@@ -80,3 +80,29 @@ it is a performance-parity gate, not an eager speedup claim.
 The corresponding Thor source gate passed `66/66`. BF16 residual and gate
 outputs are exact, rows=10 CUDA Graph replay is bit-identical, and the worst
 dequantized NVFP4 cosine over rows `1/10/51/105` is `0.995462`.
+
+## PI0.5 Thor Batch 3 BF16 producers
+
+Source release candidate on NVIDIA Jetson AGX Thor, PyTorch `2.13.0+cu130`,
+CUDA 13.0. Timings use caller-owned outputs, CUDA Graph replay, A-B-B-A
+ordering, and repeated minimums. Each BF16 Hub producer is compared with the
+matching FlashRT native FP16 producer; the LUT combiner comparison invokes the
+same native implementation through both bindings.
+
+| Workload | Hub BF16 us | Native FP16 us | Hub/native |
+| --- | ---: | ---: | ---: |
+| GeGLU -> FP4, rows=10, H=4096 | 5.380 | 7.300 | 0.737x |
+| RMSNorm x scale -> FP4, rows=576, D=2048 | 23.099 | 30.726 | 0.752x |
+| RMSNorm x scale -> FP4, rows=970, D=2048 | 38.593 | 59.251 | 0.651x |
+| LayerNorm -> FP4, rows=512, D=1152 | 26.393 | 27.564 | 0.958x |
+| LayerNorm -> FP8, rows=512, D=1152 | 11.714 | 13.414 | 0.873x |
+| LayerNorm -> FP4, rows=768, D=1152 | 34.376 | 33.494 | 1.026x |
+| LayerNorm -> FP8, rows=768, D=1152 | 19.214 | 19.190 | 1.001x |
+| native split-GU LUT combiner, rows=10, H=4096 | 7.333 | 7.429 | 0.987x |
+
+The final strict source gate passed `89/89` without tolerance relaxation. It
+includes one-row style broadcast byte parity, in-place residual equality,
+BF16 LayerNorm/RMSNorm/GeGLU max/mean/p99/cosine checks, unsupported-shape
+rejection, and deterministic CUDA Graph replay. The native LUT combiner's
+dequantized result reached cosine `0.995910` against the mathematical
+reference.

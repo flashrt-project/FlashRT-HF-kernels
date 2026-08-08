@@ -22,6 +22,8 @@
 #include "cutlass/detail/sm100_blockscaled_layout.hpp"
 #include "cute/tensor.hpp"
 
+#include <mutex>
+
 namespace flash_rt {
 namespace fp4 {
 namespace fp4out {
@@ -137,11 +139,25 @@ int cutlass_fp4_gemm_fp4out(
   };
   // BlockScaleFactor needs a non-null norm_constant_ptr (kernel reads it
   // unconditionally). Allocate a single fp32 = 1.0 once on device.
+  static std::mutex norm_mutex;
   static float* d_norm = nullptr;
   if (!d_norm) {
-    cudaMalloc(&d_norm, sizeof(float));
-    float h = 1.0f;
-    cudaMemcpyAsync(d_norm, &h, sizeof(float), cudaMemcpyHostToDevice, stream);
+    cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+    if (cudaStreamIsCapturing(stream, &capture_status) != cudaSuccess ||
+        capture_status != cudaStreamCaptureStatusNone) {
+      // An eager warmup initializes the immutable scalar before capture.
+      return -4;
+    }
+    std::lock_guard<std::mutex> lock(norm_mutex);
+    if (!d_norm) {
+      if (cudaMalloc(&d_norm, sizeof(float)) != cudaSuccess) return -5;
+      const float h = 1.0f;
+      if (cudaMemcpyAsync(
+              d_norm, &h, sizeof(float), cudaMemcpyHostToDevice, stream) !=
+          cudaSuccess) {
+        return -6;
+      }
+    }
   }
   args.epilogue.thread.block_scale_factor_ptr = reinterpret_cast<ElementSFD*>(D_SFD);
   args.epilogue.thread.norm_constant_ptr      = d_norm;
@@ -150,15 +166,14 @@ int cutlass_fp4_gemm_fp4out(
   auto st = gemm.can_implement(args);
   if (st != cutlass::Status::kSuccess) return static_cast<int>(st) | 0x10000;
   size_t ws_sz = Gemm::get_workspace_size(args);
-  void* ws = nullptr;
-  if (ws_sz > 0 && cudaMalloc(&ws, ws_sz) != cudaSuccess) return -1;
-  st = gemm.initialize(args, ws, stream);
+  // The production tile is workspace-free. Refuse an unexpected CUTLASS
+  // configuration rather than allocating in a CUDA Graph hot path.
+  if (ws_sz != 0) return -1;
+  st = gemm.initialize(args, nullptr, stream);
   if (st != cutlass::Status::kSuccess) {
-    if (ws) cudaFree(ws);
     return static_cast<int>(st) | 0x20000;
   }
   st = gemm.run(stream);
-  if (ws) cudaFree(ws);
   return (st == cutlass::Status::kSuccess) ? 0 : (static_cast<int>(st) | 0x30000);
 }
 
