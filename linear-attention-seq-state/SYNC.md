@@ -2,7 +2,9 @@
 
 - Package: `linear-attention-seq-state` (Gated-delta recurrent sequence-state kernels).
 - Upstream FlashRT source: `../official/FlashRT`
-- Upstream revision: `pending confirmation (upstream FlashRT revision not available in this checkout)`
+- Upstream revision: pending confirmation; packaged source is maintained in the
+  flashrt-project FlashRT-HF-kernels repository
+  (https://github.com/flashrt-project/FlashRT-HF-kernels).
 
 Copied source files:
 
