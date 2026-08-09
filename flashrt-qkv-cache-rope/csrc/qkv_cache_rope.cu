@@ -18,6 +18,10 @@ constexpr int DECODE_HALF = DECODE_HEAD_DIM / 2;
 constexpr int DECODE_THREADS = DECODE_HEAD_DIM;
 constexpr int DECODE_WARPS = DECODE_THREADS / 32;
 
+inline bool is_aligned_16(const void* ptr) {
+  return (reinterpret_cast<std::uintptr_t>(ptr) & 15u) == 0;
+}
+
 __device__ __forceinline__ float block_sum_4warp(float v, float* smem4) {
 #pragma unroll
   for (int off = 16; off > 0; off >>= 1) {
@@ -416,6 +420,191 @@ __global__ void qkv_split_rope_kvcache_bf16_kernel(
     const long long cache_idx =
         ((long long)b * max_S + cache_offset + s) * kv_dim + v_col;
     v_cache[cache_idx] = packed_qkv[idx];
+  }
+}
+
+__device__ __forceinline__ int4 rope_rotate4_bf16(int4 x_raw, int4 cs_raw) {
+  const __nv_bfloat162* x = reinterpret_cast<const __nv_bfloat162*>(&x_raw);
+  const __nv_bfloat162* cs = reinterpret_cast<const __nv_bfloat162*>(&cs_raw);
+  int4 out_raw;
+  __nv_bfloat162* out = reinterpret_cast<__nv_bfloat162*>(&out_raw);
+#pragma unroll
+  for (int i = 0; i < 4; ++i) {
+    const float x0 = __bfloat162float(x[i].x);
+    const float x1 = __bfloat162float(x[i].y);
+    const float c = __bfloat162float(cs[i].x);
+    const float s = __bfloat162float(cs[i].y);
+    out[i] = __floats2bfloat162_rn(x0 * c - x1 * s, x1 * c + x0 * s);
+  }
+  return out_raw;
+}
+
+// 16-byte path used by PI0.5/GROOT aligned GQA shapes. One thread moves four
+// interleaved RoPE pairs; the scalar kernel remains the fallback.
+__global__ void qkv_split_rope_kvcache_bf16_vec_kernel(
+    const int4* __restrict__ packed_qkv,
+    const int4* __restrict__ rope,
+    int4* __restrict__ q_out,
+    int4* __restrict__ k_cache,
+    int4* __restrict__ v_cache,
+    int B,
+    int S,
+    int max_S,
+    int q_dim8,
+    int kv_dim8,
+    int D_h8,
+    int qkv_stride8,
+    int cache_offset) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total = B * S * qkv_stride8;
+  if (idx >= total) return;
+
+  const int c8 = idx % qkv_stride8;
+  const int row = idx / qkv_stride8;
+  const int s = row % S;
+  const int b = row / S;
+  if (c8 < q_dim8) {
+    const int4 x = packed_qkv[idx];
+    const int4 cs = rope[s * D_h8 + c8 % D_h8];
+    q_out[(b * S + s) * q_dim8 + c8] = rope_rotate4_bf16(x, cs);
+  } else if (c8 < q_dim8 + kv_dim8) {
+    const int k8 = c8 - q_dim8;
+    const int4 x = packed_qkv[idx];
+    const int4 cs = rope[s * D_h8 + k8 % D_h8];
+    k_cache[((b * max_S + cache_offset + s) * kv_dim8) + k8] =
+        rope_rotate4_bf16(x, cs);
+  } else {
+    const int v8 = c8 - q_dim8 - kv_dim8;
+    v_cache[((b * max_S + cache_offset + s) * kv_dim8) + v8] =
+        packed_qkv[idx];
+  }
+}
+
+__global__ void qkv_split_rope_kvcache_fp16_kernel(
+    const __half* __restrict__ packed_qkv,
+    const __half* __restrict__ rope,
+    __half* __restrict__ q_out,
+    __half* __restrict__ k_cache,
+    __half* __restrict__ v_cache,
+    const int* __restrict__ device_position,
+    int B,
+    int S,
+    int max_S,
+    int q_heads,
+    int kv_heads,
+    int D_h,
+    int cache_offset) {
+  const int q_dim = q_heads * D_h;
+  const int kv_dim = kv_heads * D_h;
+  const int qkv_stride = q_dim + 2 * kv_dim;
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total = B * S * qkv_stride;
+  if (idx >= total) return;
+
+  const int c = idx % qkv_stride;
+  const int row = idx / qkv_stride;
+  const int s = row % S;
+  const int b = row / S;
+  const int write_pos = cache_offset +
+      (device_position == nullptr ? s : device_position[0] + s);
+
+  if (c < q_dim) {
+    const int d_in_head = c % D_h;
+    const int pair = d_in_head >> 1;
+    const int is_odd = d_in_head & 1;
+    const int head = c / D_h;
+    const long long pair_base =
+        ((long long)b * S + s) * qkv_stride + head * D_h + pair * 2;
+    const float x0 = __half2float(packed_qkv[pair_base]);
+    const float x1 = __half2float(packed_qkv[pair_base + 1]);
+    const long long rope_base = (long long)s * D_h + pair * 2;
+    const float cos_v = __half2float(rope[rope_base]);
+    const float sin_v = __half2float(rope[rope_base + 1]);
+    const long long out_idx = ((long long)b * S + s) * q_dim + c;
+    q_out[out_idx] = is_odd == 0
+        ? __float2half_rn(x0 * cos_v - x1 * sin_v)
+        : __float2half_rn(x1 * cos_v + x0 * sin_v);
+  } else if (c < q_dim + kv_dim) {
+    const int k_col = c - q_dim;
+    const int d_in_head = k_col % D_h;
+    const int pair = d_in_head >> 1;
+    const int is_odd = d_in_head & 1;
+    const long long pair_base =
+        ((long long)b * S + s) * qkv_stride + q_dim +
+        (k_col / D_h) * D_h + pair * 2;
+    const float x0 = __half2float(packed_qkv[pair_base]);
+    const float x1 = __half2float(packed_qkv[pair_base + 1]);
+    const long long rope_base = (long long)s * D_h + pair * 2;
+    const float cos_v = __half2float(rope[rope_base]);
+    const float sin_v = __half2float(rope[rope_base + 1]);
+    const long long cache_idx =
+        ((long long)b * max_S + write_pos) * kv_dim + k_col;
+    k_cache[cache_idx] = is_odd == 0
+        ? __float2half_rn(x0 * cos_v - x1 * sin_v)
+        : __float2half_rn(x1 * cos_v + x0 * sin_v);
+  } else {
+    const int v_col = c - q_dim - kv_dim;
+    const long long cache_idx =
+        ((long long)b * max_S + write_pos) * kv_dim + v_col;
+    v_cache[cache_idx] = packed_qkv[idx];
+  }
+}
+
+__device__ __forceinline__ int4 rope_rotate4_fp16(int4 x_raw, int4 cs_raw) {
+  const __half2* x = reinterpret_cast<const __half2*>(&x_raw);
+  const __half2* cs = reinterpret_cast<const __half2*>(&cs_raw);
+  int4 out_raw;
+  __half2* out = reinterpret_cast<__half2*>(&out_raw);
+#pragma unroll
+  for (int i = 0; i < 4; ++i) {
+    const float x0 = __half2float(x[i].x);
+    const float x1 = __half2float(x[i].y);
+    const float c = __half2float(cs[i].x);
+    const float s = __half2float(cs[i].y);
+    out[i] = __halves2half2(__float2half_rn(x0 * c - x1 * s),
+                            __float2half_rn(x1 * c + x0 * s));
+  }
+  return out_raw;
+}
+
+__global__ void qkv_split_rope_kvcache_fp16_vec_kernel(
+    const int4* __restrict__ packed_qkv,
+    const int4* __restrict__ rope,
+    int4* __restrict__ q_out,
+    int4* __restrict__ k_cache,
+    int4* __restrict__ v_cache,
+    const int* __restrict__ device_position,
+    int B,
+    int S,
+    int max_S,
+    int q_dim8,
+    int kv_dim8,
+    int D_h8,
+    int qkv_stride8,
+    int cache_offset) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int total = B * S * qkv_stride8;
+  if (idx >= total) return;
+
+  const int c8 = idx % qkv_stride8;
+  const int row = idx / qkv_stride8;
+  const int s = row % S;
+  const int b = row / S;
+  const int write_pos = cache_offset +
+      (device_position == nullptr ? s : device_position[0] + s);
+  if (c8 < q_dim8) {
+    const int4 x = packed_qkv[idx];
+    const int4 cs = rope[s * D_h8 + c8 % D_h8];
+    q_out[(b * S + s) * q_dim8 + c8] = rope_rotate4_fp16(x, cs);
+  } else if (c8 < q_dim8 + kv_dim8) {
+    const int k8 = c8 - q_dim8;
+    const int4 x = packed_qkv[idx];
+    const int4 cs = rope[s * D_h8 + k8 % D_h8];
+    k_cache[((b * max_S + write_pos) * kv_dim8) + k8] =
+        rope_rotate4_fp16(x, cs);
+  } else {
+    const int v8 = c8 - q_dim8 - kv_dim8;
+    v_cache[((b * max_S + write_pos) * kv_dim8) + v8] = packed_qkv[idx];
   }
 }
 
@@ -1300,6 +1489,25 @@ void qkv_split_rope_kvcache_bf16(
     return;
   }
   const int qkv_stride = (q_heads + 2 * kv_heads) * D_h;
+  if ((D_h & 7) == 0 && is_aligned_16(packed_qkv) &&
+      is_aligned_16(rope) && is_aligned_16(q_out) &&
+      is_aligned_16(k_cache) && is_aligned_16(v_cache)) {
+    const int q_dim8 = q_heads * (D_h >> 3);
+    const int kv_dim8 = kv_heads * (D_h >> 3);
+    const int qkv_stride8 = q_dim8 + 2 * kv_dim8;
+    const int total8 = B * S * qkv_stride8;
+    const int threads = 256;
+    const int blocks = (total8 + threads - 1) / threads;
+    qkv_split_rope_kvcache_bf16_vec_kernel<<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const int4*>(packed_qkv),
+        reinterpret_cast<const int4*>(rope),
+        reinterpret_cast<int4*>(q_out),
+        reinterpret_cast<int4*>(k_cache),
+        reinterpret_cast<int4*>(v_cache),
+        B, S, max_S, q_dim8, kv_dim8, D_h >> 3, qkv_stride8,
+        cache_offset);
+    return;
+  }
   const int total = B * S * qkv_stride;
   const int threads = 256;
   const int blocks = (total + threads - 1) / threads;
@@ -1316,6 +1524,59 @@ void qkv_split_rope_kvcache_bf16(
       kv_heads,
       D_h,
       cache_offset);
+}
+
+void qkv_split_rope_kvcache_fp16(
+    const void* packed_qkv,
+    const void* rope,
+    void* q_out,
+    void* k_cache,
+    void* v_cache,
+    const void* device_position,
+    int B,
+    int S,
+    int max_S,
+    int q_heads,
+    int kv_heads,
+    int D_h,
+    int cache_offset,
+    cudaStream_t stream) {
+  if (B <= 0 || S <= 0 || max_S <= 0 || q_heads <= 0 ||
+      kv_heads <= 0 || D_h <= 0) {
+    return;
+  }
+  const int qkv_stride = (q_heads + 2 * kv_heads) * D_h;
+  if ((D_h & 7) == 0 && is_aligned_16(packed_qkv) &&
+      is_aligned_16(rope) && is_aligned_16(q_out) &&
+      is_aligned_16(k_cache) && is_aligned_16(v_cache)) {
+    const int q_dim8 = q_heads * (D_h >> 3);
+    const int kv_dim8 = kv_heads * (D_h >> 3);
+    const int qkv_stride8 = q_dim8 + 2 * kv_dim8;
+    const int total8 = B * S * qkv_stride8;
+    const int threads = 256;
+    const int blocks = (total8 + threads - 1) / threads;
+    qkv_split_rope_kvcache_fp16_vec_kernel<<<blocks, threads, 0, stream>>>(
+        reinterpret_cast<const int4*>(packed_qkv),
+        reinterpret_cast<const int4*>(rope),
+        reinterpret_cast<int4*>(q_out),
+        reinterpret_cast<int4*>(k_cache),
+        reinterpret_cast<int4*>(v_cache),
+        reinterpret_cast<const int*>(device_position),
+        B, S, max_S, q_dim8, kv_dim8, D_h >> 3, qkv_stride8,
+        cache_offset);
+    return;
+  }
+  const int total = B * S * qkv_stride;
+  const int threads = 256;
+  const int blocks = (total + threads - 1) / threads;
+  qkv_split_rope_kvcache_fp16_kernel<<<blocks, threads, 0, stream>>>(
+      reinterpret_cast<const __half*>(packed_qkv),
+      reinterpret_cast<const __half*>(rope),
+      reinterpret_cast<__half*>(q_out),
+      reinterpret_cast<__half*>(k_cache),
+      reinterpret_cast<__half*>(v_cache),
+      reinterpret_cast<const int*>(device_position),
+      B, S, max_S, q_heads, kv_heads, D_h, cache_offset);
 }
 
 void qkv_split_bf16(

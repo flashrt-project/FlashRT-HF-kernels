@@ -22,11 +22,11 @@ Native CUDA XQA attention for BF16 queries over FP8 E4M3 paged K/V cache.
 
 ## Scope
 
-v1 is a fixed-shape public package for the production Qwen3.6-style path:
+v3 supports validated production decode/verify profiles:
 
 - BF16 Q/O
 - FP8 E4M3 K/V cache
-- `24` Q heads, `4` KV heads, head dim `256`
+- Q/KV/head-dim `24/4/256`, `16/2/256`, `32/8/128`, `32/16/128`, and `16/8/128`
 - page size `128`
 - speculative/decode `q_seq <= 32`
 
@@ -39,7 +39,7 @@ KV cache bandwidth.
 ```python
 from kernels import get_kernel
 
-attn = get_kernel("flashrt/fp8-kv-attention", trust_remote_code=True)
+attn = get_kernel("flashrt/fp8-kv-attention", version=3, trust_remote_code=True)
 out = attn.xqa_bf16_fp8kv(q_bf16, k_cache_fp8, v_cache_fp8)
 ```
 

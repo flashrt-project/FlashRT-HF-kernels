@@ -206,6 +206,57 @@ def _qkv_split_rope_kvcache_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("qkv_split_rope_kvcache_fp16"))
+def _qkv_split_rope_kvcache_fp16_fake(
+    packed_qkv: torch.Tensor,
+    rope: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    cache_offset: int,
+    device_position: torch.Tensor | None,
+    q_out: torch.Tensor,
+    k_cache: torch.Tensor,
+    v_cache: torch.Tensor,
+) -> None:
+    _check_packed_gqa_qkv(packed_qkv, q_heads, kv_heads, head_dim)
+    batch, seq_len, _ = packed_qkv.shape
+    if packed_qkv.dtype != torch.float16 or rope.dtype != torch.float16:
+        raise RuntimeError("packed_qkv and rope must have dtype torch.float16")
+    if rope.dim() != 2 or rope.shape[0] < seq_len or rope.shape[1] != head_dim:
+        raise RuntimeError("rope must have shape (>= seq_len, head_dim)")
+    if q_out.shape != (batch, seq_len, q_heads, head_dim):
+        raise RuntimeError("q_out has an invalid shape")
+    if k_cache.dim() != 4 or k_cache.shape[0] != batch or k_cache.shape[2:] != (kv_heads, head_dim):
+        raise RuntimeError("k_cache must have shape (batch, max_seq_len, kv_heads, head_dim)")
+    if v_cache.shape != k_cache.shape:
+        raise RuntimeError("v_cache must have the same shape as k_cache")
+    if cache_offset < 0:
+        raise RuntimeError("cache_offset must be non-negative")
+    if device_position is not None and (device_position.dtype != torch.int32 or device_position.numel() != 1):
+        raise RuntimeError("device_position must contain one int32 element")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("qk_norm_rope_strided_bf16"))
+def _qk_norm_rope_strided_bf16_fake(
+    q_in, k_in, q_weight, k_weight, cos, sin,
+    q_heads: int, k_heads: int, eps: float, q_out, k_out,
+) -> None:
+    rows = q_in.shape[0]
+    if q_in.dim() != 2 or k_in.dim() != 2 or k_in.shape[0] != rows:
+        raise RuntimeError("q_in and k_in must be rank-2 with the same row count")
+    if q_in.shape[1] < q_heads * 128 or k_in.shape[1] < k_heads * 128:
+        raise RuntimeError("input row widths must cover heads * 128")
+    if q_weight.shape != (128,) or k_weight.shape != (128,):
+        raise RuntimeError("Q/K weights must have shape (128,)")
+    if cos.shape != (rows, 128) or sin.shape != cos.shape:
+        raise RuntimeError("cos and sin must have shape (rows, 128)")
+    if q_out.shape != (rows, q_heads, 128) or k_out.shape != (rows, k_heads, 128):
+        raise RuntimeError("output shapes must be (rows, heads, 128)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("qkv_split_bf16"))
 def _qkv_split_bf16_fake(
     packed_qkv: torch.Tensor,
@@ -498,6 +549,83 @@ def qkv_split_rope_kvcache_bf16(
         v_cache,
     )
     return q_out, k_cache, v_cache
+
+
+def qkv_split_rope_kvcache_fp16(
+    packed_qkv: torch.Tensor,
+    rope: torch.Tensor,
+    q_heads: int,
+    kv_heads: int,
+    head_dim: int,
+    cache_offset: int = 0,
+    device_position: torch.Tensor | None = None,
+    q_out: torch.Tensor | None = None,
+    k_cache: torch.Tensor | None = None,
+    v_cache: torch.Tensor | None = None,
+    max_seq_len: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split FP16 GQA QKV, apply interleaved RoPE, and update K/V caches.
+
+    ``device_position`` is an optional CUDA int32 scalar used by CUDA Graph
+    decode loops. When provided, cache rows start at
+    ``cache_offset + device_position[0]`` without a host synchronization.
+    """
+    batch, seq_len, _ = packed_qkv.shape
+    if q_out is None:
+        q_out = torch.empty(
+            (batch, seq_len, q_heads, head_dim),
+            device=packed_qkv.device,
+            dtype=torch.float16,
+        )
+    if k_cache is None or v_cache is None:
+        if max_seq_len is None:
+            if device_position is not None:
+                raise ValueError("max_seq_len is required when device_position is used")
+            max_seq_len = cache_offset + seq_len
+        cache_shape = (batch, int(max_seq_len), kv_heads, head_dim)
+        if k_cache is None:
+            k_cache = torch.empty(cache_shape, device=packed_qkv.device, dtype=torch.float16)
+        if v_cache is None:
+            v_cache = torch.empty(cache_shape, device=packed_qkv.device, dtype=torch.float16)
+    ops.qkv_split_rope_kvcache_fp16(
+        packed_qkv,
+        rope,
+        int(q_heads),
+        int(kv_heads),
+        int(head_dim),
+        int(cache_offset),
+        device_position,
+        q_out,
+        k_cache,
+        v_cache,
+    )
+    return q_out, k_cache, v_cache
+
+
+def qk_norm_rope_strided_bf16(
+    q_in: torch.Tensor,
+    k_in: torch.Tensor,
+    q_weight: torch.Tensor,
+    k_weight: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    q_heads: int,
+    k_heads: int,
+    eps: float = 1e-6,
+    q_out: torch.Tensor | None = None,
+    k_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-head RMSNorm and rotate-half RoPE from padded Q/K row strides."""
+    rows = q_in.shape[0]
+    if q_out is None:
+        q_out = torch.empty((rows, q_heads, 128), device=q_in.device, dtype=torch.bfloat16)
+    if k_out is None:
+        k_out = torch.empty((rows, k_heads, 128), device=k_in.device, dtype=torch.bfloat16)
+    ops.qk_norm_rope_strided_bf16(
+        q_in, k_in, q_weight, k_weight, cos, sin,
+        int(q_heads), int(k_heads), float(eps), q_out, k_out,
+    )
+    return q_out, k_out
 
 
 def qkv_split_per_head_norm_rope_bf16(
@@ -867,6 +995,8 @@ __all__ = [
     "qkv_split_bias_rope_fp16",
     "qkv_split_bf16",
     "qkv_split_rope_kvcache_bf16",
+    "qkv_split_rope_kvcache_fp16",
+    "qk_norm_rope_strided_bf16",
     "qkv_split_norm_rope_bf16",
     "qkv_split_bias_norm_rope_v_bf16",
     "qkv_split_bias_norm_rope_v_cat_bf16",

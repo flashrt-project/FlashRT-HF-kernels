@@ -229,7 +229,14 @@ __global__ void chunk_h_kernel(
     const int t_count = (t_start + kBT <= S) ? kBT : (S - t_start);
     const int stage = i_t & 1;
 
-    cp_async_wait<1>();
+    // With one chunk there is only one committed group. wait_group 1 would
+    // permit that group to remain outstanding and race the shared-memory
+    // reads below. Multi-chunk execution keeps the next stage in flight.
+    if (NT == 1) {
+      cp_async_wait<0>();
+    } else {
+      cp_async_wait<1>();
+    }
     __syncthreads();
 
     // Optional packed k_pack_hv side output (chunks, H, BT, K). Only needed

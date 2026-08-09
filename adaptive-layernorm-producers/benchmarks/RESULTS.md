@@ -59,3 +59,12 @@ were bit-exact in every row.
 
 The table reports the uploaded SM87+SM110a fat binary on Thor. SM87 is present
 as native cubin code but is not included in these runtime measurements.
+
+### GROOT N1.7 FP4 producer update
+
+The additive FP4 producer from FlashRT
+`24df793f4fa2d50780aea03b644208c6e0cb4162` was rebuilt as
+`torch213-cxx11-cu130-aarch64-linux` on the same Thor host. Packed FP4 values
+and SFA bytes were exact against the native staged contract. The Tensor
+wrapper/raw registered-op measurement was `8.3094/8.1932 us` (`1.0142x`) in
+direct mode and `5.3749/5.3797 us` (`0.9991x`) under CUDA Graph.

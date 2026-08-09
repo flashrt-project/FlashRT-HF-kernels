@@ -57,6 +57,8 @@ q, k = ops.qk_pair_rmsnorm_rope_bf16(
   Q and K may have different head counts.
 - `gather_rows_bf16` and `scatter_rows_bf16` use contiguous CUDA int64 row
   indices. Scatter indices must be unique.
+- Indexed-row validation includes the Cosmos3-Edge production layout
+  `128 -> 60` rows with hidden size `2048`, including exact CUDA Graph replay.
 
 ## Validation
 

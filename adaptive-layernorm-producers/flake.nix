@@ -2,7 +2,7 @@
   description = "Flake for FlashRT adaptive LayerNorm producer kernels";
 
   inputs = {
-    kernel-builder.url = "github:huggingface/kernels/432702bfbfbb17d3a1bd2c2743d004e21e769ab7";
+    kernel-builder.url = "github:huggingface/kernels/870e825d881664e39f9287a27a74ef63ff3c545e";
   };
 
   outputs =

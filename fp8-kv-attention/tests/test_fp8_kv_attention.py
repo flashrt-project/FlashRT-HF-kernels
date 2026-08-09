@@ -29,26 +29,37 @@ REGISTRATION_INCLUDE = (
 PAGE = 128
 CONFIGS = {
     "qwen36": (24, 4, 256),
+    "gqa16_kv2": (16, 2, 256),
     "qwen3_vl": (32, 8, 128),
+    "gqa32_kv16": (32, 16, 128),
     "cosmos_edge": (16, 8, 128),
 }
 
 SHAPES = {
     "qwen36_decode_128": ("qwen36", 1, 128),
     "qwen36_verify8_4096": ("qwen36", 8, 4096),
+    "gqa16_kv2_decode_128": ("gqa16_kv2", 1, 128),
+    "gqa16_kv2_decode_1024": ("gqa16_kv2", 1, 1024),
+    "gqa16_kv2_verify4_4096": ("gqa16_kv2", 4, 4096),
+    "gqa16_kv2_verify8_32768": ("gqa16_kv2", 8, 32768),
     "qwen3_vl_decode_1024": ("qwen3_vl", 1, 1024),
     "qwen3_vl_verify4_4096": ("qwen3_vl", 4, 4096),
     "qwen3_vl_verify8_32768": ("qwen3_vl", 8, 32768),
     "cosmos_edge_decode_1024": ("cosmos_edge", 1, 1024),
     "cosmos_edge_verify4_4096": ("cosmos_edge", 4, 4096),
     "cosmos_edge_verify8_32768": ("cosmos_edge", 8, 32768),
+    "gqa32_kv16_decode_128": ("gqa32_kv16", 1, 128),
+    "gqa32_kv16_decode_1024": ("gqa32_kv16", 1, 1024),
+    "gqa32_kv16_verify4_4096": ("gqa32_kv16", 4, 4096),
+    "gqa32_kv16_verify8_32768": ("gqa32_kv16", 8, 32768),
 }
 MODES = {
-    "smoke": ["qwen36_decode_128", "qwen3_vl_decode_1024", "cosmos_edge_decode_1024"],
+    "smoke": ["qwen36_decode_128", "qwen3_vl_decode_1024", "cosmos_edge_decode_1024", "gqa32_kv16_decode_128"],
     "headline": [
         "qwen36_verify8_4096",
         "qwen3_vl_verify4_4096",
         "cosmos_edge_verify4_4096",
+        "gqa32_kv16_verify4_4096",
     ],
     "full": list(SHAPES.keys()),
 }
@@ -163,6 +174,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "xqa_mha_configured.cu"),
             str(PACKAGE / "csrc" / "xqa_bf16_fp8kv.cu"),
             str(PACKAGE / "csrc" / "xqa_mha_d128.cu"),
+            str(PACKAGE / "csrc" / "xqa_mha_d256_g8.cu"),
         ],
         extra_include_paths=[
             str(PACKAGE / "csrc"),
@@ -296,6 +308,65 @@ def run_shape(ops, name: str, config: str, q_seq: int, kv_seq: int) -> Metrics:
     )
 
 
+def run_profile_graph(ops, config: str, seed: int) -> None:
+    q, k, v = make_inputs(config, 4, 4096, seed=seed)
+    q_seq, q_heads, head_dim = q.shape
+    kv_heads, pages = k.shape[2], k.shape[0]
+    page_table = torch.arange(pages, device="cuda", dtype=torch.int32).view(1, pages)
+    seq_lens = torch.tensor([[4096]], device="cuda", dtype=torch.int32)
+    mask = SourceOps.causal_spec_mask(q_seq, q.device)
+    semaphores, scratch = SourceOps.allocate_workspace(q_seq, q_heads, kv_heads, q.device)
+    out = torch.empty_like(q)
+
+    def launch():
+        return ops.xqa_bf16_fp8kv(
+            q, k, v, page_table, seq_lens, mask, out=out,
+            semaphores=semaphores, scratch=scratch,
+            max_seq_len=pages * PAGE,
+            k_stride_page=PAGE * kv_heads * head_dim,
+            k_stride_token=kv_heads * head_dim,
+            k_stride_head=head_dim,
+        )
+
+    expected = launch().clone()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        launch()
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+
+
+def run_profile_compile(ops, config: str, seed: int) -> None:
+    q, k, v = make_inputs(config, 4, 4096, seed=seed)
+    q_seq, q_heads, head_dim = q.shape
+    kv_heads, pages = k.shape[2], k.shape[0]
+    page_table = torch.arange(pages, device="cuda", dtype=torch.int32).view(1, pages)
+    seq_lens = torch.tensor([[4096]], device="cuda", dtype=torch.int32)
+    mask = SourceOps.causal_spec_mask(q_seq, q.device)
+    semaphores, scratch = SourceOps.allocate_workspace(q_seq, q_heads, kv_heads, q.device)
+    eager_out = torch.empty_like(q)
+    compiled_out = torch.empty_like(q)
+
+    def launch(q_, k_, v_, page_table_, seq_lens_, mask_, out_, semaphores_, scratch_):
+        return ops.xqa_bf16_fp8kv(
+            q_, k_, v_, page_table_, seq_lens_, mask_, out=out_,
+            semaphores=semaphores_, scratch=scratch_,
+            max_seq_len=pages * PAGE,
+            k_stride_page=PAGE * kv_heads * head_dim,
+            k_stride_token=kv_heads * head_dim,
+            k_stride_head=head_dim,
+        )
+
+    semaphores.zero_()
+    expected = launch(q, k, v, page_table, seq_lens, mask, eager_out, semaphores, scratch).clone()
+    semaphores.zero_()
+    compiled = torch.compile(launch, fullgraph=True)
+    got = compiled(q, k, v, page_table, seq_lens, mask, compiled_out, semaphores, scratch)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(got, expected, rtol=0, atol=0)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -309,7 +380,7 @@ def main() -> int:
     capability = torch.cuda.get_device_capability(0)
     if capability not in {(10, 0), (10, 3), (11, 0), (12, 0), (12, 1)}:
         raise RuntimeError(
-            "fp8-kv-attention v1 requires a supported Blackwell capability "
+            "fp8-kv-attention requires a supported Blackwell capability "
             f"(SM100, SM103, SM110, SM120, or SM121); got SM{capability[0]}{capability[1]}"
         )
 
@@ -328,7 +399,16 @@ def main() -> int:
         Path(args.json_out).write_text(json.dumps([asdict(r) for r in rows], indent=2) + "\n")
     if not all(r.passed for r in rows):
         raise AssertionError("fp8-kv-attention correctness failed")
-    print(f"PASS fp8-kv-attention {args.backend} mode={args.mode}: {len(rows)} checks")
+    if args.mode == "full":
+        run_profile_graph(ops, "gqa32_kv16", 424242)
+        run_profile_graph(ops, "gqa16_kv2", 424244)
+        if args.backend == "installed":
+            run_profile_compile(ops, "gqa32_kv16", 424243)
+            run_profile_compile(ops, "gqa16_kv2", 424245)
+    print(f"PASS fp8-kv-attention {args.backend} mode={args.mode}: {len(rows)} checks" +
+          (" + H32/KV16 and H16/KV2 CUDA Graph" +
+           (" + torch.compile(fullgraph=True)" if args.backend == "installed" else "")
+           if args.mode == "full" else ""))
     return 0
 
 

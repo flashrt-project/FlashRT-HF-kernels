@@ -102,6 +102,22 @@ void qkv_split_rope_kvcache_bf16(
     int cache_offset,
     cudaStream_t stream);
 
+void qkv_split_rope_kvcache_fp16(
+    const void* packed_qkv,
+    const void* rope,
+    void* q_out,
+    void* k_cache,
+    void* v_cache,
+    const void* device_position,
+    int batch,
+    int seq_len,
+    int max_seq_len,
+    int q_heads,
+    int kv_heads,
+    int head_dim,
+    int cache_offset,
+    cudaStream_t stream);
+
 void qkv_split_bf16(
     const void* packed_qkv,
     void* q_out,

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 import statistics
 import sys
@@ -45,6 +46,10 @@ SHAPES = {
     "cosmos_edge_action": (64, 2048, 9216),
     "lingbot_vision_o": (1024, 1280, 1280),
     "lingbot_action_gate_up": (105, 2048, 16384),
+    "pi05_prefill_qkv": (712, 2048, 2560),
+    "pi05_prefill_o": (970, 2048, 2048),
+    "pi05_prefill_gate_up": (768, 2048, 32768),
+    "pi05_prefill_down": (768, 16384, 2048),
 }
 
 MODES = {
@@ -57,6 +62,12 @@ MODES = {
         "groot_n17_llm_o",
         "cosmos_edge_action",
         "lingbot_action_gate_up",
+    ],
+    "pi05-prefill": [
+        "pi05_prefill_qkv",
+        "pi05_prefill_o",
+        "pi05_prefill_gate_up",
+        "pi05_prefill_down",
     ],
     "thor-full": list(SHAPES),
 }
@@ -128,7 +139,10 @@ def load_source_ops() -> SourceOps:
     if capability == (11, 0):
         if not (cutlass_include / "cutlass" / "cutlass.h").is_file():
             raise RuntimeError("set CUTLASS_INCLUDE for the SM110 source benchmark")
-        cuda_sources = [str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu")]
+        cuda_sources = [
+            str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu"),
+            str(PACKAGE / "csrc" / "cublaslt_fp8_bias_sm110.cu"),
+        ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY"
         extra_includes = [
             str(cutlass_include),
@@ -179,6 +193,12 @@ def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
             raise RuntimeError("SM110 variant must be in [0, 3]")
         if variant:
             return forced[variant]
+        if m >= 512 and k == 2048 and 2048 <= n <= 2560:
+            return "sm110_sq_bf16"
+        if m >= 512 and n >= 16 * k:
+            return "sm110_t1_bf16"
+        if m >= 512 and k >= 4 * n:
+            return "sm110_wide_bf16"
         if n >= 8 * k:
             return "sm110_wide_bf16"
         if m >= 128 and k >= 4 * n:
@@ -309,7 +329,7 @@ def metrics(got, expected):
     return (
         float(diff.max().item()),
         float(diff.mean().item()),
-        float(torch.quantile(diff, 0.99).item()),
+        float(diff.kthvalue(max(1, math.ceil(0.99 * diff.numel()))).values.item()),
         float(torch.nn.functional.cosine_similarity(got.float().flatten(), expected.float().flatten(), dim=0).item()),
     )
 

@@ -198,6 +198,22 @@ def _layer_norm_no_affine_quant_fp8_static_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_no_affine_quant_nvfp4_swizzled_bf16"))
+def _layer_norm_no_affine_quant_nvfp4_swizzled_bf16_fake(
+    x: torch.Tensor,
+    eps: float,
+    packed: torch.Tensor,
+    sf_swizzled: torch.Tensor,
+) -> None:
+    _check_x(x)
+    rows, dim = x.shape
+    if packed.shape != (rows, dim // 2):
+        raise RuntimeError("packed must have shape (rows, dim // 2)")
+    if sf_swizzled.numel() < swizzled_sf_size(rows, dim):
+        raise RuntimeError("sf_swizzled is too small")
+    return None
+
+
 def ada_layer_norm_quant_fp8_bf16(
     x: torch.Tensor,
     scale: torch.Tensor,
@@ -353,6 +369,21 @@ def layer_norm_no_affine_quant_fp8_static_bf16(
     return out
 
 
+def layer_norm_no_affine_quant_nvfp4_swizzled_bf16(
+    x: torch.Tensor,
+    eps: float = 1e-5,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """SM110 no-affine LayerNorm producing NVFP4 and CUTLASS SFA."""
+    if packed is None or sf_swizzled is None:
+        packed, sf_swizzled = _alloc_nvfp4(x)
+    ops.layer_norm_no_affine_quant_nvfp4_swizzled_bf16(
+        x, float(eps), packed, sf_swizzled
+    )
+    return packed, sf_swizzled
+
+
 @torch.library.register_fake(add_op_namespace_prefix("adaln_modulation6_bf16"))
 def _adaln_modulation6_bf16_fake(
     adaln_params: torch.Tensor,
@@ -418,6 +449,7 @@ __all__ = [
     "ada_layer_norm_quant_nvfp4_swizzled_bf16",
     "ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16",
     "layer_norm_no_affine_quant_fp8_static_bf16",
+    "layer_norm_no_affine_quant_nvfp4_swizzled_bf16",
     "adaln_modulation6_bf16",
     "swizzled_sf_size",
 ]

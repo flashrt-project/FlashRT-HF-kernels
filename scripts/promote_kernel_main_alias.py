@@ -135,7 +135,11 @@ def promote_package(
     with tempfile.TemporaryDirectory(prefix=f"flashrt-main-alias-{package}-") as tmp:
         local_dir = Path(tmp)
         download_source(repo_id, src_type, src_rev, token, local_dir)
-        build_files = [str(path.relative_to(local_dir)) for path in local_dir.glob("build/**") if path.is_file()]
+        build_files = [
+            str(path.relative_to(local_dir))
+            for path in (local_dir / "build").rglob("*")
+            if path.is_file()
+        ]
         if not build_files:
             raise RuntimeError(f"{repo_id}@{src_label} has no build/** files")
 

@@ -51,6 +51,18 @@ void qkv_split_rope_kvcache_bf16(
     torch::Tensor& k_cache,
     torch::Tensor& v_cache);
 
+void qkv_split_rope_kvcache_fp16(
+    torch::Tensor const& packed_qkv,
+    torch::Tensor const& rope,
+    int64_t q_heads,
+    int64_t kv_heads,
+    int64_t head_dim,
+    int64_t cache_offset,
+    c10::optional<torch::Tensor> const& device_position,
+    torch::Tensor& q_out,
+    torch::Tensor& k_cache,
+    torch::Tensor& v_cache);
+
 void qkv_split_bf16(
     torch::Tensor const& packed_qkv,
     int64_t heads,

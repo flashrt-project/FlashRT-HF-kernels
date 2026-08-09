@@ -261,6 +261,7 @@ def run(ops, mode: str) -> int:
         (1, 1, 8),
         (17, 5, 64),
         (277, 51, 128),
+        (128, 60, 2048),
         (2520, 105, 1152),
         (5070, 257, 4096),
     ]
@@ -456,6 +457,40 @@ def run_indexed_compile(ops) -> int:
     return 1
 
 
+def run_cosmos_edge_indexed_graph(ops) -> int:
+    source_rows, selected_rows, hidden = 128, 60, 2048
+    src = torch.randn((source_rows, hidden), device="cuda", dtype=torch.bfloat16)
+    indices = torch.randperm(
+        source_rows, device="cuda", dtype=torch.int64
+    )[:selected_rows].contiguous()
+    gathered = torch.empty(
+        (selected_rows, hidden), device="cuda", dtype=torch.bfloat16
+    )
+    scattered = torch.zeros(
+        (source_rows, hidden), device="cuda", dtype=torch.bfloat16
+    )
+
+    graph = torch.cuda.CUDAGraph()
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph):
+        ops.gather_rows_bf16(src, indices, out=gathered)
+        ops.scatter_rows_bf16(gathered, indices, source_rows, out=scattered)
+    graph.replay()
+    torch.cuda.synchronize()
+    expected_gathered = src.index_select(0, indices)
+    expected_scattered = torch.zeros_like(scattered)
+    expected_scattered.index_copy_(0, indices, expected_gathered)
+    torch.testing.assert_close(gathered, expected_gathered, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(scattered, expected_scattered, rtol=0.0, atol=0.0)
+    first = (gathered.clone(), scattered.clone())
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(gathered, first[0], rtol=0.0, atol=0.0)
+    torch.testing.assert_close(scattered, first[1], rtol=0.0, atol=0.0)
+    print("PASS Cosmos3-Edge gather/scatter CUDA Graph replay")
+    return 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -465,6 +500,8 @@ def main() -> int:
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     count = run(ops, args.mode)
     count += run_indexed_compile(ops)
+    if args.mode == "full":
+        count += run_cosmos_edge_indexed_graph(ops)
     if args.backend == "installed":
         count += run_compile_default_eps(ops)
     print(f"transformer-layout-primitives {args.backend} {args.mode}: passed {count}/{count}")

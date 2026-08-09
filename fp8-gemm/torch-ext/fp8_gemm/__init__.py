@@ -37,6 +37,34 @@ def _fp8_linear_residual_bf16_fake(
     return None
 
 
+def _check_bias_linear_shapes(input, weight, bias, out) -> None:
+    if input.dim() != 2 or weight.dim() != 2:
+        raise RuntimeError("input and weight must be rank-2 tensors")
+    if input.shape[1] != weight.shape[1]:
+        raise RuntimeError("input and weight K dimensions must match")
+    if bias.shape != (weight.shape[0],):
+        raise RuntimeError("bias must have shape (weight.shape[0],)")
+    if out.shape != (input.shape[0], weight.shape[0]):
+        raise RuntimeError("out must have shape (input.shape[0], weight.shape[0])")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp8_linear_bias_bf16"))
+def _fp8_linear_bias_bf16_fake(input, weight, bias, alpha: float, out) -> None:
+    _check_bias_linear_shapes(input, weight, bias, out)
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp8_linear_bias_residual_bf16"))
+def _fp8_linear_bias_residual_bf16_fake(
+    input, weight, bias, alpha: float, residual
+) -> None:
+    _check_bias_linear_shapes(input, weight, bias, residual)
+
+
+@torch.library.register_fake(add_op_namespace_prefix("fp8_linear_bias_gelu_bf16"))
+def _fp8_linear_bias_gelu_bf16_fake(input, weight, bias, alpha: float, out) -> None:
+    _check_bias_linear_shapes(input, weight, bias, out)
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp8_blockwise_linear_bf16"))
 def _fp8_blockwise_linear_bf16_fake(
     input: torch.Tensor,
@@ -95,8 +123,8 @@ def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
     variant = int(variant)
     if m <= 0 or n <= 0 or k <= 0:
         raise RuntimeError("m, n, and k must be positive")
-    if k % 32 != 0:
-        raise RuntimeError("k must be divisible by 32")
+    if k % 16 != 0:
+        raise RuntimeError("k must be divisible by 16")
     capability = torch.cuda.get_device_capability() if torch.cuda.is_available() else None
     if capability == (11, 0):
         forced = {1: "sm110_sq_bf16", 2: "sm110_t1_bf16", 3: "sm110_wide_bf16"}
@@ -106,6 +134,12 @@ def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
             raise RuntimeError("SM110 requires n and k divisible by 16")
         if variant:
             return forced[variant]
+        if m >= 512 and k == 2048 and 2048 <= n <= 2560:
+            return "sm110_sq_bf16"
+        if m >= 512 and n >= 16 * k:
+            return "sm110_t1_bf16"
+        if m >= 512 and k >= 4 * n:
+            return "sm110_wide_bf16"
         if n >= 8 * k:
             return "sm110_wide_bf16"
         if m >= 128 and k >= 4 * n:
@@ -116,6 +150,8 @@ def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
             return "sm110_wide_bf16"
         return "sm110_t1_bf16"
     if m == 1:
+        if k % 32:
+            raise RuntimeError("SM120 requires k divisible by 32")
         if variant == 4:
             return "gemv_fp8_m1_w4"
         if variant == 8:
@@ -131,6 +167,8 @@ def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         return "gemv_fp8_m1_w16"
     if variant != 0:
         raise RuntimeError("small-M dispatcher currently supports variant=0 only")
+    if k % 32:
+        raise RuntimeError("SM120 requires k divisible by 32")
     if m <= 16:
         if k % 256 == 0:
             return "ld_fp8_gemm_16x128x256_w4" if n % 128 == 0 else "ld_fp8_gemm_16x64x256_w4"
@@ -197,6 +235,56 @@ def fp8_linear_residual_bf16(
     return residual
 
 
+def fp8_linear_bias_bf16(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """SM110 FP8 linear with fused BF16 bias and BF16 output."""
+    if out is None:
+        out = torch.empty(
+            (input.shape[0], weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    ops.fp8_linear_bias_bf16(input, weight, bias, float(alpha), out)
+    return out
+
+
+def fp8_linear_bias_residual_bf16(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    residual: torch.Tensor,
+    alpha: float = 1.0,
+) -> torch.Tensor:
+    """SM110 fused ``residual += alpha * input @ weight.T + bias``."""
+    ops.fp8_linear_bias_residual_bf16(
+        input, weight, bias, float(alpha), residual
+    )
+    return residual
+
+
+def fp8_linear_bias_gelu_bf16(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+    alpha: float = 1.0,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """SM110 FP8 linear with fused BF16 bias and GELU epilogue."""
+    if out is None:
+        out = torch.empty(
+            (input.shape[0], weight.shape[0]),
+            device=input.device,
+            dtype=torch.bfloat16,
+        )
+    ops.fp8_linear_bias_gelu_bf16(input, weight, bias, float(alpha), out)
+    return out
+
+
 def fp8_blockwise_linear_bf16(
     input: torch.Tensor,
     weight: torch.Tensor,
@@ -248,6 +336,9 @@ def fp8_blockwise_swiglu_quantize_fp8(
 __all__ = [
     "fp8_linear_bf16",
     "fp8_linear_residual_bf16",
+    "fp8_linear_bias_bf16",
+    "fp8_linear_bias_residual_bf16",
+    "fp8_linear_bias_gelu_bf16",
     "fp8_blockwise_linear_bf16",
     "fp8_blockwise_swiglu_quantize_fp8",
     "select_fp8_linear_tile",

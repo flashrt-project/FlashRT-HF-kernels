@@ -51,6 +51,7 @@ __global__ void ada_rms_norm_style_bf16_kernel(
     const __nv_bfloat16* __restrict__ style,
     __nv_bfloat16* __restrict__ out,
     __nv_bfloat16* __restrict__ gate_out,
+    int style_rows,
     int dim,
     float eps) {
   const int row = blockIdx.x;
@@ -58,7 +59,9 @@ __global__ void ada_rms_norm_style_bf16_kernel(
   const __nv_bfloat162* x2 =
       reinterpret_cast<const __nv_bfloat162*>(x + static_cast<long long>(row) * dim);
   const __nv_bfloat162* w2 = reinterpret_cast<const __nv_bfloat162*>(weight);
-  const __nv_bfloat16* style_row = style + static_cast<long long>(row) * 3 * dim;
+  const int style_row_index = style_rows == 1 ? 0 : row;
+  const __nv_bfloat16* style_row =
+      style + static_cast<long long>(style_row_index) * 3 * dim;
   const __nv_bfloat162* scale2 = reinterpret_cast<const __nv_bfloat162*>(style_row);
   const __nv_bfloat162* shift2 = reinterpret_cast<const __nv_bfloat162*>(style_row + dim);
   const __nv_bfloat162* gate2 = reinterpret_cast<const __nv_bfloat162*>(style_row + 2 * dim);
@@ -100,6 +103,7 @@ __global__ void gate_residual_ada_norm_fp8_static_bf16_kernel(
     const __nv_bfloat16* __restrict__ style,
     __nv_fp8_e4m3* __restrict__ out,
     __nv_bfloat16* __restrict__ gate_out,
+    int style_rows,
     int dim,
     float eps,
     const float* __restrict__ scale) {
@@ -112,7 +116,9 @@ __global__ void gate_residual_ada_norm_fp8_static_bf16_kernel(
   const __nv_bfloat162* input_gate2 =
       reinterpret_cast<const __nv_bfloat162*>(gate + static_cast<long long>(row) * dim);
   const __nv_bfloat162* w2 = reinterpret_cast<const __nv_bfloat162*>(weight);
-  const __nv_bfloat16* style_row = style + static_cast<long long>(row) * 3 * dim;
+  const int style_row_index = style_rows == 1 ? 0 : row;
+  const __nv_bfloat16* style_row =
+      style + static_cast<long long>(style_row_index) * 3 * dim;
   const __nv_bfloat162* style_scale2 = reinterpret_cast<const __nv_bfloat162*>(style_row);
   const __nv_bfloat162* shift2 = reinterpret_cast<const __nv_bfloat162*>(style_row + dim);
   const __nv_bfloat162* style_gate2 = reinterpret_cast<const __nv_bfloat162*>(style_row + 2 * dim);
@@ -163,6 +169,7 @@ void ada_rms_norm_style_bf16(
     void* out,
     void* gate_out,
     int rows,
+    int style_rows,
     int dim,
     float eps,
     cudaStream_t stream) {
@@ -173,6 +180,7 @@ void ada_rms_norm_style_bf16(
       reinterpret_cast<const __nv_bfloat16*>(style),
       reinterpret_cast<__nv_bfloat16*>(out),
       reinterpret_cast<__nv_bfloat16*>(gate_out),
+      style_rows,
       dim,
       eps);
 }
@@ -186,6 +194,7 @@ void gate_residual_ada_norm_fp8_static_bf16(
     void* out,
     void* gate_out,
     int rows,
+    int style_rows,
     int dim,
     float eps,
     const float* scale,
@@ -199,6 +208,7 @@ void gate_residual_ada_norm_fp8_static_bf16(
       reinterpret_cast<const __nv_bfloat16*>(style),
       reinterpret_cast<__nv_fp8_e4m3*>(out),
       reinterpret_cast<__nv_bfloat16*>(gate_out),
+      style_rows,
       dim,
       eps,
       scale);

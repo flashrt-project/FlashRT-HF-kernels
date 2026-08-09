@@ -3,8 +3,8 @@
 FlashRT native CUDA XQA kernel for BF16-query attention over FP8 E4M3 paged
 K/V cache.
 
-This package exposes the clean production-style FP8-KV path used by FlashRT
-Qwen3.6 experiments: K/V are quantized when written to cache, and attention
+This package exposes the clean production-style FP8-KV path used by FlashRT:
+K/V are quantized when written to cache, and attention
 reads the FP8 cache directly. It does not re-quantize BF16 K/V inside the
 attention call.
 
@@ -15,17 +15,21 @@ attention call.
 - `default_page_table(num_pages, device="cuda")`
 - `allocate_workspace(q_seq, device="cuda", scratch_mb=256)`
 
-## v1 Shape Contract
+## v3 Shape Contract
 
-The first public package intentionally exposes the validated fixed XQA shape:
+The package exposes five validated XQA head profiles:
 
-- Q/O: BF16, `(q_seq, 24, 256)` or `(1, 1, q_seq, 24, 256)`
-- K/V cache: FP8 E4M3, `(pages, 128, 4, 256)`
+- `Q/KV/D = 24/4/256`
+- `Q/KV/D = 16/2/256`
+- `Q/KV/D = 32/8/128`
+- `Q/KV/D = 32/16/128`
+- `Q/KV/D = 16/8/128`
+- Q/O: BF16, rank 3 or the supported rank-5 runtime layout
+- K/V cache: FP8 E4M3, `(pages, 128, num_kv_heads, head_dim)`
 - page size: `128`
-- Q heads / KV heads: `24 / 4`
-- head dim: `256`
 - supported q_seq: `1 <= q_seq <= 32`
-- target: Blackwell `sm_120`, CUDA 12.8+
+- target: Blackwell `sm_110`, `sm_120` and compatible package builds,
+  CUDA 12.8+
 
 Unsupported shapes fail at the Python/C++ boundary instead of silently falling
 back to a slower reference.
@@ -36,7 +40,7 @@ back to a slower reference.
 from kernels import get_kernel
 import torch
 
-attn = get_kernel("flashrt/fp8-kv-attention", trust_remote_code=True)
+attn = get_kernel("flashrt/fp8-kv-attention", version=3, trust_remote_code=True)
 
 q = torch.randn(1, 24, 256, device="cuda", dtype=torch.bfloat16)
 k_cache = torch.empty(8, 128, 4, 256, device="cuda", dtype=torch.float8_e4m3fn)
@@ -54,6 +58,8 @@ seq_lens = torch.tensor([[pages * 128]], device=q.device, dtype=torch.int32)
 mask = attn.causal_spec_mask(q.shape[0], device=q.device)
 semaphores, scratch = attn.allocate_workspace(q_seq=q.shape[0], device=q.device)
 out = torch.empty_like(q)
+props = torch.cuda.get_device_properties(q.device)
+kv_heads, head_dim = k_cache.shape[2], k_cache.shape[3]
 
 attn.xqa_bf16_fp8kv(
     q,
@@ -65,8 +71,16 @@ attn.xqa_bf16_fp8kv(
     out=out,
     semaphores=semaphores,
     scratch=scratch,
+    sm_count=props.multi_processor_count,
+    k_stride_page=128 * kv_heads * head_dim,
+    k_stride_token=kv_heads * head_dim,
+    k_stride_head=head_dim,
 )
 ```
+
+If `sm_count=0`, the native wrapper resolves it once per CUDA device and
+caches the result. Static runtimes should pass it explicitly before CUDA Graph
+capture so the first captured call performs no device-property query.
 
 ## Provenance
 

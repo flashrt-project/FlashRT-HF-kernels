@@ -67,18 +67,21 @@ class SourceOps:
         self._ops.cast_bf16_to_fp32(src, dst)
         return dst
 
-    def pack_tail_bf16(self, tail, flat_dim):
-        out = torch.empty((flat_dim,), device=tail.device, dtype=tail.dtype)
+    def pack_tail_bf16(self, tail, flat_dim, out=None):
+        if out is None:
+            out = torch.empty((flat_dim,), device=tail.device, dtype=tail.dtype)
         self._ops.pack_tail_bf16(tail, int(flat_dim), out)
         return out
 
-    def add_bias_zero_tail_bf16(self, input, bias, valid_cols):
-        out = torch.empty_like(input)
+    def add_bias_zero_tail_bf16(self, input, bias, valid_cols, out=None):
+        if out is None:
+            out = torch.empty_like(input)
         self._ops.add_bias_zero_tail_bf16(input, bias, int(valid_cols), out)
         return out
 
-    def extract_tail_f32_to_bf16(self, flat, tail_numel):
-        out = torch.empty((tail_numel,), device=flat.device, dtype=torch.bfloat16)
+    def extract_tail_f32_to_bf16(self, flat, tail_numel, out=None):
+        if out is None:
+            out = torch.empty((tail_numel,), device=flat.device, dtype=torch.bfloat16)
         self._ops.extract_tail_f32_to_bf16(flat, int(tail_numel), out)
         return out
 
@@ -282,6 +285,49 @@ def run_tail_tests(ops) -> int:
     return count + 1
 
 
+def run_cosmos_edge_contract(ops) -> int:
+    flat_dim = 1_201_920
+    tail_numel = 60 * 64
+    rows, cols, valid_cols = 60, 64, 9
+
+    tail = torch.randn((tail_numel,), device="cuda", dtype=torch.bfloat16)
+    flat = torch.randn((flat_dim,), device="cuda", dtype=torch.float32)
+    matrix = torch.randn((rows, cols), device="cuda", dtype=torch.bfloat16)
+    bias = torch.randn((cols,), device="cuda", dtype=torch.bfloat16)
+    packed = torch.empty((flat_dim,), device="cuda", dtype=torch.bfloat16)
+    extracted = torch.empty((tail_numel,), device="cuda", dtype=torch.bfloat16)
+    biased = torch.empty_like(matrix)
+
+    ops.pack_tail_bf16(tail, flat_dim, out=packed)
+    ops.extract_tail_f32_to_bf16(flat, tail_numel, out=extracted)
+    ops.add_bias_zero_tail_bf16(matrix, bias, valid_cols, out=biased)
+    expected_packed = torch.zeros_like(packed)
+    expected_packed[-tail_numel:] = tail
+    expected_extracted = flat[-tail_numel:].to(torch.bfloat16)
+    expected_biased = (matrix.float() + bias.float()).to(torch.bfloat16)
+    expected_biased[:, valid_cols:] = 0
+    torch.testing.assert_close(packed, expected_packed, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(extracted, expected_extracted, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(biased, expected_biased, rtol=0.0, atol=0.0)
+
+    graph = torch.cuda.CUDAGraph()
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph):
+        ops.pack_tail_bf16(tail, flat_dim, out=packed)
+        ops.extract_tail_f32_to_bf16(flat, tail_numel, out=extracted)
+        ops.add_bias_zero_tail_bf16(matrix, bias, valid_cols, out=biased)
+    graph.replay()
+    torch.cuda.synchronize()
+    first = (packed.clone(), extracted.clone(), biased.clone())
+    graph.replay()
+    torch.cuda.synchronize()
+    second = (packed.clone(), extracted.clone(), biased.clone())
+    for got, expected in zip(second, first):
+        torch.testing.assert_close(got, expected, rtol=0.0, atol=0.0)
+    print("PASS Cosmos3-Edge action-tail contract and CUDA Graph replay")
+    return 4
+
+
 def run_unipc_tests(ops) -> int:
     count = 0
     corrector = (0.75, 0.2, -0.1, 0.05, 0.4)
@@ -379,6 +425,7 @@ def main() -> int:
         run_elementwise_tests(ops)
         + run_video_tests(ops)
         + run_tail_tests(ops)
+        + run_cosmos_edge_contract(ops)
         + run_unipc_tests(ops)
     )
     torch.cuda.synchronize()
