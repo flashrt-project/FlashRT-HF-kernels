@@ -84,8 +84,11 @@ Before pushing a package change that should rebuild Hub artifacts:
    Audit every existing `build/<variant>/metadata.json` provenance SHA as well.
    A default bundle rebuild can leave retired Torch variants untouched. When a
    compatible API is added without a major-version bump, use the workflow's
-   comma-separated `variants` input to rebuild every retained old variant;
-   loading only the newest variant is not a valid release gate.
+   comma-separated `variants` input for variants still listed by the selected
+   builder. A retired variant that the current builder no longer lists must be
+   rebuilt with its pinned historical builder and matching toolchain, or
+   removed from the version branch. Loading only the newest variant is not a
+   valid release gate.
 10. Run `.github/workflows/mirror-kernels-legacy-model.yml` for every new or
    rebuilt package, then verify both the Kernel Hub `v1` ref and the legacy
    model-repo `v1` ref. A successful source upload without compiled build

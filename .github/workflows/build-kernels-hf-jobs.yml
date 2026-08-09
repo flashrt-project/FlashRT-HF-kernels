@@ -121,7 +121,7 @@ on:
           - fused-mlp-megakernels-blackwell
           - masked-mha-runtime
       variants:
-        description: "Optional comma-separated explicit build variants"
+        description: "Optional comma-separated variants supported by the current builder"
         required: false
         default: ""
         type: string
