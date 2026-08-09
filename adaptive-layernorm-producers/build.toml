@@ -30,3 +30,21 @@ src = [
   "csrc/adaln_modulation6.cu",
   "csrc/adaln_modulation6.cuh",
 ]
+
+[kernel.adaptive_layernorm_producers_sm110_fp4]
+backend = "cuda"
+depends = ["torch", "cutlass_4_4"]
+include = ["csrc"]
+cuda-minver = "13"
+cuda-capabilities = ["11.0a"]
+cuda-flags = [
+  "-O3",
+  "--use_fast_math",
+  "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+]
+src = [
+  "csrc/dit_norm_fp4_sfa.cu",
+  "csrc/dit_norm_fp4_sfa.cuh",
+  "csrc/sm110_fp4_dispatch.cu",
+  "csrc/sm110_fp4_dispatch.cuh",
+]

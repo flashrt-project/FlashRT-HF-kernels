@@ -15,11 +15,12 @@ attention call.
 - `default_page_table(num_pages, device="cuda")`
 - `allocate_workspace(q_seq, device="cuda", scratch_mb=256)`
 
-## v2 Shape Contract
+## v3 Shape Contract
 
-The package exposes four validated XQA head profiles:
+The package exposes five validated XQA head profiles:
 
 - `Q/KV/D = 24/4/256`
+- `Q/KV/D = 16/2/256`
 - `Q/KV/D = 32/8/128`
 - `Q/KV/D = 32/16/128`
 - `Q/KV/D = 16/8/128`
@@ -39,7 +40,7 @@ back to a slower reference.
 from kernels import get_kernel
 import torch
 
-attn = get_kernel("flashrt/fp8-kv-attention", version=2, trust_remote_code=True)
+attn = get_kernel("flashrt/fp8-kv-attention", version=3, trust_remote_code=True)
 
 q = torch.randn(1, 24, 256, device="cuda", dtype=torch.bfloat16)
 k_cache = torch.empty(8, 128, 4, 256, device="cuda", dtype=torch.float8_e4m3fn)

@@ -17,6 +17,10 @@ Hugging Face Kernel Hub. The v5 API extends the model-neutral parameterized
 `Hv/Hk` producer and fused recurrent prefill path. Validated profiles include
 `Hv/Hk/D=48/16/128` and `32/16/128`.
 
+Native CUDA artifacts cover SM110 (Jetson AGX Thor) and SM120 Blackwell. The
+package contains the complete H32/H16 WY chain; it does not rely on a Python or
+host fallback for that profile.
+
 ## Available functions
 
 - `gated_delta_recurrent_bf16`

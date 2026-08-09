@@ -906,6 +906,7 @@ def main() -> None:
     if args.shapes in ("smoke", "all"):
         results.append(run_joint3(ops, "joint3_small", 64, 8, 4, 8, 128, args))
         results.append(run_kvcache_gqa(ops, "pi05_decoder_gqa_kvcache", 1, 10, 8, 1, 256, args))
+        results.append(run_kvcache_gqa(ops, "pi05_thor_decoder_gqa_kvcache", 1, 50, 8, 1, 256, args))
     if args.shapes in ("headline", "all"):
         results.append(run_joint3(ops, "joint3_vla", 2520, 16, 16, 24, 128, args))
         results.append(run_decode_q(ops, "decode_q_stage_h24", 24, args))
@@ -913,6 +914,7 @@ def main() -> None:
         results.append(run_decode_kv(ops, "decode_kvwrite_devpos_h8", 8, True, args))
     if args.shapes == "headline":
         results.append(run_kvcache_gqa(ops, "pi05_decoder_gqa_kvcache", 1, 10, 8, 1, 256, args))
+        results.append(run_kvcache_gqa(ops, "pi05_thor_decoder_gqa_kvcache", 1, 50, 8, 1, 256, args))
 
     for r in results:
         print(

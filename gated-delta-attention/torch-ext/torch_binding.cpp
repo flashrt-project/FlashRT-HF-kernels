@@ -421,8 +421,11 @@ void gated_delta_recurrent_sequence_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(q.device());
   auto* props = at::cuda::getDeviceProperties(q.get_device());
-  TORCH_CHECK(props->major == 12 && props->minor == 0,
-              "gated_delta_recurrent_sequence_bf16 requires SM120; got SM",
+  const bool supported_blackwell =
+      (props->major == 11 && props->minor == 0) ||
+      (props->major == 12 && props->minor == 0);
+  TORCH_CHECK(supported_blackwell,
+              "gated_delta_recurrent_sequence_bf16 requires SM110 or SM120; got SM",
               props->major, props->minor);
   auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
   const int rc = flash_rt::kernels::gdn_recurrent_seq_sm120_bf16(

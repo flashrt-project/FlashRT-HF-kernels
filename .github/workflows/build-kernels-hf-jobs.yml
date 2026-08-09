@@ -30,6 +30,7 @@ on:
       - "fp8-gemm/**"
       - "fp4-fused-ops/**"
       - "fp4-gemm/**"
+      - "fa4-cute-runtime/**"
       - "fp8-kv-attention/**"
       - "causal-conv1d-state/**"
       - "gated-delta-attention/**"
@@ -56,6 +57,7 @@ on:
       - "audio-codebook-primitives/**"
       - "fp8-cross-attention-blackwell/**"
       - "fused-mlp-megakernels-blackwell/**"
+      - "masked-mha-runtime/**"
   workflow_dispatch:
     inputs:
       package:
@@ -90,6 +92,7 @@ on:
           - fp8-gemm
           - fp4-fused-ops
           - fp4-gemm
+          - fa4-cute-runtime
           - fp8-kv-attention
           - causal-conv1d-state
           - gated-delta-attention
@@ -116,6 +119,7 @@ on:
           - audio-codebook-primitives
           - fp8-cross-attention-blackwell
           - fused-mlp-megakernels-blackwell
+          - masked-mha-runtime
 
 permissions:
   contents: read
@@ -157,6 +161,7 @@ jobs:
           - fp8-gemm
           - fp4-fused-ops
           - fp4-gemm
+          - fa4-cute-runtime
           - fp8-kv-attention
           - causal-conv1d-state
           - gated-delta-attention
@@ -182,6 +187,7 @@ jobs:
           - audio-codebook-primitives
           - fp8-cross-attention-blackwell
           - fused-mlp-megakernels-blackwell
+          - masked-mha-runtime
 
     steps:
       - uses: actions/checkout@v4

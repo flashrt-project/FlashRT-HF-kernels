@@ -1,5 +1,25 @@
 # fp4-gemm Benchmark Results
 
+## SM110 Bias Epilogue Dispatch (2026-08-07)
+
+Source RC on NVIDIA Thor, Torch `2.11.0+cu130`, CUDA 13.0. Timings are from
+the final public APIs with preallocated outputs, 20 warmup iterations, 100
+measured iterations, and the median of five CUDA-event rounds. The prior
+column is the former fixed `128x64x256` tile measured by the same harness.
+
+| Shape `(M,N,K)` | Family | Prior us | Tuned us | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| `(41,6144,1536)` | bias | 20.727 | 15.540 | 1.334x |
+| `(41,6144,1536)` | bias+residual | 22.668 | 16.519 | 1.372x |
+| `(41,6144,1536)` | bias+GELU->FP4 | 22.648 | 16.533 | 1.370x |
+| `(41,1536,6144)` | bias | 20.620 | 14.477 | 1.424x |
+| `(41,1536,6144)` | bias+residual | 20.650 | 15.249 | 1.354x |
+| `(41,1536,6144)` | bias+GELU->FP4 | 20.900 | 16.084 | 1.299x |
+
+The final dispatch uses the `K=128` tile for the small-K residual path and the
+short-M expanding GELU path; other rows use the `K=256` tile. Correctness and
+model-shape acceptance are documented separately in `VALIDATION.md`.
+
 Installed kernel-builder artifact benchmark on NVIDIA GeForce RTX 5090,
 PyTorch `2.11.0+cu128`.
 
@@ -55,3 +75,46 @@ The direct entry is byte-exact against the package's established
 BF16-to-FP16 plus FP16-producer contract. The native timing is reported as a
 performance reference only because that producer uses a distinct quantization
 strategy.
+
+## NVIDIA Thor GROOT N1.7 artifact
+
+The SM110 additions from FlashRT
+`24df793f4fa2d50780aea03b644208c6e0cb4162` were rebuilt on NVIDIA Thor with
+PyTorch 2.13.0+cu130 as `torch213-cxx11-cu130-aarch64-linux`. The installed
+artifact passed 23/23 checks; BF16-to-FP4 output was exact and the fullgraph
+compile path had `max_abs=0`.
+
+The FP4 quantizer Tensor wrapper/raw registered-op measurement was
+`5.5812/5.0712 us` in direct mode. This eager delta includes Python-side
+allocation and dispatch. With caller-owned buffers under CUDA Graph, the
+measurement was `3.2988/3.3003 us` (`0.9995x`), which is the production GROOT
+hot-path contract.
+
+## PI0.5 Thor Batch 3 BF16 schedules
+
+Source release candidate on NVIDIA Jetson AGX Thor, PyTorch `2.13.0+cu130`,
+CUDA 13.0. The package BF16 Tensor API is compared with the corresponding
+FlashRT native FP16 v7/v10 or FP4-output launcher using preallocated buffers,
+CUDA Graph replay, A-B-B-A ordering, and the minimum of repeated runs. This is
+a schedule/parity gate across two input dtypes, not a claim that BF16 and FP16
+have identical arithmetic contracts.
+
+| Shape/family | Tile | Hub us | Native us | Hub/native |
+| --- | ---: | ---: | ---: | ---: |
+| decoder QKV `(10,2560,1024)` | v10 | 10.286 | 10.279 | 1.001x |
+| decoder O `(10,1024,2048)` | v10 | 10.222 | 9.907 | 1.032x |
+| decoder gate/up `(10,8192,1024)` | v10 | 20.515 | 20.516 | 1.000x |
+| decoder down `(10,1024,4096)` | v10 | 11.333 | 11.308 | 1.002x |
+| encoder gate/up `(576,16384,2048)` | v7 | 283.417 | 276.545 | 1.025x |
+| encoder gate/up `(970,16384,2048)` | v7 | 376.212 | 373.363 | 1.008x |
+| encoder down `(576,2048,16384)` | v7 | 170.183 | 167.915 | 1.014x |
+| SigLIP `(512,4304,1152)` | v7 | 26.785 | 30.475 | 0.879x |
+| SigLIP `(768,4304,1152)` | v7 | 34.984 | 34.996 | 1.000x |
+| decoder O FP4-output `(10,1024,2048)` | native | 10.244 | 10.262 | 0.998x |
+
+The strict source gate passed `72/72` and covers both ends of the decoder
+`M=10..64` and encoder `M=576..970` bands. All BF16-output GEMM shapes are
+checked against GEMM over the same dequantized inputs. FP4-output reached
+cosine `0.995382`; the
+bind-time MSE packer reduced reconstruction MSE from `0.000570887` to
+`0.000449985`. BF16 v7/v10 and FP4-output CUDA Graph replay were bit-identical.

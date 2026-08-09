@@ -427,6 +427,8 @@ class InstalledOps:
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if major == 11 and minor == 0:
+        return "11.0a"
     if major == 12 and minor == 1:
         return "12.1"
     if major >= 12:
@@ -740,6 +742,15 @@ def run_h32_wy_poisoned_tail(ops) -> None:
         raise AssertionError("H32 WY output must ignore poisoned packed-Q tail")
 
 
+def run_h32_wy_single_chunk_stress(ops) -> None:
+    # NT=1 exercises the cp.async pipeline boundary where there is no next
+    # stage to keep in flight. Repetition makes a missing wait deterministic.
+    for _ in range(20):
+        row = run_case(ops, "wy_mma_fla_h32_s64")
+        if not row.passed:
+            raise AssertionError(f"H32 WY single-chunk stress failed: {row}")
+
+
 def run_h32_contract_checks(ops) -> None:
     S, Hv, Hk = 4, 32, 16
     conv, a, b, neg, dt, state = make_conv_inputs_h(S, Hv, Hk, 444444)
@@ -979,6 +990,7 @@ def main() -> int:
         run_h32_graph(ops)
         run_h32_wy_graph(ops)
         run_h32_wy_poisoned_tail(ops)
+        run_h32_wy_single_chunk_stress(ops)
         run_h32_contract_checks(ops)
         if args.backend == "installed":
             run_h32_wy_compile(ops)

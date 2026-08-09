@@ -16,6 +16,10 @@ without exposing raw pointer APIs:
 - `bf16_fp8_gelu_mlp_bf16`: BF16 region entry that performs the static input
   quantization and the complete FP8 GELU MLP behind one traceable custom-op
   boundary.
+- `fp8_gelu_mlp_v2_bf16`: additive v2 entry that fuses the down-projection
+  bias into the cuBLASLt FP32-accumulator epilogue when supported.
+- `bf16_fp8_gelu_mlp_v2_bf16`: BF16-input twin of the v2 entry, with the same
+  static padding and caller-owned scratch-buffer contract as v1.
 
 The API is generic. PI0.5/GROOT/Wan-shaped demos live outside the package.
 
@@ -64,7 +68,7 @@ dn_scale = torch.tensor([0.04], device="cuda")
 w_up_fp8 = torch.clamp(w_up.float() / up_scale, -448, 448).to(torch.float8_e4m3fn)
 w_dn_fp8 = torch.clamp(w_dn.float() / dn_scale, -448, 448).to(torch.float8_e4m3fn)
 
-y = ops.bf16_fp8_gelu_mlp_bf16(
+y = ops.bf16_fp8_gelu_mlp_v2_bf16(
     x,
     w_up_fp8,
     torch.zeros((4096,), device="cuda", dtype=torch.bfloat16),
@@ -118,6 +122,13 @@ The package registers a fake implementation for `torch.compile`. A static
 region with preallocated scratch passes `torch.compile(fullgraph=True)` and
 explicit CUDA Graph replay in the package correctness gate.
 
+The v2 MLP entries intentionally preserve the v1 symbols. Their fused bias is
+applied before the final BF16 rounding, while v1 rounds the GEMM result before
+the standalone bias add. Validation therefore checks v2 against the fused
+FP32-accumulator reference and separately reports the expected adjacent-BF16-
+bin difference from v1. Set `FLASHRT_FP8_FFN_REQUIRE_BIAS_EPILOGUE=1` in a
+validation process to fail fast instead of accepting the runtime fallback.
+
 ## Validation
 
 Run from the repository root:
@@ -130,6 +141,7 @@ python flashrt-fp8-ffn/benchmarks/benchmark_bf16_entry.py \
   --backend source --shapes all --compile-baseline
 python flashrt-fp8-ffn/benchmarks/benchmark_linear_bias.py \
   --backend source --shapes all --compile-baseline --compare-fvk
+python flashrt-fp8-ffn/benchmarks/benchmark_mlp_v2.py --backend source
 ```
 
 The package benchmark is reported against the PyTorch eager FP8 reference and a

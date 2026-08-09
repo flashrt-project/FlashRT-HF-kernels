@@ -1,5 +1,31 @@
 # Benchmark Results: flashrt-fp8-ffn
 
+## Fused Down-Bias MLP v2 Source RC (2026-08-07)
+
+The additive v2 entries move the down-projection bias into the cuBLASLt BIAS
+epilogue. `FLASHRT_FP8_FFN_REQUIRE_BIAS_EPILOGUE=1` was enabled during the
+fused-hit probe, so these rows cannot be fallback timings. Buffers were
+preallocated; timings use CUDA events and the median of five rounds after 20
+warmup iterations.
+
+| Device | Shape `(M,K,H,N)` | v1 us | v2 us | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| RTX 5090, Torch 2.9.1+cu128 | `(128,1024,4096,1024)` | 18.492 | 16.441 | 1.125x |
+| RTX 5090, Torch 2.9.1+cu128 | `(128,4096,4096,2048)` | 30.762 | 30.217 | 1.018x |
+| RTX 5090, Torch 2.9.1+cu128 | `(41,1536,6144,1536)` | 22.579 | 20.536 | 1.100x |
+| RTX 5090, Torch 2.9.1+cu128 | `(10,1024,4096,1024)` | 16.438 | 14.395 | 1.142x |
+| NVIDIA Thor, Torch 2.11+cu130 | `(128,1024,4096,1024)` | 32.653 | 26.940 | 1.212x |
+| NVIDIA Thor, Torch 2.11+cu130 | `(128,4096,4096,2048)` | 60.234 | 53.530 | 1.125x |
+| NVIDIA Thor, Torch 2.11+cu130 | `(41,1536,6144,1536)` | 36.608 | 33.915 | 1.079x |
+| NVIDIA Thor, Torch 2.11+cu130 | `(10,1024,4096,1024)` | 19.786 | 16.760 | 1.181x |
+
+Full source correctness passed on both devices. The Thor gate includes the
+complete model-shape matrix, fullgraph compile, and CUDA Graph replay. V2 was
+checked against the fused FP32-accumulator reference; v1-to-v2 p99 relative
+error stayed below `0.01` and cosine above `0.9999`. The older linear+bias
+section below records a previous descriptor/stack where the epilogue fell
+back; it is historical and does not describe this corrected v2 descriptor.
+
 ## FP8 Linear + Bias: RTX 5090 Source RC (2026-07-18)
 
 - Torch: `2.9.0a0+145a3a7bda.nv25.10`; CUDA 13 container.

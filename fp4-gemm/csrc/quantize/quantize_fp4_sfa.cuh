@@ -27,6 +27,12 @@ int quantize_fp4_dynamic_sfa_fp16(
     int N, int D, bool is_sfb,
     cudaStream_t stream);
 
+// Weight-pack path: choose the per-16 UE4M3 scale from a compact candidate
+// set by minimizing FP4 reconstruction MSE.
+int quantize_fp4_dynamic_sfa_mse_fp16(
+    const void* src_fp16, void* dst_packed, void* dst_sfa,
+    int N, int D, bool is_sfb, cudaStream_t stream);
+
 // BF16 [N, D] -> the exact same packed E2M1 + CUTLASS SFA/SFB layout as the
 // FP16 entry. This avoids a standalone BF16-to-FP16 conversion in decode
 // pipelines whose activations are already BF16.

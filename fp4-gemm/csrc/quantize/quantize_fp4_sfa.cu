@@ -7,29 +7,14 @@
 //  byte goes to a different location.
 // ============================================================================
 #include "quantize_fp4_sfa.cuh"
+#include "sfa_layout.cuh"
 
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
-#ifndef CUTLASS_ARCH_MMA_SM100_SUPPORTED
-#  define CUTLASS_ARCH_MMA_SM100_SUPPORTED 1
-#endif
-#if defined(CUTLASS_ARCH_MMA_SM100_SUPPORTED) || defined(__CUDA_ARCH__)
-#  include "cutlass/cutlass.h"
-#  include "cutlass/detail/sm100_blockscaled_layout.hpp"
-#  include "cute/tensor.hpp"
-#  define FV_HAVE_CUTLASS 1
-#else
-#  define FV_HAVE_CUTLASS 0
-#endif
-
 namespace flash_rt {
 namespace fp4 {
-
-#if FV_HAVE_CUTLASS
-
-using Cfg = cutlass::detail::Sm1xxBlockScaledConfig<16>;
 
 // ── Device helpers (duplicated locally to stay additive — not linking against
 //    quantize_fp4_dynamic.cu so we don't risk ODR issues). Identical logic. ──
@@ -46,6 +31,12 @@ __device__ __forceinline__ uint8_t fp32_to_e2m1_sfa(float x) {
     else if (ax <= 5.0f)  mant = 6u;
     else                  mant = 7u;
     return sign | mant;
+}
+
+__device__ __forceinline__ float e2m1_to_fp32_sfa(uint8_t value) {
+    static constexpr float table[8] = {0.f, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f};
+    const float magnitude = table[value & 0x7u];
+    return (value & 0x8u) ? -magnitude : magnitude;
 }
 
 __device__ __forceinline__ __nv_fp8_e4m3 quantize_ue4m3_sfa(float x) {
@@ -68,12 +59,11 @@ __device__ __forceinline__ float input_to_float(__nv_bfloat16 value) {
 // ── Fused kernel ──
 // One thread per (row, 16-element block). Scale byte goes to
 // dst_sfa[layout(row, block_idx*16, 0)].
-template <typename Input, class LayoutSF>
+template <typename Input>
 __global__ void kernel_quantize_fp4_sfa(
     const Input* __restrict__ src,
     uint8_t* __restrict__ dst_packed,
     uint8_t* __restrict__ dst_sfa,   // raw byte view of the CUTLASS SFA/SFB buffer
-    LayoutSF layout,
     int N, int D) {
   const int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
   const int row       = blockIdx.y;
@@ -96,10 +86,9 @@ __global__ void kernel_quantize_fp4_sfa(
   float bs_dq        = dequantize_ue4m3_sfa(bs_q);
 
   // ── CORE FUSION: direct SFA tile-layout write ──
-  // LayoutSF maps (row, k, L=0) → byte offset. k is the full-K coordinate;
-  // SFVecSize=16 is baked in so any k in [block*16, block*16+15] hits the
-  // same offset. Use block_idx*16 (same convention as reshape_scales_sfa.cu).
-  int sfa_off = layout(row, block_idx * 16, 0);
+  // The shared integer helper is the exact CUTLASS SFA/SFB mapping. K is the
+  // full coordinate, with one scale byte per 16-element block.
+  const int sfa_off = sfa_offset_128x64(row, block_idx * 16, D);
   dst_sfa[sfa_off] = *reinterpret_cast<uint8_t*>(&bs_q);
 
   // Packed fp4 elements: layout unchanged.
@@ -115,79 +104,123 @@ __global__ void kernel_quantize_fp4_sfa(
   }
 }
 
-#endif  // FV_HAVE_CUTLASS
+
+__global__ void kernel_quantize_fp4_sfa_mse_fp16(
+    const __half* __restrict__ src,
+    uint8_t* __restrict__ dst_packed,
+    uint8_t* __restrict__ dst_sfa,
+    int N, int D) {
+  const int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  const int row = blockIdx.y;
+  const int n_blocks = D / 16;
+  if (row >= N || block_idx >= n_blocks) return;
+
+  const int base = row * D + block_idx * 16;
+  float values[16];
+  float amax = 0.f;
+  #pragma unroll
+  for (int i = 0; i < 16; ++i) {
+    values[i] = __half2float(src[base + i]);
+    amax = fmaxf(amax, fabsf(values[i]));
+  }
+
+  constexpr float multipliers[9] = {
+      .375f, .5f, .625f, .75f, .875f, 1.f, 1.125f, 1.25f, 1.5f};
+  float best_error = INFINITY;
+  __nv_fp8_e4m3 best_scale = __nv_fp8_e4m3(1e-12f);
+  #pragma unroll
+  for (int candidate = 0; candidate < 9; ++candidate) {
+    const __nv_fp8_e4m3 scale_q = quantize_ue4m3_sfa(
+        fmaxf(amax * (1.f / 6.f) * multipliers[candidate], 1e-12f));
+    const float scale = dequantize_ue4m3_sfa(scale_q);
+    const float inverse = 1.f / scale;
+    float error = 0.f;
+    #pragma unroll
+    for (int i = 0; i < 16; ++i) {
+      const uint8_t q = fp32_to_e2m1_sfa(values[i] * inverse);
+      const float delta = e2m1_to_fp32_sfa(q) * scale - values[i];
+      error += delta * delta;
+    }
+    if (error < best_error) {
+      best_error = error;
+      best_scale = scale_q;
+    }
+  }
+
+  const float inverse = 1.f / dequantize_ue4m3_sfa(best_scale);
+  dst_sfa[sfa_offset_128x64(row, block_idx * 16, D)] =
+      *reinterpret_cast<uint8_t*>(&best_scale);
+  const int out_base = row * (D / 2) + block_idx * 8;
+  #pragma unroll
+  for (int pair = 0; pair < 8; ++pair) {
+    const uint8_t lo = fp32_to_e2m1_sfa(values[2 * pair] * inverse);
+    const uint8_t hi = fp32_to_e2m1_sfa(values[2 * pair + 1] * inverse);
+    dst_packed[out_base + pair] = static_cast<uint8_t>(lo | (hi << 4));
+  }
+}
 
 int quantize_fp4_dynamic_sfa_fp16(
     const void* src_fp16, void* dst_packed, void* dst_sfa,
     int N, int D, bool is_sfb, cudaStream_t stream) {
-#if FV_HAVE_CUTLASS
   if (D % 16 != 0) return -1;
   const int n_blocks = D / 16;
   const int threads = 128;
   dim3 grid((n_blocks + threads - 1) / threads, N);
   dim3 block(threads);
 
-  // Shape: SFA uses (M=N, 1, K=D, L=1); SFB uses (1, N=N, K=D, L=1).
-  auto shape = cute::make_shape(
-      is_sfb ? 1 : N,
-      is_sfb ? N : 1,
-      D, 1);
-
   if (is_sfb) {
-    auto layout = Cfg::tile_atom_to_shape_SFB(shape);
     kernel_quantize_fp4_sfa<__half><<<grid, block, 0, stream>>>(
         reinterpret_cast<const __half*>(src_fp16),
         reinterpret_cast<uint8_t*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
-        layout, N, D);
+        N, D);
   } else {
-    auto layout = Cfg::tile_atom_to_shape_SFA(shape);
     kernel_quantize_fp4_sfa<__half><<<grid, block, 0, stream>>>(
         reinterpret_cast<const __half*>(src_fp16),
         reinterpret_cast<uint8_t*>(dst_packed),
         reinterpret_cast<uint8_t*>(dst_sfa),
-        layout, N, D);
+        N, D);
   }
   cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);
-#else
-  (void)src_fp16; (void)dst_packed; (void)dst_sfa;
-  (void)N; (void)D; (void)is_sfb; (void)stream;
-  return -2;
-#endif
 }
 
 int quantize_fp4_dynamic_sfa_bf16(
     const void* src_bf16, void* dst_packed, void* dst_sfa,
     int N, int D, bool is_sfb, cudaStream_t stream) {
-#if FV_HAVE_CUTLASS
   if (D % 16 != 0) return -1;
   const int n_blocks = D / 16;
   const int threads = 128;
   dim3 grid((n_blocks + threads - 1) / threads, N);
   dim3 block(threads);
-  auto shape = cute::make_shape(is_sfb ? 1 : N, is_sfb ? N : 1, D, 1);
-
   if (is_sfb) {
-    auto layout = Cfg::tile_atom_to_shape_SFB(shape);
     kernel_quantize_fp4_sfa<__nv_bfloat16><<<grid, block, 0, stream>>>(
         reinterpret_cast<const __nv_bfloat16*>(src_bf16),
         reinterpret_cast<uint8_t*>(dst_packed),
-        reinterpret_cast<uint8_t*>(dst_sfa), layout, N, D);
+        reinterpret_cast<uint8_t*>(dst_sfa), N, D);
   } else {
-    auto layout = Cfg::tile_atom_to_shape_SFA(shape);
     kernel_quantize_fp4_sfa<__nv_bfloat16><<<grid, block, 0, stream>>>(
         reinterpret_cast<const __nv_bfloat16*>(src_bf16),
         reinterpret_cast<uint8_t*>(dst_packed),
-        reinterpret_cast<uint8_t*>(dst_sfa), layout, N, D);
+        reinterpret_cast<uint8_t*>(dst_sfa), N, D);
   }
   cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);
-#else
-  (void)src_bf16; (void)dst_packed; (void)dst_sfa;
-  (void)N; (void)D; (void)is_sfb; (void)stream;
-  return -2;
-#endif
+}
+
+int quantize_fp4_dynamic_sfa_mse_fp16(
+    const void* src_fp16, void* dst_packed, void* dst_sfa,
+    int N, int D, bool is_sfb, cudaStream_t stream) {
+  (void)is_sfb;  // SFA/SFB use the same integer mapping for this 2-D contract.
+  if (D % 16 != 0) return -1;
+  constexpr int threads = 128;
+  dim3 grid((D / 16 + threads - 1) / threads, N);
+  kernel_quantize_fp4_sfa_mse_fp16<<<grid, threads, 0, stream>>>(
+      reinterpret_cast<const __half*>(src_fp16),
+      reinterpret_cast<uint8_t*>(dst_packed),
+      reinterpret_cast<uint8_t*>(dst_sfa), N, D);
+  const cudaError_t error = cudaGetLastError();
+  return error == cudaSuccess ? 0 : -static_cast<int>(error);
 }
 
 }  // namespace fp4

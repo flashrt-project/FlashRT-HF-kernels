@@ -8,14 +8,19 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 - `sfa_size_bytes`
 - `quantize_fp4_sfa_fp16`
 - `quantize_fp4_sfa_bf16`
+- `quantize_e0m3_sfa_fp16`
 - `dequantize_fp4_sfa_fp16`
 - `nvfp4_gemm_bf16`
+- `nvfp4_gemm_bias_bf16`
+- `nvfp4_gemm_bias_residual_bf16`
 - `nvfp4_gemm_residual_bf16`
 - `nvfp4_gemm_bias_gelu_bf16`
 - `nvfp4_gemm_bias_gelu_nvfp4`
 - `nvfp4_gemm_streamk_bf16`
 - `nvfp4_gemm_streamk_bias_bf16`
 - `fp4_w4a16_linear_bf16` (compatibility alias)
+- `e0m3_weight_gemm_fp16`
+- `nvfp4_gemm_relu2_nvfp4`
 
 ## Example
 
@@ -49,4 +54,5 @@ a, sfa = ops.quantize_fp4_sfa_bf16(x)
 - `variant=-1` is the architecture-aware production auto-dispatch;
   `variant=0/1/2` expose diagnostic default, widen, and pingpong schedules.
 - The canonical BF16-output GEMM and FP4 pack/unpack helpers support SM110 and
-  SM120. Fused GEMM epilogues remain SM120-only and reject explicitly on SM110.
+  SM120. SM110 also supports bias, bias+residual, and bias+GELU-to-FP4
+  production epilogues used by the GROOT N1.7 Thor pipeline.

@@ -44,6 +44,9 @@ from test_fp8_kv_attention import (  # noqa: E402
 WORKLOADS = {
     "qwen36_decode_1024": ("qwen36", 1, 1024),
     "qwen36_verify8_4096": ("qwen36", 8, 4096),
+    "gqa16_kv2_decode_1024": ("gqa16_kv2", 1, 1024),
+    "gqa16_kv2_verify8_4096": ("gqa16_kv2", 8, 4096),
+    "gqa16_kv2_verify8_32768": ("gqa16_kv2", 8, 32768),
     "qwen3_vl_decode_1024": ("qwen3_vl", 1, 1024),
     "qwen3_vl_verify8_4096": ("qwen3_vl", 8, 4096),
     "qwen3_vl_verify8_32768": ("qwen3_vl", 8, 32768),
@@ -58,6 +61,7 @@ MODES = {
     "smoke": ["qwen3_vl_decode_1024"],
     "headline": [
         "qwen36_verify8_4096",
+        "gqa16_kv2_verify8_4096",
         "qwen3_vl_verify8_4096",
         "cosmos_edge_verify8_4096",
         "gqa32_kv16_verify8_4096",
@@ -92,6 +96,7 @@ def build_native():
             str(PACKAGE / "csrc/xqa_mha_configured.cu"),
             str(PACKAGE / "csrc/xqa_bf16_fp8kv.cu"),
             str(PACKAGE / "csrc/xqa_mha_d128.cu"),
+            str(PACKAGE / "csrc/xqa_mha_d256_g8.cu"),
         ],
         extra_include_paths=[
             str(PACKAGE / "csrc"),

@@ -25,7 +25,7 @@ the Kernel Hub artifact matrix.
 
 The installed full gate additionally requires:
 
-- bit-identical CUDA Graph replay for `32Q/16KV/D128`;
+- bit-identical CUDA Graph replay for `32Q/16KV/D128` and `16Q/2KV/D256`;
 - `torch.compile(fullgraph=True)` parity with the eager public wrapper;
 - both explicit static launch metadata and the cached default `sm_count=0`
   path within 5% or 0.75 us of the raw native binding.
@@ -60,8 +60,11 @@ Rows:
 | gqa32_kv16_verify4_4096 | 4 | 4096 | 0.000031 | 0.000004 | 0.000015 | 0.99999201 | PASS |
 | gqa32_kv16_verify8_32768 | 8 | 32768 | 0.000015 | 0.000001 | 0.000008 | 0.99999171 | PASS |
 
-The full gate also captures and replays the `32/16/128`, q-seq 4,
-context-4096 path and requires bit-identical output.
+The full gate also captures and replays both the `32/16/128` and
+`16/2/256`, q-seq 4, context-4096 paths and requires bit-identical output.
+
+The `16/2/256` profile uses a dedicated group-size-8 CUDA instantiation. It is
+not an alias of the existing `24/4/256` group-size-6 image.
 
 ## Generated Pyproject Build Smoke
 

@@ -22,6 +22,14 @@ Result:
 - RTX 5090 SM120 full gate: `46/46` checks passed.
 - Jetson AGX Thor SM110 model-shape gate: `58/58` checks passed across PI0.5,
   GROOT, Cosmos Edge, and LingBot VLA rows.
+- The 2026-08-06 Thor rerun includes the additive E0M3 AdaRMS, gated-residual
+  AdaRMS, and GELU-multiply producers plus the Cosmos Edge residual-RMS and
+  ReLU-squared NVFP4 producers. E0M3 packed/SFA outputs were deterministic,
+  residual updates and gates were exact, and all CUDA Graph checks passed.
+- BF16 AdaRMS and gated-residual AdaRMS twins are checked at rows
+  `1/10/51/105`, `dim=1024`. Tests require exact BF16 residual/gate values,
+  the documented NVFP4 dequantization envelope, and bit-identical CUDA Graph
+  replay for the production rows=10 case.
 
 Representative correctness envelope from the full run:
 

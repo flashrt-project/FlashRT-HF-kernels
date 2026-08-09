@@ -4,6 +4,16 @@ FlashRT native CUDA grouped expert projection kernels for Blackwell decode and
 small verify batches. Version 2 adds W4A4 with device-side top-k routing while
 preserving the version 1 W4A16 APIs.
 
+## Hardware Backends
+
+- SM110 (Jetson AGX Thor): W4A16 decode and grouped expert GEMV use the
+  FlashRT edge backend validated by FlashRT PR #169. This target is compiled
+  independently with `FLASHRT_W4A16_EDGE_UNROLL=2`; the SM120 value remains 4.
+- SM120/SM121: W4A16 and block-scaled-MMA W4A4 paths are available.
+- W4A4 is intentionally rejected on SM110 because that implementation uses
+  the SM120 block-scaled MMA path. It never silently falls back or launches an
+  incompatible cubin.
+
 ## Functions
 
 - `w4a16_decode_gemv_bf16(x_bf16, weight_packed, sfb, alpha=1.0, out=None)`
@@ -17,7 +27,7 @@ The grouped API runs one BF16-activation x NVFP4-weight GEMV per routed slot.
 It is intended for static routed expert batches where the caller already owns
 packed weights and swizzled scale-factor buffers.
 
-The W4A4 API accepts packed activations `[M,K/2]`, expert weights
+On SM120/SM121, the W4A4 API accepts packed activations `[M,K/2]`, expert weights
 `[E,N,K/2]`, and a contiguous device routing tensor `[M,top_k]`. It emits
 `[M,top_k,N]` in one grouped compute launch. For down projections with a
 different activation per routed pair, flatten to `M=routed_pairs, top_k=1`.

@@ -66,6 +66,17 @@ Required before publishing this package:
 
 ## Local validation log
 
+2026-08-06:
+
+- The expanded source gate passed on NVIDIA Thor (SM110), PyTorch
+  `2.13.0+cu130`, and CUDA 13.0.
+- `qkv_split_rope_kvcache_fp16` and its CUDA-device-position form passed the
+  PI0.5 D256 static-cache rows. Worst p99 absolute error was `0.005859`, worst
+  cosine was `0.99999857`, V-cache writes were exact, and graph replay was
+  bitwise deterministic.
+- `qk_norm_rope_strided_bf16` passed the Cosmos Edge row with Q/K p99 absolute
+  error `0.015625`, cosine at least `0.99999559`, and bitwise graph replay.
+
 2026-07-30:
 
 - `qkv_split_bias_rope_bf16` passed full source correctness for head dimensions

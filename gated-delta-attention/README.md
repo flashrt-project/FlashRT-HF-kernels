@@ -53,14 +53,14 @@ The package supports two validated linear-attention producer profiles:
 The v5 API covers both decode recurrence and linear-attention prefill/WY
 building blocks. It does not package generic FlashAttention.
 
-`gated_delta_recurrent_sequence_bf16` scans `(S,H,128)` in one SM120
+`gated_delta_recurrent_sequence_bf16` scans `(S,H,128)` in one SM110/SM120
 launch. Its recurrent state remains FP32 inside the scan and is converted to
 the caller's BF16 `state` tensor only once at the end. This differs from the
 legacy chunk contract, which rounds state to BF16 after each token.
 
 The v3 FLA-style MMA path requires NVIDIA `sm_80+` because it uses BF16
 `mma.sync` instructions. The package build targets Ampere, Ada, Hopper, and
-Blackwell CUDA capabilities.
+Blackwell CUDA capabilities, including the native `sm_110a` Thor artifact.
 
 ## Usage
 

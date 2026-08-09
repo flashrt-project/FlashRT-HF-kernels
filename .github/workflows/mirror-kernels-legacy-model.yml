@@ -30,6 +30,7 @@ on:
           - flashrt-vla-video
           - fp4-fused-ops
           - fp4-gemm
+          - fa4-cute-runtime
           - fp8-gemm
           - fp8-kv-attention
           - gated-delta-attention
@@ -95,6 +96,7 @@ jobs:
           - flashrt-vla-video
           - fp4-fused-ops
           - fp4-gemm
+          - fa4-cute-runtime
           - fp8-gemm
           - fp8-kv-attention
           - gated-delta-attention

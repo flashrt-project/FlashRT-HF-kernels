@@ -125,3 +125,20 @@ is retained explicitly and is not used for a native-parity claim.
 The installed artifact selected the fastest validated tactic on every row;
 worst auto/fastest-valid-tile was 1.0028. Source-to-artifact packaging parity
 passed with median 0.9986, p95 1.0195, and max 1.0244.
+
+## PI0.5 Thor Prefill and BF16 Bias Update
+
+Source gate rerun August 8, 2026 on NVIDIA Thor, PyTorch 2.13.0+cu130:
+
+- correctness: `39/39`, `fail_count=0`;
+- plain FP8 GEMM outputs were bitwise equal to the reference across the
+  `M=65..1024` band;
+- PI0.5 prefill QKV/O/gate-up/down auto dispatch was within 2% of the fastest
+  valid Sq/T1/Wide package tile and the original FlashRT native entry;
+- all 11 BF16 bias, bias+residual, and bias+GELU checks passed;
+- bias-only output was exact; residual p99 was at most one BF16 step; tanh-GELU
+  p99 was at most `3.8147e-6`, with cosine at least `0.999995`.
+
+The down-projection bias family uses a CUTLASS Wide fused epilogue while other
+SigLIP shapes use the faster cuBLASLt path. The dispatcher preserves the
+public row-major `(N,K)` weight contract.

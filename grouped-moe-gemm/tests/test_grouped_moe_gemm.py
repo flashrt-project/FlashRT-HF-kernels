@@ -68,6 +68,9 @@ def _run_cases(ops):
         (64, 64, 64, 2, 3),
         (64, 128, 256, 2, 3),
         (64, 1024, 2048, 1, 2),
+        # 35B-A3B prefill expert gate/up and down projections.
+        (64, 1024, 2048, 2, 4),
+        (64, 2048, 512, 2, 4),
     ]
     for tr, n, k, tiles, experts in cases:
         rows = tr * tiles
@@ -135,16 +138,20 @@ def _run_cases(ops):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--backend", choices=["source", "installed"], default="source")
-    p.add_argument("--artifact", default=None)
+    p.add_argument("--backend", choices=("source", "installed"), default="source")
+    p.add_argument("--artifact")
     p.add_argument("--registration-include")
     a = p.parse_args()
-    if a.backend == "installed":
+    if a.backend == "source":
+        loaded = load_source_ops(a.registration_include)
+        run(loaded, force_simt=False)
+        run(loaded, force_simt=True)
+    else:
         if a.artifact:
             sys.path.insert(0, a.artifact)
-        ops = importlib.import_module("grouped_moe_gemm")
-        sys.path.pop(0)
-        run(ops, force_simt=False)
-    else:
-        run(load_source_ops(a.registration_include), force_simt=False)
-        run(load_source_ops(a.registration_include), force_simt=True)
+        try:
+            loaded = importlib.import_module("grouped_moe_gemm")
+        finally:
+            if a.artifact:
+                sys.path.remove(a.artifact)
+        run(loaded)

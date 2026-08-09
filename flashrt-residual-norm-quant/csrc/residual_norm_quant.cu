@@ -211,6 +211,39 @@ __global__ void residual_add_rms_norm_quant_fp8_static_bf16_kernel(
   }
 }
 
+__global__ void residual_add_rms_norm_bf16_kernel(
+    __nv_bfloat16* __restrict__ residual,
+    const __nv_bfloat16* __restrict__ x,
+    const __nv_bfloat16* __restrict__ weight,
+    __nv_bfloat16* __restrict__ out,
+    int dim,
+    float eps) {
+  const int row = blockIdx.x;
+  __nv_bfloat162* res2 = reinterpret_cast<__nv_bfloat162*>(residual + row * dim);
+  const __nv_bfloat162* x2 = reinterpret_cast<const __nv_bfloat162*>(x + row * dim);
+  const __nv_bfloat162* w2 = reinterpret_cast<const __nv_bfloat162*>(weight);
+  __nv_bfloat162* out2 = reinterpret_cast<__nv_bfloat162*>(out + row * dim);
+  const int dim2 = dim >> 1;
+  extern __shared__ float shared[];
+  float local_sum = 0.0f;
+  for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+    const __nv_bfloat162 rv = res2[i];
+    const __nv_bfloat162 xv = x2[i];
+    const float r0 = to_f32(rv.x) + to_f32(xv.x);
+    const float r1 = to_f32(rv.y) + to_f32(xv.y);
+    res2[i] = __halves2bfloat162(from_f32(r0), from_f32(r1));
+    local_sum += r0 * r0 + r1 * r1;
+  }
+  const float rms = rsqrtf(block_reduce_sum(local_sum, shared) / dim + eps);
+  for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
+    const __nv_bfloat162 rv = res2[i];
+    const __nv_bfloat162 wv = w2[i];
+    out2[i] = __halves2bfloat162(
+        from_f32(to_f32(rv.x) * rms * to_f32(wv.x)),
+        from_f32(to_f32(rv.y) * rms * to_f32(wv.y)));
+  }
+}
+
 }  // namespace
 
 void rms_norm_bf16(
@@ -291,6 +324,23 @@ void residual_add_rms_norm_quant_fp8_static_bf16(
       dim,
       eps,
       scale);
+}
+
+void residual_add_rms_norm_bf16(
+    void* residual_bf16,
+    const void* x_bf16,
+    const void* weight_bf16,
+    void* out_bf16,
+    int rows,
+    int dim,
+    float eps,
+    cudaStream_t stream) {
+  residual_add_rms_norm_bf16_kernel<<<
+      rows, 256, 256 * sizeof(float), stream>>>(
+      reinterpret_cast<__nv_bfloat16*>(residual_bf16),
+      reinterpret_cast<const __nv_bfloat16*>(x_bf16),
+      reinterpret_cast<const __nv_bfloat16*>(weight_bf16),
+      reinterpret_cast<__nv_bfloat16*>(out_bf16), dim, eps);
 }
 
 }  // namespace residual_norm_quant
