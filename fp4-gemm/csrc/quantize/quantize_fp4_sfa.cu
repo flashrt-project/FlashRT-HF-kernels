@@ -105,8 +105,9 @@ __global__ void kernel_quantize_fp4_sfa(
 }
 
 
-__global__ void kernel_quantize_fp4_sfa_mse_fp16(
-    const __half* __restrict__ src,
+template <typename Input>
+__global__ void kernel_quantize_fp4_sfa_mse(
+    const Input* __restrict__ src,
     uint8_t* __restrict__ dst_packed,
     uint8_t* __restrict__ dst_sfa,
     int N, int D) {
@@ -120,7 +121,7 @@ __global__ void kernel_quantize_fp4_sfa_mse_fp16(
   float amax = 0.f;
   #pragma unroll
   for (int i = 0; i < 16; ++i) {
-    values[i] = __half2float(src[base + i]);
+    values[i] = input_to_float(src[base + i]);
     amax = fmaxf(amax, fabsf(values[i]));
   }
 
@@ -215,8 +216,23 @@ int quantize_fp4_dynamic_sfa_mse_fp16(
   if (D % 16 != 0) return -1;
   constexpr int threads = 128;
   dim3 grid((D / 16 + threads - 1) / threads, N);
-  kernel_quantize_fp4_sfa_mse_fp16<<<grid, threads, 0, stream>>>(
+  kernel_quantize_fp4_sfa_mse<__half><<<grid, threads, 0, stream>>>(
       reinterpret_cast<const __half*>(src_fp16),
+      reinterpret_cast<uint8_t*>(dst_packed),
+      reinterpret_cast<uint8_t*>(dst_sfa), N, D);
+  const cudaError_t error = cudaGetLastError();
+  return error == cudaSuccess ? 0 : -static_cast<int>(error);
+}
+
+int quantize_fp4_dynamic_sfa_mse_bf16(
+    const void* src_bf16, void* dst_packed, void* dst_sfa,
+    int N, int D, bool is_sfb, cudaStream_t stream) {
+  (void)is_sfb;  // SFA/SFB use the same integer mapping for this 2-D contract.
+  if (D % 16 != 0) return -1;
+  constexpr int threads = 128;
+  dim3 grid((D / 16 + threads - 1) / threads, N);
+  kernel_quantize_fp4_sfa_mse<__nv_bfloat16><<<grid, threads, 0, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(src_bf16),
       reinterpret_cast<uint8_t*>(dst_packed),
       reinterpret_cast<uint8_t*>(dst_sfa), N, D);
   const cudaError_t error = cudaGetLastError();

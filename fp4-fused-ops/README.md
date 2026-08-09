@@ -119,6 +119,10 @@ merged = torch.randn((10, 8192), device="cuda", dtype=torch.bfloat16)
 hidden_packed, hidden_sfa = ops.gelu_mul_nvfp4_bf16(merged)
 ```
 
+The BF16 GeGLU producer uses two aligned 16-byte loads for each gate/up block
+and one 8-byte packed store. This is an implementation-only optimization: the
+public contract and E2M1/SFA bytes remain unchanged.
+
 ## Validation
 
 ```bash

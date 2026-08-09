@@ -783,6 +783,34 @@ void quantize_fp4_sfa_mse_fp16(
 #endif
 }
 
+void quantize_fp4_sfa_mse_bf16(
+    torch::Tensor const& x,
+    torch::Tensor& packed,
+    torch::Tensor& sfa,
+    bool is_sfb) {
+  check_bf16_cuda(x, "x");
+  check_uint8_cuda(packed, "packed");
+  check_uint8_cuda(sfa, "sfa");
+  TORCH_CHECK(x.dim() == 2 && x.size(1) % 16 == 0,
+              "x must have shape (rows, dim) with dim divisible by 16");
+  TORCH_CHECK(packed.sizes() ==
+                  torch::IntArrayRef({x.size(0), x.size(1) / 2}),
+              "packed must have shape (rows, dim / 2)");
+  TORCH_CHECK(sfa.numel() >= swizzled_bytes(x.size(0), x.size(1)),
+              "sfa is too small for the scale layout");
+  check_same_device(x, packed, "x", "packed");
+  check_same_device(x, sfa, "x", "sfa");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::fp4::quantize_fp4_dynamic_sfa_mse_bf16(
+      x.data_ptr(), packed.data_ptr(), sfa.data_ptr(),
+      checked_int(x.size(0), "rows"), checked_int(x.size(1), "dim"),
+      is_sfb, stream);
+  TORCH_CHECK(rc == 0, "quantize_fp4_sfa_mse_bf16 failed with rc=", rc);
+#endif
+}
+
 void quantize_e0m3_sfa_fp16(
     torch::Tensor const& x, torch::Tensor& packed, torch::Tensor& sfa,
     bool is_sfb) {
@@ -952,6 +980,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nvfp4_gemm_streamk_bias_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor bias, Tensor! out, float alpha=1.0) -> ()");
   ops.def("quantize_fp4_sfa_fp16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
   ops.def("quantize_fp4_sfa_mse_fp16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
+  ops.def("quantize_fp4_sfa_mse_bf16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
   ops.def("quantize_e0m3_sfa_fp16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
   ops.def("e0m3_weight_gemm_fp16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0, int a_format=1) -> ()");
   ops.def("nvfp4_gemm_relu2_nvfp4(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out_packed, Tensor! out_sfa) -> ()");
@@ -976,6 +1005,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("nvfp4_gemm_streamk_bias_bf16", torch::kCUDA, &nvfp4_gemm_streamk_bias_bf16);
   ops.impl("quantize_fp4_sfa_fp16", torch::kCUDA, &quantize_fp4_sfa_fp16);
   ops.impl("quantize_fp4_sfa_mse_fp16", torch::kCUDA, &quantize_fp4_sfa_mse_fp16);
+  ops.impl("quantize_fp4_sfa_mse_bf16", torch::kCUDA, &quantize_fp4_sfa_mse_bf16);
   ops.impl("quantize_e0m3_sfa_fp16", torch::kCUDA, &quantize_e0m3_sfa_fp16);
   ops.impl("e0m3_weight_gemm_fp16", torch::kCUDA, &e0m3_weight_gemm_fp16);
   ops.impl("nvfp4_gemm_relu2_nvfp4", torch::kCUDA, &nvfp4_gemm_relu2_nvfp4);

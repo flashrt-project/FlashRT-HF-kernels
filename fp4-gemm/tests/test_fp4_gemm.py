@@ -102,6 +102,9 @@ class SourceOps:
     def quantize_fp4_sfa_mse_fp16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_fp4_sfa_mse_fp16(x, packed, sfa, bool(is_sfb))
 
+    def quantize_fp4_sfa_mse_bf16(self, x, packed, sfa, is_sfb=False):
+        self._ops.quantize_fp4_sfa_mse_bf16(x, packed, sfa, bool(is_sfb))
+
     def quantize_e0m3_sfa_fp16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_e0m3_sfa_fp16(x, packed, sfa, bool(is_sfb))
 
@@ -228,6 +231,11 @@ class InstalledOps:
 
     def quantize_fp4_sfa_mse_fp16(self, x, packed, sfa, is_sfb=False):
         self._module.quantize_fp4_sfa_mse_fp16(
+            x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
+        )
+
+    def quantize_fp4_sfa_mse_bf16(self, x, packed, sfa, is_sfb=False):
+        self._module.quantize_fp4_sfa_mse_bf16(
             x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
         )
 
@@ -1128,26 +1136,118 @@ def run_pi05_thor_batch3_cases(ops, full_shapes: bool) -> list[Metrics]:
         cosine=1.0 if graph_exact else float("nan"), passed=graph_exact,
     ))
 
-    weight = make_inputs(32, 32, 512, seed=2026080991)[1]
-    rtn_packed, rtn_sfa = ops.alloc_fp4(weight.shape[0], weight.shape[1])
-    mse_packed, mse_sfa = ops.alloc_fp4(weight.shape[0], weight.shape[1])
-    ops.quantize_fp4_sfa_fp16(weight, rtn_packed, rtn_sfa, True)
-    ops.quantize_fp4_sfa_mse_fp16(weight, mse_packed, mse_sfa, True)
-    rtn = torch.empty_like(weight)
-    mse = torch.empty_like(weight)
-    ops.dequantize_fp4_sfa_fp16(rtn_packed, rtn_sfa, rtn, True)
-    ops.dequantize_fp4_sfa_fp16(mse_packed, mse_sfa, mse, True)
-    rtn_error = float((rtn.float() - weight.float()).square().mean())
-    mse_error = float((mse.float() - weight.float()).square().mean())
-    results.append(Metrics(
-        shape="weight_m32_k512", M=32, N=32, K=512,
-        workload="mse_weight_pack", variant=None,
-        max_abs=mse_error, mean_abs=rtn_error, p99_abs=0.0,
-        cosine=float(torch.nn.functional.cosine_similarity(
-            mse.float().flatten(), weight.float().flatten(), dim=0)),
-        passed=mse_error <= rtn_error + 1e-8,
-    ))
+    weight_fp16 = make_inputs(32, 32, 512, seed=2026080991)[1]
+    for dtype, suffix in (
+        (torch.float16, "fp16"),
+        (torch.bfloat16, "bf16"),
+    ):
+        weight = weight_fp16.to(dtype)
+        rtn_packed, rtn_sfa = ops.alloc_fp4(weight.shape[0], weight.shape[1])
+        mse_packed, mse_sfa = ops.alloc_fp4(weight.shape[0], weight.shape[1])
+        if dtype == torch.float16:
+            ops.quantize_fp4_sfa_fp16(weight, rtn_packed, rtn_sfa, True)
+            ops.quantize_fp4_sfa_mse_fp16(weight, mse_packed, mse_sfa, True)
+        else:
+            ops.quantize_fp4_sfa_bf16(weight, rtn_packed, rtn_sfa, True)
+            ops.quantize_fp4_sfa_mse_bf16(weight, mse_packed, mse_sfa, True)
+        rtn = torch.empty_like(weight, dtype=torch.float16)
+        mse = torch.empty_like(weight, dtype=torch.float16)
+        ops.dequantize_fp4_sfa_fp16(rtn_packed, rtn_sfa, rtn, True)
+        ops.dequantize_fp4_sfa_fp16(mse_packed, mse_sfa, mse, True)
+        rtn_error = float((rtn.float() - weight.float()).square().mean())
+        mse_error = float((mse.float() - weight.float()).square().mean())
+        results.append(Metrics(
+            shape=f"weight_m32_k512_{suffix}", M=32, N=32, K=512,
+            workload=f"mse_weight_pack_{suffix}", variant=None,
+            max_abs=mse_error, mean_abs=rtn_error, p99_abs=0.0,
+            cosine=float(torch.nn.functional.cosine_similarity(
+                mse.float().flatten(), weight.float().flatten(), dim=0)),
+            passed=mse_error <= rtn_error + 1e-8,
+        ))
     return results
+
+
+def check_installed_padding_contract(ops: InstalledOps) -> dict[str, object]:
+    """Validate the bind-time logical-to-physical NVFP4 helper surface."""
+    module = ops._module
+    required = (
+        "aligned_fp4_dim",
+        "pack_nvfp4_weight_bf16",
+        "quantize_fp4_sfa_padded_bf16",
+        "cutlass_fp4_gemm_geglu_il_hw_v10",
+    )
+    missing = [name for name in required if not hasattr(module, name)]
+    if missing:
+        return {"passed": False, "missing": missing}
+    up_weight = torch.randn(
+        (4304, 128), device="cuda", dtype=torch.bfloat16
+    ).mul_(0.02)
+    up_bias = torch.randn((4304,), device="cuda", dtype=torch.bfloat16)
+    up_packed, up_sfb, up_bias_padded, up_logical = (
+        module.pack_nvfp4_weight_bf16(up_weight, up_bias)
+    )
+    down_weight = torch.randn(
+        (128, 4304), device="cuda", dtype=torch.bfloat16
+    ).mul_(0.02)
+    down_bias = torch.randn((128,), device="cuda", dtype=torch.bfloat16)
+    down_packed, down_sfb, down_bias_padded, down_logical = (
+        module.pack_nvfp4_weight_bf16(down_weight, down_bias)
+    )
+    activation = torch.randn(
+        (8, 4304), device="cuda", dtype=torch.bfloat16
+    ).mul_(0.1)
+    a_packed, sfa, logical_k = module.quantize_fp4_sfa_padded_bf16(
+        activation
+    )
+    residual = torch.randn(
+        (8, 128), device="cuda", dtype=torch.bfloat16
+    ).mul_(0.1)
+    got = module.nvfp4_gemm_bias_residual_bf16(
+        a_packed, down_packed, sfa, down_sfb, down_bias_padded, residual
+    )
+    a_dequant = torch.empty(
+        (8, 4320), device="cuda", dtype=torch.float16
+    )
+    w_dequant = torch.empty(
+        (128, 4320), device="cuda", dtype=torch.float16
+    )
+    ops.dequantize_fp4_sfa_fp16(a_packed, sfa, a_dequant, False)
+    ops.dequantize_fp4_sfa_fp16(
+        down_packed, down_sfb, w_dequant, True
+    )
+    expected = (
+        a_dequant.float() @ w_dequant.float().T
+        + down_bias.float()
+        + residual.float()
+    ).bfloat16()
+    max_abs, mean_abs, p99_abs, cosine = metrics(got, expected)
+    passed = (
+        module.aligned_fp4_dim(4304) == 4320
+        and up_logical == (4304, 128)
+        and down_logical == (128, 4304)
+        and logical_k == 4304
+        and tuple(up_packed.shape) == (4320, 64)
+        and tuple(up_bias_padded.shape) == (4320,)
+        and torch.count_nonzero(up_bias_padded[4304:]).item() == 0
+        and tuple(down_packed.shape) == (128, 2160)
+        and tuple(a_packed.shape) == (8, 2160)
+        and up_sfb.dtype == torch.uint8
+        and sfa.dtype == torch.uint8
+        and check_bf16_threshold(max_abs, mean_abs, p99_abs, cosine)
+    )
+    return {
+        "passed": bool(passed),
+        "logical_up_weight": list(up_logical),
+        "physical_up_weight": [4320, 128],
+        "logical_down_weight": list(down_logical),
+        "physical_down_weight": [128, 4320],
+        "logical_activation_k": logical_k,
+        "physical_activation_k": 4320,
+        "max_abs": max_abs,
+        "mean_abs": mean_abs,
+        "p99_abs": p99_abs,
+        "cosine": cosine,
+    }
 
 
 def main() -> int:
@@ -1189,14 +1289,21 @@ def main() -> int:
     sm110_additive_rows, sm110_additive_gate = run_sm110_e0m3_cosmos_cases(ops)
     results.extend(sm110_additive_rows)
     compile_check = None
+    padding_contract_check = None
     bf16_quantizer_check = check_bf16_quantizer(ops)
     if args.backend == "installed" and args.mode == "full":
         compile_check = check_installed_compile(ops)
+    if (args.backend == "installed" and capability == (11, 0)
+            and args.mode in {"full", "thor-models"}):
+        padding_contract_check = check_installed_padding_contract(ops)
     passed = sum(1 for item in results if item.passed)
     total = len(results)
     if compile_check is not None:
         total += 1
         passed += int(bool(compile_check["passed"]))
+    if padding_contract_check is not None:
+        total += 1
+        passed += int(bool(padding_contract_check["passed"]))
     total += 1
     passed += int(bool(bf16_quantizer_check["passed"]))
     total += 1
@@ -1210,6 +1317,7 @@ def main() -> int:
         "total": total,
         "results": [asdict(item) for item in results],
         "compile_check": compile_check,
+        "padding_contract_check": padding_contract_check,
         "bf16_quantizer_check": bf16_quantizer_check,
         "sm110_additive_gate": sm110_additive_gate,
     }

@@ -106,3 +106,21 @@ BF16 LayerNorm/RMSNorm/GeGLU max/mean/p99/cosine checks, unsupported-shape
 rejection, and deterministic CUDA Graph replay. The native LUT combiner's
 dequantized result reached cosine `0.995910` against the mathematical
 reference.
+
+## BF16 GeGLU producer vectorization on Thor
+
+Pre-publish source candidate on NVIDIA Jetson AGX Thor, PyTorch
+`2.13.0+cu130`, CUDA 13.0. The candidate was compared in isolated processes
+against the current Hub v1 artifact to avoid extension namespace collisions.
+Both implementations produced byte-identical packed E2M1 output and SFA
+bytes.
+
+| Workload | Hub v1 us | Source candidate us | Speedup | Packed/SFA exact |
+| --- | ---: | ---: | ---: | --- |
+| `gelu_mul_nvfp4_bf16`, PI0.5 producer shape | 8.303 | 5.123 | 1.62x | yes |
+
+The candidate replaces scalar BF16 input loads and packed-byte stores with
+16-byte vector transactions without changing the public API or quantization
+contract. The Thor source gate passed `89/89`; the RTX 5090 source regression
+passed `61/61`. Installed-artifact numbers must be regenerated after the Hub
+build is published.

@@ -24,6 +24,12 @@ void quantize_fp4_sfa_bf16(
     torch::Tensor& sfa,
     bool is_sfb);
 
+void quantize_fp4_sfa_mse_bf16(
+    torch::Tensor const& x,
+    torch::Tensor& packed,
+    torch::Tensor& sfa,
+    bool is_sfb);
+
 void dequantize_fp4_sfa_fp16(
     torch::Tensor const& packed,
     torch::Tensor const& sfa,

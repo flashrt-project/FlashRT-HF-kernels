@@ -55,14 +55,16 @@ __device__ __forceinline__ void quantize_block(
   const float inverse = 1.f / static_cast<float>(scale_q);
   sfa[layout(row, block_index * 16, 0)] =
       *reinterpret_cast<const uint8_t*>(&scale_q);
+  uint2 packed_values;
+  uint8_t* packed_bytes = reinterpret_cast<uint8_t*>(&packed_values);
   #pragma unroll
   for (int pair = 0; pair < 8; ++pair) {
-    packed_row[block_index * 8 + pair] =
-        static_cast<uint8_t>(__nv_cvt_float2_to_fp4x2(
+    packed_bytes[pair] = static_cast<uint8_t>(__nv_cvt_float2_to_fp4x2(
             make_float2(local[2 * pair] * inverse,
                         local[2 * pair + 1] * inverse),
             __NV_E2M1, cudaRoundNearest));
   }
+  reinterpret_cast<uint2*>(packed_row)[block_index] = packed_values;
 }
 
 template <class Layout>
@@ -78,15 +80,32 @@ __global__ void gelu_mul_nvfp4_bf16_kernel(
   const int base = block_index * 16;
   const __nv_bfloat16* row_ptr = merged +
       static_cast<long long>(row) * 2 * hidden;
+  const int4* gate_ptr = reinterpret_cast<const int4*>(row_ptr + base);
+  const int4* up_ptr = reinterpret_cast<const int4*>(
+      row_ptr + hidden + base);
+  const int4 gate_raw[2] = {gate_ptr[0], gate_ptr[1]};
+  const int4 up_raw[2] = {up_ptr[0], up_ptr[1]};
+  const __nv_bfloat16* gate_values =
+      reinterpret_cast<const __nv_bfloat16*>(gate_raw);
+  const __nv_bfloat16* up_values =
+      reinterpret_cast<const __nv_bfloat16*>(up_raw);
+  int4 inv_raw[2];
+  const __nv_bfloat16* inv_values = nullptr;
+  if (inv_s != nullptr) {
+    const int4* inv_ptr = reinterpret_cast<const int4*>(inv_s + base);
+    inv_raw[0] = inv_ptr[0];
+    inv_raw[1] = inv_ptr[1];
+    inv_values = reinterpret_cast<const __nv_bfloat16*>(inv_raw);
+  }
   __nv_bfloat16 rounded[16];
   #pragma unroll
   for (int i = 0; i < 16; ++i) {
-    const float gate = __bfloat162float(row_ptr[base + i]);
-    const float up = __bfloat162float(row_ptr[hidden + base + i]);
+    const float gate = __bfloat162float(gate_values[i]);
+    const float up = __bfloat162float(up_values[i]);
     float value = gate /
         (1.f + expf(-1.5957691216057308f * gate *
                    (1.f + 0.044715f * gate * gate))) * up;
-    if (inv_s != nullptr) value *= __bfloat162float(inv_s[base + i]);
+    if (inv_values != nullptr) value *= __bfloat162float(inv_values[i]);
     rounded[i] = __float2bfloat16_rn(value);
   }
   quantize_block(rounded, packed + static_cast<long long>(row) * hidden / 2,

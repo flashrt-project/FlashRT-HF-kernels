@@ -13,6 +13,9 @@ paths.
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_mse_fp16(x, packed=None, sfa=None, is_sfb=False)`
+- `quantize_fp4_sfa_mse_bf16(x, packed=None, sfa=None, is_sfb=False)`
+- `quantize_fp4_sfa_padded_bf16(x, alignment=32, is_sfb=False)`
+- `pack_nvfp4_weight_bf16(weight, bias=None, alignment=32, mse=False)`
 - `quantize_e0m3_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `dequantize_fp4_sfa_fp16(packed, sfa, out=None, is_sfb=False)`
 - `nvfp4_gemm_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
@@ -20,6 +23,7 @@ paths.
 - `nvfp4_gemm_nvfp4(a_packed, b_packed, sfa, sfb, out_packed=None, out_sfa=None)`
 - `nvfp4_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None, variant=-1)`
 - `nvfp4_gemm_geglu_nvfp4_fp16(a_packed, b_interleaved_packed, sfa, sfb, skinny=False, ...)`
+- `cutlass_fp4_gemm_geglu_il_hw_v10(...)`
 - `nvfp4_gemm_bias_gelu_nvfp4_fp16(a_packed, b_packed, sfa, sfb, bias, ...)`
 - `nvfp4_gemm_bias_residual_fp16(a_packed, b_packed, sfa, sfb, bias, residual, out=None)`
 - `nvfp4_gemm_bias_bf16(a_packed, b_packed, sfa, sfb, bias, out=None)`
@@ -69,7 +73,11 @@ GROOT N1.7 Thor NVFP4 pipeline.
 PI0.5 Thor coverage additionally includes FP16 linear projections, compact
 GeGLU-to-NVFP4, and SigLIP bias+GELU / bias+residual epilogues. SigLIP's
 logical hidden width `4304` is physically zero-padded to `4320` for the FP4
-TMA contract; direct `4304` GEMM calls are unsupported.
+TMA contract; direct `4304` GEMM calls are unsupported. Use
+`pack_nvfp4_weight_bf16` for static weights/bias and
+`quantize_fp4_sfa_padded_bf16` for a bind-time activation buffer. Both helpers
+return logical-shape metadata while producing the physical aligned tensors.
+They allocate by design and must not be called from the captured hot path.
 E0M3 weight GEMM and the ReLU-squared FP4-output epilogue are SM110-only.
 `a_format=1` consumes E2M1 activations; `a_format=0` consumes E0M3 activations.
 
@@ -121,6 +129,14 @@ materialize an intermediate FP16 tensor:
 ```python
 x_bf16 = torch.randn((1, 5120), device="cuda", dtype=torch.bfloat16)
 a_packed, sfa = ops.quantize_fp4_sfa_bf16(x_bf16)
+
+# Logical SigLIP FC1 weight (4304, 1152) is packed as physical (4320, 1152).
+w = torch.randn((4304, 1152), device="cuda", dtype=torch.bfloat16)
+bias = torch.randn((4304,), device="cuda", dtype=torch.bfloat16)
+w_packed, w_sfb, bias_padded, logical_shape = \
+    ops.pack_nvfp4_weight_bf16(w, bias)
+assert logical_shape == (4304, 1152)
+assert w_packed.shape[0] == bias_padded.shape[0] == 4320
 ```
 
 The BF16 entry writes the same E2M1 bytes and CUTLASS SFA/SFB layout as
@@ -129,10 +145,10 @@ inputs. It is an additive API; the existing FP16 producer remains unchanged.
 On SM110 this entry dispatches the vectorized 16-element-block implementation
 (two 16-byte BF16 loads and one 8-byte packed store), not the scalar fallback.
 
-`quantize_fp4_sfa_mse_fp16` is intended for offline/bind-time weight packing.
-It searches a compact per-block scale set and is release-gated to produce no
-higher reconstruction MSE than the default RTN packer. It is not a runtime
-activation hot-path operation.
+The FP16 and BF16 `quantize_fp4_sfa_mse_*` functions are intended for
+offline/bind-time weight packing. They search a compact per-block scale set and
+are release-gated to produce no higher reconstruction MSE than the matching
+default RTN packer. They are not runtime activation hot-path operations.
 
 The quantize/dequantize helpers are included for examples and validation. A
 production runtime should keep weights prepacked and should avoid quantizing in

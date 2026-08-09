@@ -118,3 +118,18 @@ checked against GEMM over the same dequantized inputs. FP4-output reached
 cosine `0.995382`; the
 bind-time MSE packer reduced reconstruction MSE from `0.000570887` to
 `0.000449985`. BF16 v7/v10 and FP4-output CUDA Graph replay were bit-identical.
+
+## SigLIP logical-width packaging gate
+
+SigLIP's logical hidden width `4304` is zero-padded once at bind time to the
+physical NVFP4 width `4320`. Runtime GEMM then consumes static packed tensors;
+there is no hot-path padding or allocation. The public helper contract covers
+both weight layouts `(4304, K)` and `(N, 4304)`, pads bias consistently, and
+returns the logical dimensions for final output slicing.
+
+On NVIDIA Thor with PyTorch `2.13.0+cu130`, the source release gate passed
+`73/73`, including physical SigLIP up/down shapes, BF16 MSE packing, CUDA Graph
+replay, and unsupported-shape rejection. The BF16 MSE packer reduced
+reconstruction MSE from `0.000571271` to `0.000450529`. The RTX 5090 source
+regression passed `26/26`. Installed-artifact validation is required after the
+Hub build is published.

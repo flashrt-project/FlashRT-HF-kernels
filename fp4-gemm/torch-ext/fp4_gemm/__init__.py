@@ -109,6 +109,11 @@ def _quant_mse_fake(x, packed, sfa, is_sfb: bool = False) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_mse_bf16"))
+def _quant_mse_bf16_fake(x, packed, sfa, is_sfb: bool = False) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("quantize_e0m3_sfa_fp16"))
 def _quant_e0m3_fake(x, packed, sfa, is_sfb: bool = False) -> None:
     return None
@@ -184,6 +189,91 @@ def quantize_fp4_sfa_mse_fp16(
         packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
     ops.quantize_fp4_sfa_mse_fp16(x, packed, sfa, bool(is_sfb))
     return packed, sfa
+
+
+def quantize_fp4_sfa_mse_bf16(
+    x: torch.Tensor,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    is_sfb: bool = False,
+):
+    """Pack BF16 weights using per-block reconstruction-MSE scale search."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.quantize_fp4_sfa_mse_bf16(x, packed, sfa, bool(is_sfb))
+    return packed, sfa
+
+
+def aligned_fp4_dim(dim: int, alignment: int = 32) -> int:
+    """Return the physical FP4 GEMM dimension for a logical dimension."""
+    if dim <= 0 or alignment <= 0 or alignment % 16 != 0:
+        raise ValueError("dim must be positive and alignment divisible by 16")
+    return ((dim + alignment - 1) // alignment) * alignment
+
+
+def quantize_fp4_sfa_padded_bf16(
+    x: torch.Tensor,
+    *,
+    alignment: int = 32,
+    is_sfb: bool = False,
+):
+    """Bind-time BF16 pack with zero padding on the final dimension.
+
+    The returned packed tensor uses the physical aligned width. Keep the
+    logical width returned as the third item for slicing final model outputs.
+    This helper allocates and is intentionally not a runtime hot-path op.
+    """
+    if x.ndim != 2 or x.dtype != torch.bfloat16:
+        raise ValueError("x must be a 2-D BF16 tensor")
+    logical_dim = int(x.shape[1])
+    physical_dim = aligned_fp4_dim(logical_dim, alignment)
+    if physical_dim == logical_dim:
+        padded = x.contiguous()
+    else:
+        padded = torch.zeros(
+            (x.shape[0], physical_dim), device=x.device, dtype=x.dtype
+        )
+        padded[:, :logical_dim].copy_(x)
+    packed, sfa = quantize_fp4_sfa_bf16(padded, is_sfb=is_sfb)
+    return packed, sfa, logical_dim
+
+
+def pack_nvfp4_weight_bf16(
+    weight: torch.Tensor,
+    bias: torch.Tensor | None = None,
+    *,
+    alignment: int = 32,
+    mse: bool = False,
+):
+    """Zero-pad and pack a logical ``(N, K)`` BF16 weight at bind time.
+
+    Both physical ``N`` and ``K`` are aligned. This is the model-neutral
+    contract used by widths such as SigLIP's logical 4304, which becomes 4320
+    for Blackwell NVFP4 TMA. The hot path consumes the returned static tensors
+    directly and performs no padding or allocation.
+    """
+    if weight.ndim != 2 or weight.dtype != torch.bfloat16:
+        raise ValueError("weight must be a 2-D BF16 tensor")
+    logical_n, logical_k = map(int, weight.shape)
+    physical_n = aligned_fp4_dim(logical_n, alignment)
+    physical_k = aligned_fp4_dim(logical_k, alignment)
+    padded_weight = torch.zeros(
+        (physical_n, physical_k), device=weight.device, dtype=weight.dtype
+    )
+    padded_weight[:logical_n, :logical_k].copy_(weight)
+    quantize = quantize_fp4_sfa_mse_bf16 if mse else quantize_fp4_sfa_bf16
+    packed, sfb = quantize(padded_weight, is_sfb=True)
+    padded_bias = None
+    if bias is not None:
+        if bias.ndim != 1 or bias.numel() != logical_n:
+            raise ValueError("bias must have shape (N,)")
+        if bias.dtype != torch.bfloat16 or bias.device != weight.device:
+            raise ValueError("bias must match the weight dtype and device")
+        padded_bias = torch.zeros(
+            (physical_n,), device=bias.device, dtype=bias.dtype
+        )
+        padded_bias[:logical_n].copy_(bias)
+    return packed, sfb, padded_bias, (logical_n, logical_k)
 
 
 def quantize_e0m3_sfa_fp16(
@@ -379,6 +469,29 @@ def nvfp4_gemm_geglu_nvfp4_fp16(
         out_packed, out_sfa, bool(skinny)
     )
     return out_packed, out_sfa
+
+
+def cutlass_fp4_gemm_geglu_il_hw_v10(
+    a_packed: torch.Tensor,
+    b_interleaved_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    scratch: torch.Tensor | None = None,
+    out_packed: torch.Tensor | None = None,
+    out_sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Explicit public alias for the native SM110 v10 GeGLU schedule."""
+    return nvfp4_gemm_geglu_nvfp4_fp16(
+        a_packed,
+        b_interleaved_packed,
+        sfa,
+        sfb,
+        skinny=True,
+        scratch=scratch,
+        out_packed=out_packed,
+        out_sfa=out_sfa,
+    )
 
 
 def nvfp4_gemm_bias_gelu_nvfp4_fp16(
@@ -601,6 +714,8 @@ def nvfp4_gemm_streamk_bias_bf16(
 
 
 __all__ = [
+    "aligned_fp4_dim",
+    "cutlass_fp4_gemm_geglu_il_hw_v10",
     "dequantize_fp4_sfa_fp16",
     "e0m3_weight_gemm_fp16",
     "fp4_w4a16_linear_bf16",
@@ -622,6 +737,9 @@ __all__ = [
     "nvfp4_gemm_streamk_bias_bf16",
     "quantize_fp4_sfa_fp16",
     "quantize_fp4_sfa_mse_fp16",
+    "quantize_fp4_sfa_mse_bf16",
+    "quantize_fp4_sfa_padded_bf16",
+    "pack_nvfp4_weight_bf16",
     "quantize_e0m3_sfa_fp16",
     "quantize_fp4_sfa_bf16",
     "sfa_size_bytes",
