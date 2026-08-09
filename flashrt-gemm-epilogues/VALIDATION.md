@@ -34,11 +34,11 @@ Runtime smoke environment:
 From this package directory:
 
 ```bash
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-config .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build --variant torch211-cxx11-cu128-x86_64-linux --max-jobs 1 --cores 8 -L .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build --variant torch211-cxx11-cu126-x86_64-linux --max-jobs 1 --cores 8 -L .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker build --variant torch211-cxx11-cu130-x86_64-linux --max-jobs 1 --cores 8 -L .
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-builds .
+kernel-builder-docker check-config .
+kernel-builder-docker build --variant torch211-cxx11-cu128-x86_64-linux --max-jobs 1 --cores 8 -L .
+kernel-builder-docker build --variant torch211-cxx11-cu126-x86_64-linux --max-jobs 1 --cores 8 -L .
+kernel-builder-docker build --variant torch211-cxx11-cu130-x86_64-linux --max-jobs 1 --cores 8 -L .
+kernel-builder-docker check-builds .
 ```
 
 Host-side correctness smoke from the repository root:

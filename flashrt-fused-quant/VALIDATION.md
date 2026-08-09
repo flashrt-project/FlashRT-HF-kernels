@@ -76,8 +76,7 @@ over the full grid.
 ## Known Gaps
 
 - `build.toml`, `flake.nix`, and `flake.lock` are present.
-- `/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker
-  check-config .` passed for this package.
+- `kernel-builder-docker check-config .` passed for this package.
 - `kernel-builder build --variant torch211-cxx11-cu128-x86_64-linux` passed
   for this package, and the copied artifact passed package tests, examples,
   installed accuracy sweep, and the local release-candidate benchmark runner.

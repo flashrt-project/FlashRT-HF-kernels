@@ -11,6 +11,9 @@ It is intentionally separate from the package-level demos:
 - the hot path loads kernels once, owns persistent buffers, avoids timed-loop
   allocation, and supports CUDA Graph replay.
 
+> `<workspace>` below is a placeholder for your checkout root (the directory
+> containing the FlashRT-HF-kernels repository and any sibling data trees).
+
 This is not the upstream FlashRT serving runtime. The current Hub path is a
 checkpoint-backed PI0.5 runtime bridge for validating whether Hugging Face
 Kernel Hub packages can drive a clean model pipeline without losing
@@ -67,7 +70,7 @@ OpenPI baseline now live under `demos/runtime-demo/test/`.
 1. **Python env matching a published Hub variant** — `torch 2.11` + `CUDA 12.8`
    with the `kernels` package installed. The Hub packages download automatically
    via `kernels.get_kernel("flashrt/...", version=1)`. Local validation env:
-   `/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python` (substitute
+   `<workspace>/.flashrt-hub-smoke-torch211/bin/python` (substitute
    your own).
 2. **PI0.5 LIBERO checkpoint** — the OpenPI PI0.5-LIBERO model as PyTorch
    `model.safetensors`. Point `--checkpoint` at the directory holding it
@@ -86,7 +89,7 @@ The default path runs the QKV / O / vision projection GEMMs in FP8 (published
 Hub kernels only):
 
 ```bash
-PY=/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python
+PY=<workspace>/.flashrt-hub-smoke-torch211/bin/python
 $PY demos/runtime-demo/pi05_hf_decoder_e2e.py run-vision-encoder-decoder \
   --encoder-bundle internal-tests/runtime-demo/pi05-real-images-encoder-x-kv-frame50.pt \
   --checkpoint /path/to/pi05_libero_pytorch \
@@ -127,7 +130,7 @@ The synthetic fixed-shape runtime profiles moved to `test/pi05_runtime_demo.py`.
 They are a microbench of the composed Hub path, not the real-input E2E:
 
 ```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
+<workspace>/.flashrt-hub-smoke-torch211/bin/python \
   demos/runtime-demo/test/pi05_runtime_demo.py \
   --profile pi05_hotpath --layers 4 --ffn-activation gelu \
   --attention-backend sdpa --warmup 10 --iters 50 --cuda-graph
@@ -137,7 +140,7 @@ Before a rebuilt GeGLU artifact is uploaded to the Hub, validate the local
 `build/<variant>` directory explicitly:
 
 ```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
+<workspace>/.flashrt-hub-smoke-torch211/bin/python \
   demos/runtime-demo/test/pi05_runtime_demo.py \
   --profile pi05_hotpath \
   --layers 4 \
@@ -156,7 +159,7 @@ To validate the rebuilt QKV package before upload, add the local qkv artifact
 and switch the decoder QKV path to the PI0.5 GQA cache API:
 
 ```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
+<workspace>/.flashrt-hub-smoke-torch211/bin/python \
   demos/runtime-demo/test/pi05_runtime_demo.py \
   --profile pi05_hotpath \
   --layers 1 \
@@ -178,10 +181,10 @@ For an end-to-end staging report that keeps the baselines separate:
 python demos/runtime-demo/test/pi05_e2e_runner.py \
   --openpi-baseline-mode docker \
   --container pi0-stablehlo-test \
-  --container-repo /workspace/PI/FlashRT-HF-kernels \
-  --container-python /workspace/PI/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline/bin/python \
-  --container-openpi-root /workspace/PI/openpi_src/src \
-  --container-checkpoint /workspace/PI/checkpoints/pi05_libero_pytorch \
+  --container-repo <workspace>/FlashRT-HF-kernels \
+  --container-python <workspace>/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline/bin/python \
+  --container-openpi-root <workspace>/openpi_src/src \
+  --container-checkpoint <workspace>/checkpoints/pi05_libero_pytorch \
   --cuda-graph \
   --output internal-tests/runtime-demo/pi05-e2e-staging.json
 ```
@@ -202,11 +205,11 @@ To run only the official OpenPI/PyTorch baseline inside the local container:
 
 ```bash
 docker exec pi0-stablehlo-test bash -lc '
-cd /workspace/PI/FlashRT-HF-kernels &&
-PYTHONPATH=/workspace/PI/openpi_src/src \
+cd <workspace>/FlashRT-HF-kernels &&
+PYTHONPATH=<workspace>/openpi_src/src \
 python3 demos/runtime-demo/test/pi05_openpi_baseline.py \
-  --openpi-root /workspace/PI/openpi_src/src \
-  --checkpoint /workspace/PI/checkpoints/pi05_libero_pytorch \
+  --openpi-root <workspace>/openpi_src/src \
+  --checkpoint <workspace>/checkpoints/pi05_libero_pytorch \
   --num-views 2 \
   --steps 10 \
   --warmup 5 \
@@ -222,12 +225,12 @@ global Python. The local venv is intentionally under ignored `internal-tests/`:
 ```bash
 docker exec pi0-stablehlo-test bash -lc '
 set -euo pipefail
-VENV=/workspace/PI/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline
+VENV=<workspace>/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline
 python3 -m venv --system-site-packages "$VENV"
 "$VENV/bin/python" -m pip install "transformers==4.53.2"
 "$VENV/bin/python" - <<PY
 import pathlib, shutil, transformers
-src = pathlib.Path("/workspace/PI/openpi_src/src/openpi/models_pytorch/transformers_replace")
+src = pathlib.Path("<workspace>/openpi_src/src/openpi/models_pytorch/transformers_replace")
 dst = pathlib.Path(transformers.__file__).resolve().parent
 for item in src.iterdir():
     target = dst / item.name
@@ -251,12 +254,12 @@ static activation scales, first capture real OpenPI decoder activations:
 
 ```bash
 docker exec pi0-stablehlo-test bash -lc '
-cd /workspace/PI/FlashRT-HF-kernels &&
-PYTHONPATH=/workspace/PI/openpi_src/src \
-/workspace/PI/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline/bin/python \
+cd <workspace>/FlashRT-HF-kernels &&
+PYTHONPATH=<workspace>/openpi_src/src \
+<workspace>/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline/bin/python \
   demos/runtime-demo/pi05_capture_openpi_ffn_activations.py \
-  --openpi-root /workspace/PI/openpi_src/src \
-  --checkpoint /workspace/PI/checkpoints/pi05_libero_pytorch \
+  --openpi-root <workspace>/openpi_src/src \
+  --checkpoint <workspace>/checkpoints/pi05_libero_pytorch \
   --family decoder \
   --layer 0 \
   --num-views 2 \
@@ -268,9 +271,9 @@ PYTHONPATH=/workspace/PI/openpi_src/src \
 Then run the Hub-kernel FFN island in the HF kernel environment:
 
 ```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
+<workspace>/.flashrt-hub-smoke-torch211/bin/python \
   demos/runtime-demo/test/pi05_real_weight_swiglu.py \
-  --checkpoint /home/heima/suliang/PI/checkpoints/pi05_libero_pytorch \
+  --checkpoint <workspace>/checkpoints/pi05_libero_pytorch \
   --family decoder \
   --layer 0 \
   --rows 100 \
@@ -290,9 +293,9 @@ weights, official FlashRT-style time/style precompute, the rebuilt QKV cache
 kernel, FP8 GeGLU, SDPA attention, and CUDA Graph:
 
 ```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
+<workspace>/.flashrt-hub-smoke-torch211/bin/python \
   demos/runtime-demo/pi05_decoder_loop_hub.py \
-  --checkpoint /home/heima/suliang/PI/checkpoints/pi05_libero_pytorch \
+  --checkpoint <workspace>/checkpoints/pi05_libero_pytorch \
   --layers 18 \
   --steps 10 \
   --local-qkv-artifact flashrt-qkv-cache-rope/build/torch211-cxx11-cu128-x86_64-linux \
@@ -323,12 +326,12 @@ path and replaces selected Gemma MLP layers:
 
 ```bash
 docker exec pi0-stablehlo-test bash -lc '
-cd /workspace/PI/FlashRT-HF-kernels &&
-PYTHONPATH=/workspace/PI/openpi_src/src \
-/workspace/PI/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline/bin/python \
+cd <workspace>/FlashRT-HF-kernels &&
+PYTHONPATH=<workspace>/openpi_src/src \
+<workspace>/FlashRT-HF-kernels/internal-tests/envs/openpi-baseline/bin/python \
   demos/runtime-demo/test/pi05_openpi_hub_ffn_e2e.py \
-  --openpi-root /workspace/PI/openpi_src/src \
-  --checkpoint /workspace/PI/checkpoints/pi05_libero_pytorch \
+  --openpi-root <workspace>/openpi_src/src \
+  --checkpoint <workspace>/checkpoints/pi05_libero_pytorch \
   --num-views 2 \
   --steps 10 \
   --warmup 1 \

@@ -31,13 +31,12 @@ OFFICIAL_FLASHRT = PI_ROOT / "official" / "FlashRT"
 DEFAULT_CKPT = PI_ROOT / "checkpoints" / "pi05_libero_pytorch"
 DEFAULT_HUB_PY = PI_ROOT / ".flashrt-hub-smoke-torch211" / "bin" / "python"
 DEFAULT_OPENPI_ROOT = PI_ROOT / "openpi_src" / "src"
-DEFAULT_CONTAINER_REPO = "/workspace/PI/FlashRT-HF-kernels"
-DEFAULT_CONTAINER_OPENPI_ROOT = "/workspace/PI/openpi_src/src"
-DEFAULT_CONTAINER_CKPT = "/workspace/PI/checkpoints/pi05_libero_pytorch"
-DEFAULT_CONTAINER_FLASHRT_ROOT = "/workspace/PI/official/FlashRT"
-DEFAULT_CONTAINER_OPENPI_PY = (
-    "/workspace/PI/FlashRT-HF-kernels/internal-tests/envs/"
-    "openpi-baseline/bin/python"
+DEFAULT_CONTAINER_REPO = str(ROOT)
+DEFAULT_CONTAINER_OPENPI_ROOT = str(PI_ROOT / "openpi_src" / "src")
+DEFAULT_CONTAINER_CKPT = str(PI_ROOT / "checkpoints" / "pi05_libero_pytorch")
+DEFAULT_CONTAINER_FLASHRT_ROOT = str(PI_ROOT / "official" / "FlashRT")
+DEFAULT_CONTAINER_OPENPI_PY = str(
+    ROOT / "internal-tests" / "envs" / "openpi-baseline" / "bin" / "python"
 )
 
 

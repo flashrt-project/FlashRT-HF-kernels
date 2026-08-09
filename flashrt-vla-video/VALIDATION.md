@@ -14,7 +14,7 @@ Environment:
 Config check:
 
 ```bash
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-config .
+kernel-builder-docker check-config .
 ```
 
 Result: passed.
