@@ -36,6 +36,32 @@ def _check_conv_out(conv_out) -> None:
         raise RuntimeError("conv_out must have shape (S,10240)")
 
 
+def _check_head_profile(num_v_heads: int, num_k_heads: int, head_dim: int) -> None:
+    if num_v_heads <= 0 or num_k_heads <= 0:
+        raise RuntimeError("num_v_heads and num_k_heads must be positive")
+    if num_v_heads % num_k_heads:
+        raise RuntimeError("num_v_heads must be divisible by num_k_heads")
+    if head_dim != 128:
+        raise RuntimeError("this kernel currently requires head_dim=128")
+
+
+def _check_conv_out_h(conv_out, num_v_heads: int, num_k_heads: int, head_dim: int) -> None:
+    _check_head_profile(num_v_heads, num_k_heads, head_dim)
+    width = (2 * num_k_heads + num_v_heads) * head_dim
+    if conv_out.dim() != 2 or conv_out.shape[1] != width:
+        raise RuntimeError(f"conv_out must have shape (S,{width})")
+
+
+def _check_heads_h(x, S: int, H: int, name: str) -> None:
+    if x.shape != (S, H):
+        raise RuntimeError(f"{name} must have shape (S,{H})")
+
+
+def _check_qkv_h(x, S: int, H: int, D: int, name: str) -> None:
+    if x.shape != (S, H, D):
+        raise RuntimeError(f"{name} must have shape (S,{H},{D})")
+
+
 def _check_q16(x, S: int, name: str) -> None:
     if x.shape != (S, 16, 128):
         raise RuntimeError(f"{name} must have shape (S,16,128)")
@@ -136,6 +162,16 @@ def _split_broadcast_fake(conv_out, q48, k48, v48) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("lin_split_qkv_broadcast_h_bf16"))
+def _split_broadcast_h_fake(conv_out, q, k, v, num_v_heads: int, num_k_heads: int, head_dim: int = 128) -> None:
+    _check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim)
+    S = conv_out.shape[0]
+    _check_qkv_h(q, S, num_v_heads, head_dim, "q")
+    _check_qkv_h(k, S, num_v_heads, head_dim, "k")
+    _check_qkv_h(v, S, num_v_heads, head_dim, "v")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("lin_split_qkv_gqa_bf16"))
 def _split_gqa_fake(conv_out, q16, k16, v48) -> None:
     _check_conv_out(conv_out)
@@ -168,9 +204,31 @@ def _gating_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("gdn_gating_h_bf16"))
+def _gating_h_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out, num_heads: int) -> None:
+    S = a.shape[0]
+    for tensor, name in ((a, "a"), (b, "b"), (g_out, "g_out"), (beta_out, "beta_out")):
+        _check_heads_h(tensor, S, num_heads, name)
+    if neg_exp_A_log.shape != (num_heads,) or dt_bias.shape != (num_heads,):
+        raise RuntimeError("neg_exp_A_log/dt_bias must have shape (num_heads)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("gdn_gating_strided_bf16"))
 def _gating_strided_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out, a_stride: int, b_stride: int) -> None:
     _gating_fake(g_out, beta_out, neg_exp_A_log, dt_bias, g_out, beta_out)
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_gating_strided_h_bf16"))
+def _gating_strided_h_fake(a, b, neg_exp_A_log, dt_bias, g_out, beta_out, num_heads: int, a_stride: int, b_stride: int) -> None:
+    S = g_out.shape[0]
+    _check_heads_h(g_out, S, num_heads, "g_out")
+    _check_heads_h(beta_out, S, num_heads, "beta_out")
+    if neg_exp_A_log.shape != (num_heads,) or dt_bias.shape != (num_heads,):
+        raise RuntimeError("neg_exp_A_log/dt_bias must have shape (num_heads)")
+    if a_stride < num_heads or b_stride < num_heads:
+        raise RuntimeError("a_stride and b_stride must be at least num_heads")
     return None
 
 
@@ -185,6 +243,20 @@ def _chunk_from_conv_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, us
     if state.shape != (48, 128, 128):
         raise RuntimeError("state must have shape (48,128,128)")
     _check_v48(out, S, "out")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_chunk_from_conv_smem_h_bf16"))
+def _chunk_from_conv_h_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, num_v_heads: int, num_k_heads: int, head_dim: int = 128, use_qk_l2norm: bool = True) -> None:
+    _check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim)
+    S = conv_out.shape[0]
+    _check_heads_h(a, S, num_v_heads, "a")
+    _check_heads_h(b, S, num_v_heads, "b")
+    if neg_exp_A_log.shape != (num_v_heads,) or dt_bias.shape != (num_v_heads,):
+        raise RuntimeError("neg_exp_A_log/dt_bias must have shape (num_v_heads)")
+    if state.shape != (num_v_heads, head_dim, head_dim):
+        raise RuntimeError("state must have shape (num_v_heads,head_dim,head_dim)")
+    _check_qkv_h(out, S, num_v_heads, head_dim, "out")
     return None
 
 
@@ -326,6 +398,159 @@ def _wy_output_fla_rawk_fake(q_pack_hv, k16_l2, v_pack, h0, g_cumsum, out, scale
     _check_heads48(g_cumsum, S, "g_cumsum")
     _check_v48(out, S, "out")
     return None
+
+
+def _check_wy_h_profile(num_v_heads: int, num_k_heads: int, head_dim: int) -> None:
+    _check_head_profile(num_v_heads, num_k_heads, head_dim)
+    if (num_v_heads, num_k_heads) not in {(48, 16), (32, 16)}:
+        raise RuntimeError("WY supports head profiles 48/16 and 32/16")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_norm_cumsum_pack_qk_h_bf16"))
+def _wy_norm_h_fake(q, k, g, q_l2, k_l2, q_pack, k_pack, g_cumsum,
+                    num_v_heads: int, num_k_heads: int, head_dim: int = 128) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S, C = q.shape[0], _chunks(q.shape[0])
+    _check_qkv_h(q, S, num_k_heads, head_dim, "q")
+    _check_qkv_h(k, S, num_k_heads, head_dim, "k")
+    _check_heads_h(g, S, num_v_heads, "g")
+    _check_qkv_h(q_l2, S, num_k_heads, head_dim, "q_l2")
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    if q_pack.shape != (C, num_v_heads, 64, head_dim) or k_pack.shape != (C, num_k_heads, 64, head_dim):
+        raise RuntimeError("packed Q/K tensors have invalid head-parameterized WY shapes")
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_kkt_b64_h_bf16"))
+def _wy_kkt_h_fake(k_l2, beta, g_cumsum, A, num_v_heads: int,
+                   num_k_heads: int, head_dim: int = 128) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S = k_l2.shape[0]
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    _check_heads_h(beta, S, num_v_heads, "beta")
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+    if A.shape != (_chunks(S), num_v_heads, 64, 64):
+        raise RuntimeError("A has invalid head-parameterized WY shape")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_solve_tril_b64_h_f32"))
+def _wy_solve_h_fake(A, Ai, S: int, num_v_heads: int) -> None:
+    if A.shape != (_chunks(S), num_v_heads, 64, 64) or Ai.shape != A.shape:
+        raise RuntimeError("A/Ai have invalid head-parameterized WY shapes")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_cast_ai_h_f32_to_bf16"))
+def _wy_cast_h_fake(Ai, Ai_pack, S: int, num_v_heads: int) -> None:
+    if Ai.shape != (_chunks(S), num_v_heads, 64, 64) or Ai_pack.shape != Ai.shape:
+        raise RuntimeError("Ai/Ai_pack have invalid head-parameterized WY shapes")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_recompute_wu_b64_h_bf16"))
+def _wy_recompute_h_fake(k_l2, v, beta, g_cumsum, Ai, w, u,
+                         num_v_heads: int, num_k_heads: int,
+                         head_dim: int = 128) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S = k_l2.shape[0]
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    for tensor, name in ((v, "v"), (w, "w"), (u, "u")):
+        _check_qkv_h(tensor, S, num_v_heads, head_dim, name)
+    for tensor, name in ((beta, "beta"), (g_cumsum, "g_cumsum")):
+        _check_heads_h(tensor, S, num_v_heads, name)
+    if Ai.shape != (_chunks(S), num_v_heads, 64, 64):
+        raise RuntimeError("Ai has invalid head-parameterized WY shape")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_chunk_h_b64_h_bf16"))
+def _wy_chunk_h_generic_fake(k_l2, u, w, g_cumsum, state, h0, v_new,
+                             num_v_heads: int, num_k_heads: int,
+                             head_dim: int = 128) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S, C = k_l2.shape[0], _chunks(k_l2.shape[0])
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    for tensor, name in ((u, "u"), (w, "w"), (v_new, "v_new")):
+        _check_qkv_h(tensor, S, num_v_heads, head_dim, name)
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+    if state.shape != (num_v_heads, head_dim, head_dim) or h0.shape != (C, num_v_heads, head_dim, head_dim):
+        raise RuntimeError("state/h0 have invalid head-parameterized WY shapes")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_output_o_b64_h_bf16"))
+def _wy_output_h_fake(q_l2, k_l2, v_new, h0, g_cumsum, out,
+                      num_v_heads: int, num_k_heads: int,
+                      head_dim: int = 128) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S, C = q_l2.shape[0], _chunks(q_l2.shape[0])
+    _check_qkv_h(q_l2, S, num_k_heads, head_dim, "q_l2")
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    _check_qkv_h(v_new, S, num_v_heads, head_dim, "v_new")
+    _check_qkv_h(out, S, num_v_heads, head_dim, "out")
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+    if h0.shape != (C, num_v_heads, head_dim, head_dim):
+        raise RuntimeError("h0 has invalid head-parameterized WY shape")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_recompute_wu_b64_mma_fla_h_bf16"))
+def _wy_recompute_fla_h_fake(k_l2, v, beta, g_cumsum, Ai_pack, w_pack,
+                             u_pack, num_v_heads: int, num_k_heads: int,
+                             head_dim: int = 128) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S, C = k_l2.shape[0], _chunks(k_l2.shape[0])
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    _check_qkv_h(v, S, num_v_heads, head_dim, "v")
+    _check_heads_h(beta, S, num_v_heads, "beta")
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+    for tensor, name, width in ((Ai_pack, "Ai_pack", 64), (w_pack, "w_pack", head_dim), (u_pack, "u_pack", head_dim)):
+        if tensor.shape != (C, num_v_heads, 64, width):
+            raise RuntimeError(f"{name} has invalid head-parameterized WY shape")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_chunk_h_b64_mma_fla_h_bf16"))
+def _wy_chunk_fla_h_fake(k_l2, w_pack, u_pack, g_cumsum, state, h0,
+                         v_new, v_new_pack, k_pack_hv, num_v_heads: int,
+                         num_k_heads: int, head_dim: int = 128) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S, C = k_l2.shape[0], _chunks(k_l2.shape[0])
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    _check_qkv_h(v_new, S, num_v_heads, head_dim, "v_new")
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+    if state.shape != (num_v_heads, head_dim, head_dim) or h0.shape != (C, num_v_heads, head_dim, head_dim):
+        raise RuntimeError("state/h0 have invalid head-parameterized WY shapes")
+    for tensor, name in ((w_pack, "w_pack"), (u_pack, "u_pack"), (v_new_pack, "v_new_pack"), (k_pack_hv, "k_pack_hv")):
+        if tensor.shape != (C, num_v_heads, 64, head_dim):
+            raise RuntimeError(f"{name} has invalid head-parameterized WY shape")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_output_o_b64_mma_fla_h_bf16"))
+def _wy_output_fla_h_fake(q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, out,
+                          num_v_heads: int, num_k_heads: int,
+                          head_dim: int = 128,
+                          scale: float = 0.08838834764831845) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S, C = out.shape[0], _chunks(out.shape[0])
+    for tensor, name in ((q_pack_hv, "q_pack_hv"), (k_pack_hv, "k_pack_hv"), (v_pack, "v_pack")):
+        if tensor.shape != (C, num_v_heads, 64, head_dim):
+            raise RuntimeError(f"{name} has invalid head-parameterized WY shape")
+    if h0.shape != (C, num_v_heads, head_dim, head_dim):
+        raise RuntimeError("h0 has invalid head-parameterized WY shape")
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+    _check_qkv_h(out, S, num_v_heads, head_dim, "out")
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_output_o_b64_mma_fla_rawk_h_bf16"))
+def _wy_output_fla_rawk_h_fake(q_pack_hv, k_l2, v_pack, h0, g_cumsum,
+                               out, num_v_heads: int, num_k_heads: int,
+                               head_dim: int = 128,
+                               scale: float = 0.08838834764831845) -> None:
+    _check_wy_h_profile(num_v_heads, num_k_heads, head_dim)
+    S, C = out.shape[0], _chunks(out.shape[0])
+    for tensor, name in ((q_pack_hv, "q_pack_hv"), (v_pack, "v_pack")):
+        if tensor.shape != (C, num_v_heads, 64, head_dim):
+            raise RuntimeError(f"{name} has invalid head-parameterized WY shape")
+    _check_qkv_h(k_l2, S, num_k_heads, head_dim, "k_l2")
+    if h0.shape != (C, num_v_heads, head_dim, head_dim):
+        raise RuntimeError("h0 has invalid head-parameterized WY shape")
+    _check_heads_h(g_cumsum, S, num_v_heads, "g_cumsum")
+    _check_qkv_h(out, S, num_v_heads, head_dim, "out")
 
 
 def gated_delta_recurrent_bf16(
@@ -504,6 +729,31 @@ def lin_split_qkv_broadcast_bf16(
     return q48, k48, v48
 
 
+def lin_split_qkv_broadcast_h_bf16(
+    conv_out: torch.Tensor,
+    num_v_heads: int,
+    num_k_heads: int,
+    head_dim: int = 128,
+    *,
+    q: Optional[torch.Tensor] = None,
+    k: Optional[torch.Tensor] = None,
+    v: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split ``[Q(Hk), K(Hk), V(Hv)]`` and broadcast Q/K to ``Hv``."""
+    S = conv_out.shape[0]
+    shape = (S, int(num_v_heads), int(head_dim))
+    if q is None:
+        q = torch.empty(shape, device=conv_out.device, dtype=conv_out.dtype)
+    if k is None:
+        k = torch.empty_like(q)
+    if v is None:
+        v = torch.empty_like(q)
+    ops.lin_split_qkv_broadcast_h_bf16(
+        conv_out, q, k, v, int(num_v_heads), int(num_k_heads), int(head_dim)
+    )
+    return q, k, v
+
+
 def lin_split_qkv_gqa_bf16(
     conv_out: torch.Tensor,
     *,
@@ -554,6 +804,27 @@ def gdn_gating_bf16(
     return g_out, beta_out
 
 
+def gdn_gating_h_bf16(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    neg_exp_A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    *,
+    num_heads: Optional[int] = None,
+    g_out: Optional[torch.Tensor] = None,
+    beta_out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    num_heads = int(a.shape[1] if num_heads is None else num_heads)
+    if g_out is None:
+        g_out = torch.empty_like(a)
+    if beta_out is None:
+        beta_out = torch.empty_like(a)
+    ops.gdn_gating_h_bf16(
+        a, b, neg_exp_A_log, dt_bias, g_out, beta_out, num_heads
+    )
+    return g_out, beta_out
+
+
 def gdn_gating_strided_bf16(
     a: torch.Tensor,
     b: torch.Tensor,
@@ -574,6 +845,30 @@ def gdn_gating_strided_bf16(
     return g_out, beta_out
 
 
+def gdn_gating_strided_h_bf16(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    neg_exp_A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    *,
+    rows: int,
+    num_heads: int,
+    a_stride: int,
+    b_stride: int,
+    g_out: Optional[torch.Tensor] = None,
+    beta_out: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if g_out is None:
+        g_out = torch.empty((rows, num_heads), device=a.device, dtype=a.dtype)
+    if beta_out is None:
+        beta_out = torch.empty_like(g_out)
+    ops.gdn_gating_strided_h_bf16(
+        a, b, neg_exp_A_log, dt_bias, g_out, beta_out,
+        int(num_heads), int(a_stride), int(b_stride)
+    )
+    return g_out, beta_out
+
+
 def gdn_chunk_from_conv_smem_bf16(
     conv_out: torch.Tensor,
     a: torch.Tensor,
@@ -588,6 +883,33 @@ def gdn_chunk_from_conv_smem_bf16(
     if out is None:
         out = torch.empty((conv_out.shape[0], 48, 128), device=conv_out.device, dtype=conv_out.dtype)
     ops.gdn_chunk_from_conv_smem_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, bool(use_qk_l2norm))
+    return out
+
+
+def gdn_chunk_from_conv_smem_h_bf16(
+    conv_out: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    neg_exp_A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    state: torch.Tensor,
+    *,
+    num_v_heads: int,
+    num_k_heads: int,
+    head_dim: int = 128,
+    use_qk_l2norm: bool = True,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty(
+            (conv_out.shape[0], num_v_heads, head_dim),
+            device=conv_out.device,
+            dtype=conv_out.dtype,
+        )
+    ops.gdn_chunk_from_conv_smem_h_bf16(
+        conv_out, a, b, neg_exp_A_log, dt_bias, state, out,
+        int(num_v_heads), int(num_k_heads), int(head_dim), bool(use_qk_l2norm)
+    )
     return out
 
 
@@ -785,6 +1107,161 @@ def gdn_wy_output_o_b64_mma_fla_rawk_bf16(
     return out
 
 
+def gdn_wy_norm_cumsum_pack_qk_h_bf16(
+    q: torch.Tensor, k: torch.Tensor, g: torch.Tensor, *,
+    num_v_heads: int, num_k_heads: int, head_dim: int = 128,
+    q_l2: Optional[torch.Tensor] = None, k_l2: Optional[torch.Tensor] = None,
+    q_pack_hv: Optional[torch.Tensor] = None,
+    k_pack_hk: Optional[torch.Tensor] = None,
+    g_cumsum: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    S, C = q.shape[0], _chunks(q.shape[0])
+    q_l2 = torch.empty_like(q) if q_l2 is None else q_l2
+    k_l2 = torch.empty_like(k) if k_l2 is None else k_l2
+    if q_pack_hv is None:
+        q_pack_hv = torch.empty((C, num_v_heads, 64, head_dim), device=q.device, dtype=q.dtype)
+    if k_pack_hk is None:
+        k_pack_hk = torch.empty((C, num_k_heads, 64, head_dim), device=q.device, dtype=q.dtype)
+    g_cumsum = torch.empty_like(g) if g_cumsum is None else g_cumsum
+    ops.gdn_wy_norm_cumsum_pack_qk_h_bf16(
+        q, k, g, q_l2, k_l2, q_pack_hv, k_pack_hk, g_cumsum,
+        int(num_v_heads), int(num_k_heads), int(head_dim)
+    )
+    return q_l2, k_l2, q_pack_hv, k_pack_hk, g_cumsum
+
+
+def gdn_wy_kkt_b64_h_bf16(
+    k_l2: torch.Tensor, beta: torch.Tensor, g_cumsum: torch.Tensor, *,
+    num_v_heads: int, num_k_heads: int, head_dim: int = 128,
+    A: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if A is None:
+        A = torch.empty((_chunks(k_l2.shape[0]), num_v_heads, 64, 64), device=k_l2.device, dtype=torch.float32)
+    ops.gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, A, int(num_v_heads), int(num_k_heads), int(head_dim))
+    return A
+
+
+def gdn_wy_solve_tril_b64_h_f32(
+    A: torch.Tensor, S: int, *, num_v_heads: int,
+    Ai: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    Ai = torch.empty_like(A) if Ai is None else Ai
+    ops.gdn_wy_solve_tril_b64_h_f32(A, Ai, int(S), int(num_v_heads))
+    return Ai
+
+
+def gdn_wy_cast_ai_h_f32_to_bf16(
+    Ai: torch.Tensor, S: int, *, num_v_heads: int,
+    Ai_pack: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if Ai_pack is None:
+        Ai_pack = torch.empty(Ai.shape, device=Ai.device, dtype=torch.bfloat16)
+    ops.gdn_wy_cast_ai_h_f32_to_bf16(Ai, Ai_pack, int(S), int(num_v_heads))
+    return Ai_pack
+
+
+def gdn_wy_recompute_wu_b64_h_bf16(
+    k_l2: torch.Tensor, v: torch.Tensor, beta: torch.Tensor,
+    g_cumsum: torch.Tensor, Ai: torch.Tensor, *, num_v_heads: int,
+    num_k_heads: int, head_dim: int = 128,
+    w: Optional[torch.Tensor] = None, u: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    w = torch.empty_like(v) if w is None else w
+    u = torch.empty_like(v) if u is None else u
+    ops.gdn_wy_recompute_wu_b64_h_bf16(k_l2, v, beta, g_cumsum, Ai, w, u, int(num_v_heads), int(num_k_heads), int(head_dim))
+    return w, u
+
+
+def gdn_wy_chunk_h_b64_h_bf16(
+    k_l2: torch.Tensor, u: torch.Tensor, w: torch.Tensor,
+    g_cumsum: torch.Tensor, state: torch.Tensor, *, num_v_heads: int,
+    num_k_heads: int, head_dim: int = 128,
+    h0: Optional[torch.Tensor] = None,
+    v_new: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    C = _chunks(k_l2.shape[0])
+    if h0 is None:
+        h0 = torch.empty((C, num_v_heads, head_dim, head_dim), device=k_l2.device, dtype=k_l2.dtype)
+    v_new = torch.empty_like(u) if v_new is None else v_new
+    ops.gdn_wy_chunk_h_b64_h_bf16(k_l2, u, w, g_cumsum, state, h0, v_new, int(num_v_heads), int(num_k_heads), int(head_dim))
+    return h0, v_new
+
+
+def gdn_wy_output_o_b64_h_bf16(
+    q_l2: torch.Tensor, k_l2: torch.Tensor, v_new: torch.Tensor,
+    h0: torch.Tensor, g_cumsum: torch.Tensor, *, num_v_heads: int,
+    num_k_heads: int, head_dim: int = 128,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty((q_l2.shape[0], num_v_heads, head_dim), device=q_l2.device, dtype=q_l2.dtype)
+    ops.gdn_wy_output_o_b64_h_bf16(q_l2, k_l2, v_new, h0, g_cumsum, out, int(num_v_heads), int(num_k_heads), int(head_dim))
+    return out
+
+
+def gdn_wy_recompute_wu_b64_mma_fla_h_bf16(
+    k_l2: torch.Tensor, v: torch.Tensor, beta: torch.Tensor,
+    g_cumsum: torch.Tensor, Ai_pack: torch.Tensor, *, num_v_heads: int,
+    num_k_heads: int, head_dim: int = 128,
+    w_pack: Optional[torch.Tensor] = None,
+    u_pack: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    shape = (_chunks(k_l2.shape[0]), num_v_heads, 64, head_dim)
+    if w_pack is None:
+        w_pack = torch.empty(shape, device=k_l2.device, dtype=k_l2.dtype)
+    u_pack = torch.empty_like(w_pack) if u_pack is None else u_pack
+    ops.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(k_l2, v, beta, g_cumsum, Ai_pack, w_pack, u_pack, int(num_v_heads), int(num_k_heads), int(head_dim))
+    return w_pack, u_pack
+
+
+def gdn_wy_chunk_h_b64_mma_fla_h_bf16(
+    k_l2: torch.Tensor, w_pack: torch.Tensor, u_pack: torch.Tensor,
+    g_cumsum: torch.Tensor, state: torch.Tensor, *, num_v_heads: int,
+    num_k_heads: int, head_dim: int = 128,
+    h0: Optional[torch.Tensor] = None, v_new: Optional[torch.Tensor] = None,
+    v_new_pack: Optional[torch.Tensor] = None,
+    k_pack_hv: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    S, C = k_l2.shape[0], _chunks(k_l2.shape[0])
+    pack_shape = (C, num_v_heads, 64, head_dim)
+    if h0 is None:
+        h0 = torch.empty((C, num_v_heads, head_dim, head_dim), device=k_l2.device, dtype=k_l2.dtype)
+    if v_new is None:
+        v_new = torch.empty((S, num_v_heads, head_dim), device=k_l2.device, dtype=k_l2.dtype)
+    if v_new_pack is None:
+        v_new_pack = torch.empty(pack_shape, device=k_l2.device, dtype=k_l2.dtype)
+    if k_pack_hv is None:
+        k_pack_hv = torch.empty(pack_shape, device=k_l2.device, dtype=k_l2.dtype)
+    ops.gdn_wy_chunk_h_b64_mma_fla_h_bf16(k_l2, w_pack, u_pack, g_cumsum, state, h0, v_new, v_new_pack, k_pack_hv, int(num_v_heads), int(num_k_heads), int(head_dim))
+    return h0, v_new, v_new_pack, k_pack_hv
+
+
+def gdn_wy_output_o_b64_mma_fla_h_bf16(
+    q_pack_hv: torch.Tensor, k_pack_hv: torch.Tensor,
+    v_pack: torch.Tensor, h0: torch.Tensor, g_cumsum: torch.Tensor, *,
+    num_v_heads: int, num_k_heads: int, head_dim: int = 128,
+    scale: float = 0.08838834764831845,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty((g_cumsum.shape[0], num_v_heads, head_dim), device=q_pack_hv.device, dtype=q_pack_hv.dtype)
+    ops.gdn_wy_output_o_b64_mma_fla_h_bf16(q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, out, int(num_v_heads), int(num_k_heads), int(head_dim), float(scale))
+    return out
+
+
+def gdn_wy_output_o_b64_mma_fla_rawk_h_bf16(
+    q_pack_hv: torch.Tensor, k_l2: torch.Tensor, v_pack: torch.Tensor,
+    h0: torch.Tensor, g_cumsum: torch.Tensor, *, num_v_heads: int,
+    num_k_heads: int, head_dim: int = 128,
+    scale: float = 0.08838834764831845,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty((g_cumsum.shape[0], num_v_heads, head_dim), device=q_pack_hv.device, dtype=q_pack_hv.dtype)
+    ops.gdn_wy_output_o_b64_mma_fla_rawk_h_bf16(q_pack_hv, k_l2, v_pack, h0, g_cumsum, out, int(num_v_heads), int(num_k_heads), int(head_dim), float(scale))
+    return out
+
+
 __all__ = [
     "gated_delta_recurrent_bf16",
     "gated_delta_recurrent_inout_bf16",
@@ -795,11 +1272,15 @@ __all__ = [
     "gated_delta_chunk_smem_bf16",
     "gated_delta_recurrent_sequence_bf16",
     "lin_split_qkv_broadcast_bf16",
+    "lin_split_qkv_broadcast_h_bf16",
     "lin_split_qkv_gqa_bf16",
     "split_q_gate_bf16",
     "gdn_gating_bf16",
+    "gdn_gating_h_bf16",
     "gdn_gating_strided_bf16",
+    "gdn_gating_strided_h_bf16",
     "gdn_chunk_from_conv_smem_bf16",
+    "gdn_chunk_from_conv_smem_h_bf16",
     "gdn_wy_norm_cumsum_pack_qk_bf16",
     "gdn_wy_kkt_b64_bf16",
     "gdn_wy_solve_tril_b64_f32",
@@ -811,4 +1292,15 @@ __all__ = [
     "gdn_wy_chunk_h_b64_mma_fla_bf16",
     "gdn_wy_output_o_b64_mma_fla_bf16",
     "gdn_wy_output_o_b64_mma_fla_rawk_bf16",
+    "gdn_wy_norm_cumsum_pack_qk_h_bf16",
+    "gdn_wy_kkt_b64_h_bf16",
+    "gdn_wy_solve_tril_b64_h_f32",
+    "gdn_wy_cast_ai_h_f32_to_bf16",
+    "gdn_wy_recompute_wu_b64_h_bf16",
+    "gdn_wy_chunk_h_b64_h_bf16",
+    "gdn_wy_output_o_b64_h_bf16",
+    "gdn_wy_recompute_wu_b64_mma_fla_h_bf16",
+    "gdn_wy_chunk_h_b64_mma_fla_h_bf16",
+    "gdn_wy_output_o_b64_mma_fla_h_bf16",
+    "gdn_wy_output_o_b64_mma_fla_rawk_h_bf16",
 ]

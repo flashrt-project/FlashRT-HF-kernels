@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -52,11 +53,20 @@ SHAPES = {
     "split_s4": ("split", 1, 4, 48),
     "gating_s4": ("gating", 1, 4, 48),
     "chunk_from_conv_s4": ("chunk_from_conv", 1, 4, 48),
+    "h32_pipeline_s1": ("h32_pipeline", 1, 1, 32),
+    "h32_pipeline_s4": ("h32_pipeline", 1, 4, 32),
+    "h32_pipeline_s64": ("h32_pipeline", 1, 64, 32),
     "wy_pipeline_s4": ("wy_pipeline", 1, 4, 48),
     "wy_pipeline_s65": ("wy_pipeline", 1, 65, 48),
     "wy_mma_fla_s64": ("wy_mma_fla", 1, 64, 48),
     "wy_mma_fla_s65": ("wy_mma_fla", 1, 65, 48),
     "wy_mma_fla_s128": ("wy_mma_fla", 1, 128, 48),
+    "wy_mma_fla_h32_s1": ("wy_mma_fla_h32", 1, 1, 32),
+    "wy_mma_fla_h32_s17": ("wy_mma_fla_h32", 1, 17, 32),
+    "wy_mma_fla_h32_s64": ("wy_mma_fla_h32", 1, 64, 32),
+    "wy_mma_fla_h32_s65": ("wy_mma_fla_h32", 1, 65, 32),
+    "wy_mma_fla_h32_s128": ("wy_mma_fla_h32", 1, 128, 32),
+    "wy_mma_fla_h32_s256": ("wy_mma_fla_h32", 1, 256, 32),
 }
 MODES = {
     "smoke": ["recurrent_h4"],
@@ -141,6 +151,15 @@ class SourceOps:
         self._ops.lin_split_qkv_gqa_bf16(conv_out, q, k, v)
         return q, k, v
 
+    def split_broadcast_h(self, conv_out, num_v_heads, num_k_heads, head_dim=D):
+        q = torch.empty((conv_out.shape[0], num_v_heads, head_dim), device=conv_out.device, dtype=conv_out.dtype)
+        k = torch.empty_like(q)
+        v = torch.empty_like(q)
+        self._ops.lin_split_qkv_broadcast_h_bf16(
+            conv_out, q, k, v, num_v_heads, num_k_heads, head_dim
+        )
+        return q, k, v
+
     def split_q_gate(self, q_proj):
         q_pre = torch.empty((q_proj.shape[0], 24, 256), device=q_proj.device, dtype=q_proj.dtype)
         gate = torch.empty((q_proj.shape[0], 24 * 256), device=q_proj.device, dtype=q_proj.dtype)
@@ -159,9 +178,32 @@ class SourceOps:
         self._ops.gdn_gating_strided_bf16(a, b, neg, dt, g, beta, a_stride, b_stride)
         return g, beta
 
+    def gating_h(self, a, b, neg, dt, num_heads):
+        g = torch.empty_like(a)
+        beta = torch.empty_like(a)
+        self._ops.gdn_gating_h_bf16(a, b, neg, dt, g, beta, num_heads)
+        return g, beta
+
+    def gating_strided_h(self, a, b, neg, dt, rows, num_heads, a_stride, b_stride):
+        g = torch.empty((rows, num_heads), device=a.device, dtype=a.dtype)
+        beta = torch.empty_like(g)
+        self._ops.gdn_gating_strided_h_bf16(
+            a, b, neg, dt, g, beta, num_heads, a_stride, b_stride
+        )
+        return g, beta
+
     def chunk_from_conv(self, conv_out, a, b, neg, dt, state, use_qk_l2norm=True):
         out = torch.empty((conv_out.shape[0], 48, D), device=conv_out.device, dtype=conv_out.dtype)
         self._ops.gdn_chunk_from_conv_smem_bf16(conv_out, a, b, neg, dt, state, out, use_qk_l2norm)
+        return out
+
+    def chunk_from_conv_h(self, conv_out, a, b, neg, dt, state, num_v_heads, num_k_heads, head_dim=D, use_qk_l2norm=True, out=None):
+        if out is None:
+            out = torch.empty((conv_out.shape[0], num_v_heads, head_dim), device=conv_out.device, dtype=conv_out.dtype)
+        self._ops.gdn_chunk_from_conv_smem_h_bf16(
+            conv_out, a, b, neg, dt, state, out,
+            num_v_heads, num_k_heads, head_dim, use_qk_l2norm
+        )
         return out
 
     def wy_pipeline(self, q16, k16, v48, g, beta, state):
@@ -215,6 +257,34 @@ class SourceOps:
         self._ops.gdn_wy_output_o_b64_mma_fla_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, out, scale)
         return out
 
+    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads, poison_tail=False):
+        S, C = q.shape[0], (q.shape[0] + 63) // 64
+        q_l2, k_l2 = torch.empty_like(q), torch.empty_like(k)
+        q_pack = torch.empty((C, num_v_heads, 64, D), device=q.device, dtype=q.dtype)
+        if poison_tail:
+            q_pack.fill_(float("nan"))
+        k_pack = torch.empty((C, num_k_heads, 64, D), device=q.device, dtype=q.dtype)
+        g_cumsum = torch.empty_like(g)
+        A = torch.empty((C, num_v_heads, 64, 64), device=q.device, dtype=torch.float32)
+        Ai = torch.empty_like(A)
+        Ai_pack = torch.empty_like(A, dtype=torch.bfloat16)
+        pack = torch.empty((C, num_v_heads, 64, D), device=q.device, dtype=q.dtype)
+        w_pack, u_pack = torch.empty_like(pack), torch.empty_like(pack)
+        h0 = torch.empty((C, num_v_heads, D, D), device=q.device, dtype=q.dtype)
+        v_new = torch.empty_like(v)
+        v_new_pack, k_pack_hv = torch.empty_like(pack), torch.empty_like(pack)
+        if poison_tail:
+            v_new_pack.fill_(float("nan"))
+        out = torch.empty_like(v)
+        self._ops.gdn_wy_norm_cumsum_pack_qk_h_bf16(q, k, g, q_l2, k_l2, q_pack, k_pack, g_cumsum, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, A, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_solve_tril_b64_h_f32(A, Ai, S, num_v_heads)
+        self._ops.gdn_wy_cast_ai_h_f32_to_bf16(Ai, Ai_pack, S, num_v_heads)
+        self._ops.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(k_l2, v, beta, g_cumsum, Ai_pack, w_pack, u_pack, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_chunk_h_b64_mma_fla_h_bf16(k_l2, w_pack, u_pack, g_cumsum, state, h0, v_new, v_new_pack, k_pack_hv, num_v_heads, num_k_heads, D)
+        self._ops.gdn_wy_output_o_b64_mma_fla_h_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, out, num_v_heads, num_k_heads, D, D ** -0.5)
+        return out
+
 
 class InstalledOps:
     def __init__(self, mod) -> None:
@@ -265,6 +335,11 @@ class InstalledOps:
     def split_gqa(self, conv_out):
         return self._mod.lin_split_qkv_gqa_bf16(conv_out)
 
+    def split_broadcast_h(self, conv_out, num_v_heads, num_k_heads, head_dim=D):
+        return self._mod.lin_split_qkv_broadcast_h_bf16(
+            conv_out, num_v_heads, num_k_heads, head_dim
+        )
+
     def split_q_gate(self, q_proj):
         return self._mod.split_q_gate_bf16(q_proj)
 
@@ -276,9 +351,27 @@ class InstalledOps:
             a, b, neg, dt, rows=rows, a_stride=a_stride, b_stride=b_stride
         )
 
+    def gating_h(self, a, b, neg, dt, num_heads):
+        return self._mod.gdn_gating_h_bf16(
+            a, b, neg, dt, num_heads=num_heads
+        )
+
+    def gating_strided_h(self, a, b, neg, dt, rows, num_heads, a_stride, b_stride):
+        return self._mod.gdn_gating_strided_h_bf16(
+            a, b, neg, dt, rows=rows, num_heads=num_heads,
+            a_stride=a_stride, b_stride=b_stride
+        )
+
     def chunk_from_conv(self, conv_out, a, b, neg, dt, state, use_qk_l2norm=True):
         return self._mod.gdn_chunk_from_conv_smem_bf16(
             conv_out, a, b, neg, dt, state, use_qk_l2norm=use_qk_l2norm
+        )
+
+    def chunk_from_conv_h(self, conv_out, a, b, neg, dt, state, num_v_heads, num_k_heads, head_dim=D, use_qk_l2norm=True, out=None):
+        return self._mod.gdn_chunk_from_conv_smem_h_bf16(
+            conv_out, a, b, neg, dt, state,
+            num_v_heads=num_v_heads, num_k_heads=num_k_heads,
+            head_dim=head_dim, use_qk_l2norm=use_qk_l2norm, out=out
         )
 
     def wy_pipeline(self, q16, k16, v48, g, beta, state):
@@ -302,9 +395,40 @@ class InstalledOps:
             q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, scale=D ** -0.5
         )
 
+    def wy_mma_fla_h(self, q, k, v, g, beta, state, num_v_heads, num_k_heads, poison_tail=False):
+        C = (q.shape[0] + 63) // 64
+        q_pack = None
+        if poison_tail:
+            q_pack = torch.full(
+                (C, num_v_heads, 64, D), float("nan"),
+                device=q.device, dtype=q.dtype,
+            )
+        q_l2, k_l2, q_pack, _, g_cumsum = self._mod.gdn_wy_norm_cumsum_pack_qk_h_bf16(
+            q, k, g, num_v_heads=num_v_heads, num_k_heads=num_k_heads,
+            q_pack_hv=q_pack,
+        )
+        A = self._mod.gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
+        Ai = self._mod.gdn_wy_solve_tril_b64_h_f32(A, q.shape[0], num_v_heads=num_v_heads)
+        Ai_pack = self._mod.gdn_wy_cast_ai_h_f32_to_bf16(Ai, q.shape[0], num_v_heads=num_v_heads)
+        w_pack, u_pack = self._mod.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(k_l2, v, beta, g_cumsum, Ai_pack, num_v_heads=num_v_heads, num_k_heads=num_k_heads)
+        v_new_pack = None
+        if poison_tail:
+            v_new_pack = torch.full(
+                (C, num_v_heads, 64, D), float("nan"),
+                device=q.device, dtype=q.dtype,
+            )
+        h0, _, v_new_pack, k_pack_hv = self._mod.gdn_wy_chunk_h_b64_mma_fla_h_bf16(
+            k_l2, w_pack, u_pack, g_cumsum, state,
+            num_v_heads=num_v_heads, num_k_heads=num_k_heads,
+            v_new_pack=v_new_pack,
+        )
+        return self._mod.gdn_wy_output_o_b64_mma_fla_h_bf16(q_pack, k_pack_hv, v_new_pack, h0, g_cumsum, num_v_heads=num_v_heads, num_k_heads=num_k_heads, scale=D ** -0.5)
+
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
+    if major == 11 and minor == 0:
+        return "11.0a"
     if major == 12 and minor == 1:
         return "12.1"
     if major >= 12:
@@ -345,12 +469,22 @@ def load_source_ops() -> SourceOps:
 
 def load_installed_ops(artifact: str | None):
     if artifact:
-        sys.path.insert(0, artifact)
-    try:
-        return InstalledOps(importlib.import_module("gated_delta_attention"))
-    finally:
-        if artifact:
-            sys.path.remove(artifact)
+        artifact_path = Path(artifact).resolve()
+        init_path = artifact_path / "__init__.py"
+        if not init_path.is_file():
+            raise RuntimeError(f"missing top-level artifact entry: {init_path}")
+        spec = importlib.util.spec_from_file_location(
+            "gated_delta_attention",
+            init_path,
+            submodule_search_locations=[str(artifact_path)],
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load artifact entry: {init_path}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return InstalledOps(module)
+    return InstalledOps(importlib.import_module("gated_delta_attention"))
 
 
 def make_step_inputs(B: int, H: int, seed: int, f32_state=False):
@@ -431,6 +565,19 @@ def make_conv_inputs(S: int, seed: int):
     return conv_out, a, b, neg, dt, state
 
 
+def make_conv_inputs_h(S: int, Hv: int, Hk: int, seed: int):
+    gen = torch.Generator(device="cuda")
+    gen.manual_seed(seed)
+    width = (2 * Hk + Hv) * D
+    conv_out = (torch.randn((S, width), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    a = (torch.randn((S, Hv), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    b = (torch.randn((S, Hv), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
+    neg = (torch.randn((Hv,), device="cuda", generator=gen).abs() * -0.02).float()
+    dt = (torch.randn((Hv,), device="cuda", generator=gen) * 0.02).float()
+    state = (torch.randn((Hv, D, D), device="cuda", generator=gen) * 0.02).to(torch.bfloat16)
+    return conv_out, a, b, neg, dt, state
+
+
 def ref_split_broadcast(conv_out):
     S = conv_out.shape[0]
     x = conv_out.view(S, 10240)
@@ -440,6 +587,20 @@ def ref_split_broadcast(conv_out):
     q48 = q16.repeat_interleave(3, dim=1).contiguous()
     k48 = k16.repeat_interleave(3, dim=1).contiguous()
     return q48, k48, v48.contiguous()
+
+
+def ref_split_broadcast_h(conv_out, Hv: int, Hk: int):
+    S = conv_out.shape[0]
+    qk_width = Hk * D
+    q = conv_out[:, :qk_width].view(S, Hk, D)
+    k = conv_out[:, qk_width : 2 * qk_width].view(S, Hk, D)
+    v = conv_out[:, 2 * qk_width :].view(S, Hv, D)
+    repeat = Hv // Hk
+    return (
+        q.repeat_interleave(repeat, dim=1).contiguous(),
+        k.repeat_interleave(repeat, dim=1).contiguous(),
+        v.contiguous(),
+    )
 
 
 def ref_split_gqa(conv_out):
@@ -489,6 +650,134 @@ def run_sequence_graph(ops) -> None:
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
     torch.testing.assert_close(state, state_expected, rtol=0, atol=0)
+
+
+def run_h32_graph(ops) -> None:
+    S, Hv, Hk = 64, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 434343)
+    state = initial.clone()
+    out = torch.empty((S, Hv, D), device="cuda", dtype=torch.bfloat16)
+    expected = ops.chunk_from_conv_h(
+        conv, a, b, neg, dt, state, Hv, Hk, out=out
+    ).clone()
+    expected_state = state.clone()
+
+    state.copy_(initial)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        state.copy_(initial)
+        ops.chunk_from_conv_h(conv, a, b, neg, dt, state, Hv, Hk, out=out)
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
+
+
+def run_h32_wy_graph(ops) -> None:
+    S, Hv, Hk = 65, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 454545)
+    width = Hk * D
+    q = conv[:, :width].view(S, Hk, D).contiguous()
+    k = conv[:, width : 2 * width].view(S, Hk, D).contiguous()
+    v = conv[:, 2 * width :].view(S, Hv, D).contiguous()
+    g, beta = ref_gating(a, b, neg, dt)
+
+    state = initial.clone()
+    expected = ops.wy_mma_fla_h(q, k, v, g, beta, state, Hv, Hk).clone()
+    expected_state = state.clone()
+    state.copy_(initial)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        state.copy_(initial)
+        out = ops.wy_mma_fla_h(q, k, v, g, beta, state, Hv, Hk)
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected, rtol=0, atol=0)
+    torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
+    first_out = out.clone()
+    first_state = state.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, first_out, rtol=0, atol=0)
+    torch.testing.assert_close(state, first_state, rtol=0, atol=0)
+
+
+def run_h32_wy_compile(ops) -> None:
+    S, Hv, Hk = 17, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 454546)
+    width = Hk * D
+    q = conv[:, :width].view(S, Hk, D).contiguous()
+    k = conv[:, width : 2 * width].view(S, Hk, D).contiguous()
+    v = conv[:, 2 * width :].view(S, Hv, D).contiguous()
+    g, beta = ref_gating(a, b, neg, dt)
+
+    eager_state = initial.clone()
+    expected = ops.wy_mma_fla_h(q, k, v, g, beta, eager_state, Hv, Hk).clone()
+    compiled_state = initial.clone()
+    compiled = torch.compile(ops.wy_mma_fla_h, fullgraph=True)
+    got = compiled(q, k, v, g, beta, compiled_state, Hv, Hk)
+    torch.cuda.synchronize()
+    torch.testing.assert_close(got, expected, rtol=0, atol=0)
+    torch.testing.assert_close(compiled_state, eager_state, rtol=0, atol=0)
+
+
+def run_h32_wy_poisoned_tail(ops) -> None:
+    S, Hv, Hk = 1, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 454547)
+    width = Hk * D
+    q = conv[:, :width].view(S, Hk, D).contiguous()
+    k = conv[:, width : 2 * width].view(S, Hk, D).contiguous()
+    v = conv[:, 2 * width :].view(S, Hv, D).contiguous()
+    g, beta = ref_gating(a, b, neg, dt)
+    state = initial.clone()
+    got = ops.wy_mma_fla_h(
+        q, k, v, g, beta, state, Hv, Hk, poison_tail=True
+    )
+    qh = q.repeat_interleave(Hv // Hk, dim=1).contiguous()
+    kh = k.repeat_interleave(Hv // Hk, dim=1).contiguous()
+    ref, ref_state = ref_chunk(qh, kh, v, g, beta, initial)
+    torch.testing.assert_close(got, ref, rtol=0, atol=0.001)
+    torch.testing.assert_close(state, ref_state, rtol=0, atol=0.015625)
+    if not torch.isfinite(got).all():
+        raise AssertionError("H32 WY output must ignore poisoned packed-Q tail")
+
+
+def run_h32_wy_single_chunk_stress(ops) -> None:
+    # NT=1 exercises the cp.async pipeline boundary where there is no next
+    # stage to keep in flight. Repetition makes a missing wait deterministic.
+    for _ in range(20):
+        row = run_case(ops, "wy_mma_fla_h32_s64")
+        if not row.passed:
+            raise AssertionError(f"H32 WY single-chunk stress failed: {row}")
+
+
+def run_h32_contract_checks(ops) -> None:
+    S, Hv, Hk = 4, 32, 16
+    conv, a, b, neg, dt, state = make_conv_inputs_h(S, Hv, Hk, 444444)
+    try:
+        ops.gating_h(a, b, neg.to(torch.bfloat16), dt, Hv)
+    except RuntimeError as exc:
+        if "float32" not in str(exc):
+            raise
+    else:
+        raise AssertionError("BF16 neg_exp_A_log must be rejected")
+
+    bad_conv = conv[:, :-1].contiguous()
+    try:
+        ops.split_broadcast_h(bad_conv, Hv, Hk)
+    except RuntimeError as exc:
+        if "8192" not in str(exc):
+            raise
+    else:
+        raise AssertionError("invalid conv width must be rejected")
+
+    try:
+        ops.split_broadcast_h(conv, 32, 12)
+    except RuntimeError as exc:
+        if "divisible" not in str(exc):
+            raise
+    else:
+        raise AssertionError("non-integral Q/K broadcast must be rejected")
 
 
 def run_case(ops, name: str) -> Row:
@@ -589,6 +878,41 @@ def run_case(ops, name: str) -> Row:
         state_max, _, _, _ = metrics(state_work, ref_state)
         if state_max > 0.00390625:
             raise AssertionError(f"{name} state mismatch: {state_max}")
+    if kind == "h32_pipeline":
+        Hv, Hk = 32, 16
+        conv_out, a, b, neg, dt, state = make_conv_inputs_h(S, Hv, Hk, 14000 + S)
+        q, k, v = ops.split_broadcast_h(conv_out, Hv, Hk)
+        q_ref, k_ref, v_ref = ref_split_broadcast_h(conv_out, Hv, Hk)
+        torch.testing.assert_close(q, q_ref, rtol=0, atol=0)
+        torch.testing.assert_close(k, k_ref, rtol=0, atol=0)
+        torch.testing.assert_close(v, v_ref, rtol=0, atol=0)
+
+        g, beta = ops.gating_h(a, b, neg, dt, Hv)
+        g_ref, beta_ref = ref_gating(a, b, neg, dt)
+        a_pad = torch.zeros((S, 40), device="cuda", dtype=torch.bfloat16)
+        b_pad = torch.zeros_like(a_pad)
+        a_pad[:, :Hv] = a
+        b_pad[:, :Hv] = b
+        gs, betas = ops.gating_strided_h(
+            a_pad.flatten(), b_pad.flatten(), neg, dt, S, Hv, 40, 40
+        )
+        torch.testing.assert_close(g, g_ref, rtol=0, atol=0.001953125)
+        torch.testing.assert_close(beta, beta_ref, rtol=0, atol=0)
+        torch.testing.assert_close(gs, g, rtol=0, atol=0)
+        torch.testing.assert_close(betas, beta, rtol=0, atol=0)
+
+        state_work = state.clone()
+        got = ops.chunk_from_conv_h(conv_out, a, b, neg, dt, state_work, Hv, Hk)
+        staged_state = state.clone()
+        staged = ops.chunk(
+            q, k, v, g, beta, staged_state, smem=True
+        )
+        torch.testing.assert_close(got, staged, rtol=0, atol=0)
+        torch.testing.assert_close(state_work, staged_state, rtol=0, atol=0)
+        ref, ref_state = ref_chunk(q_ref, k_ref, v_ref, g_ref, beta_ref, state)
+        state_max, _, _, _ = metrics(state_work, ref_state)
+        if state_max > 0.00390625:
+            raise AssertionError(f"{name} state mismatch: {state_max}")
     if kind in {"wy_pipeline", "wy_mma_fla"}:
         conv_out, a, b, neg, dt, state = make_conv_inputs(S, 13000 + S)
         q16, k16, v48 = ref_split_gqa(conv_out)
@@ -605,6 +929,24 @@ def run_case(ops, name: str) -> Row:
         state_tol = 0.015625
         if state_max > state_tol:
             raise AssertionError(f"{name} state mismatch: {state_max}")
+    if kind == "wy_mma_fla_h32":
+        Hv, Hk = 32, 16
+        conv_out, a, b, neg, dt, state = make_conv_inputs_h(
+            S, Hv, Hk, 15000 + S
+        )
+        width = Hk * D
+        q = conv_out[:, :width].view(S, Hk, D).contiguous()
+        k = conv_out[:, width : 2 * width].view(S, Hk, D).contiguous()
+        v = conv_out[:, 2 * width :].view(S, Hv, D).contiguous()
+        g, beta = ref_gating(a, b, neg, dt)
+        state_work = state.clone()
+        got = ops.wy_mma_fla_h(q, k, v, g, beta, state_work, Hv, Hk)
+        qh = q.repeat_interleave(Hv // Hk, dim=1).contiguous()
+        kh = k.repeat_interleave(Hv // Hk, dim=1).contiguous()
+        ref, ref_state = ref_chunk(qh, kh, v, g, beta, state)
+        state_max, _, _, _ = metrics(state_work, ref_state)
+        if state_max > 0.015625:
+            raise AssertionError(f"{name} state mismatch: {state_max}")
     max_abs, mean_abs, p99_abs, cos = metrics(got, ref)
     if kind == "sequence":
         passed = (
@@ -613,7 +955,7 @@ def run_case(ops, name: str) -> Row:
             and p99_abs <= 0.000030517578125
             and cos >= 0.99999
         )
-    elif kind == "wy_mma_fla":
+    elif kind in {"wy_mma_fla", "wy_mma_fla_h32"}:
         passed = max_abs <= 0.001 and mean_abs <= 0.0001 and p99_abs <= 0.0005 and cos >= 0.9999
     else:
         passed = max_abs <= 0.015625 and mean_abs <= 0.0015 and cos >= 0.999
@@ -645,8 +987,18 @@ def main() -> int:
         raise AssertionError("gated-delta-attention correctness failed")
     if args.mode == "full":
         run_sequence_graph(ops)
+        run_h32_graph(ops)
+        run_h32_wy_graph(ops)
+        run_h32_wy_poisoned_tail(ops)
+        run_h32_wy_single_chunk_stress(ops)
+        run_h32_contract_checks(ops)
+        if args.backend == "installed":
+            run_h32_wy_compile(ops)
     print(f"PASS gated-delta-attention {args.backend} mode={args.mode}: "
-          f"{len(rows)} checks" + (" + sequence CUDA Graph" if args.mode == "full" else ""))
+          f"{len(rows)} checks" +
+          (" + sequence/H32/WY CUDA Graph + poisoned-tail/H32 fail-fast" +
+           (" + torch.compile(fullgraph=True)" if args.backend == "installed" else "")
+           if args.mode == "full" else ""))
     return 0
 
 

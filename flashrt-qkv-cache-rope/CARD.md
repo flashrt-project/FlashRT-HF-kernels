@@ -29,6 +29,10 @@ writes, plus a sequence GQA cache-write path for static decoder loops.
   Q/K RMSNorm and rotate-half RoPE, and write BF16 Q/K/V.
 - `qkv_split_rope_kvcache_bf16`: split GQA packed QKV, apply interleaved RoPE
   to Q/K, and write K/V into preallocated sequence caches.
+- `qkv_split_rope_kvcache_fp16`: FP16 output/cache twin with an optional CUDA
+  int32 device-position tensor for graph-resident cache indexing.
+- `qk_norm_rope_strided_bf16`: normalize and rotate independently strided Q/K
+  projections without a packed-QKV materialization.
 - `decode_q_norm_rope_stage_bf16`: RMSNorm Q, apply rotate-half RoPE, and
   write a decode Q staging buffer.
 - `decode_k_norm_rope_kvwrite_bf16`: RMSNorm K, apply rotate-half RoPE, and

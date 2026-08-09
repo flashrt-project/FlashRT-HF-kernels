@@ -28,6 +28,7 @@
     !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
 #include "cutlass_sm110_fp8_gemm.cuh"
 #endif
+#include "cublaslt_fp8_bias_sm110.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -65,6 +66,13 @@ void check_fp32_matrix(torch::Tensor const& tensor, const char* name) {
   TORCH_CHECK(tensor.dim() == 2, name, " must be rank 2");
 }
 
+void check_bf16_vector(torch::Tensor const& tensor, const char* name) {
+  check_cuda_contiguous(tensor, name);
+  TORCH_CHECK(tensor.scalar_type() == torch::kBFloat16,
+              name, " must have dtype torch.bfloat16");
+  TORCH_CHECK(tensor.dim() == 1, name, " must be rank 1");
+}
+
 int checked_positive_int(int64_t value, const char* name) {
   TORCH_CHECK(value > 0 && value <= std::numeric_limits<int>::max(),
               name, " must fit in positive int");
@@ -86,8 +94,8 @@ void check_common(
               "input.shape[1] must equal weight.shape[1]");
   TORCH_CHECK(out.sizes() == torch::IntArrayRef({input.size(0), weight.size(0)}),
               "out must have shape (input.shape[0], weight.shape[0])");
-  TORCH_CHECK(input.size(1) % 32 == 0,
-              "K must be divisible by 32 for FP8 tensor-core/GEMV kernels");
+  TORCH_CHECK(input.size(1) % 16 == 0,
+              "K must be divisible by 16 for FP8 tensor-core kernels");
 }
 
 std::string tile_name_for_shape(int M, int N, int K, int variant) {
@@ -179,6 +187,15 @@ const char* sm110_tile_name_for_shape(int M, int N, int K, int variant) {
   // vision projections and larger-row K>=4N contractions; T1 wins the
   // remaining projection/down paths.
   // The forced variants remain available for diagnostic tile sweeps.
+  if (M >= 512 && K == 2048 && N >= 2048 && N <= 2560) {
+    return "sm110_sq_bf16";
+  }
+  if (M >= 512 && N >= 16 * K) {
+    return "sm110_t1_bf16";
+  }
+  if (M >= 512 && K >= 4 * N) {
+    return "sm110_wide_bf16";
+  }
   if (N >= 8 * K) return "sm110_wide_bf16";
   if (M >= 128 && K >= 4 * N) return "sm110_sq_bf16";
   if (N == K && M >= 512) {
@@ -246,6 +263,8 @@ void launch(
                 " failed with rc=", rc);
 #endif
   } else {
+    TORCH_CHECK(K % 32 == 0,
+                "SM120 FP8 GEMM requires K divisible by 32");
     TORCH_CHECK(M <= 64,
                 "SM120 per-tensor FP8 path supports only M <= 64; got M=", M);
     if (residual) {
@@ -262,6 +281,57 @@ void launch(
     TORCH_CHECK(rc == 0, tile, " failed with rc=", rc);
 #endif
   }
+#else
+  TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
+#endif
+}
+
+void launch_bias(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& out,
+    double beta,
+    FlashRtFp8BiasEpilogue epilogue,
+    const char* op_name) {
+  check_common(input, weight, out);
+  check_bf16_vector(bias, "bias");
+  TORCH_CHECK(bias.size(0) == weight.size(0),
+              "bias must have shape (weight.shape[0],)");
+  TORCH_CHECK(input.get_device() == bias.get_device(),
+              "input and bias must be on the same CUDA device");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(input.device());
+  auto* props = at::cuda::getDeviceProperties(input.get_device());
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              op_name, " requires SM110; got SM", props->major, props->minor);
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
+    defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+  TORCH_CHECK(false, "SM110 FP8 bias GEMM source is not present in this build");
+#else
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  const int M = checked_positive_int(input.size(0), "M");
+  const int N = checked_positive_int(weight.size(0), "N");
+  const int K = checked_positive_int(input.size(1), "K");
+  int rc;
+  if (M >= 512 && K >= 3 * N) {
+    rc = epilogue == FlashRtFp8BiasEpilogue::kBiasGelu
+             ? cutlass_fp8_wide_bias_gelu_bf16out(
+                   input.data_ptr(), weight.data_ptr(), bias.data_ptr(),
+                   out.data_ptr(), M, N, K, static_cast<float>(alpha), stream)
+             : cutlass_fp8_wide_bias_bf16out(
+                   input.data_ptr(), weight.data_ptr(), bias.data_ptr(),
+                   out.data_ptr(), M, N, K, static_cast<float>(alpha),
+                   static_cast<float>(beta), stream);
+  } else {
+    rc = fp8_linear_bias_sm110_bf16(
+        input.data_ptr(), weight.data_ptr(), bias.data_ptr(), out.data_ptr(),
+        M, N, K, static_cast<float>(alpha), static_cast<float>(beta),
+        epilogue, stream);
+  }
+  TORCH_CHECK(rc == 0, op_name, " failed with rc=", rc);
+#endif
 #else
   TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
 #endif
@@ -285,6 +355,38 @@ void fp8_linear_residual_bf16(
     int64_t variant,
     torch::Tensor& residual) {
   launch(input, weight, alpha, variant, residual, true);
+}
+
+void fp8_linear_bias_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& out) {
+  launch_bias(input, weight, bias, alpha, out, 0.0,
+              FlashRtFp8BiasEpilogue::kBias, "fp8_linear_bias_bf16");
+}
+
+void fp8_linear_bias_residual_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& residual) {
+  launch_bias(input, weight, bias, alpha, residual, 1.0,
+              FlashRtFp8BiasEpilogue::kBias,
+              "fp8_linear_bias_residual_bf16");
+}
+
+void fp8_linear_bias_gelu_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& weight,
+    torch::Tensor const& bias,
+    double alpha,
+    torch::Tensor& out) {
+  launch_bias(input, weight, bias, alpha, out, 0.0,
+              FlashRtFp8BiasEpilogue::kBiasGelu,
+              "fp8_linear_bias_gelu_bf16");
 }
 
 void fp8_blockwise_linear_bf16(
@@ -446,6 +548,9 @@ void fp8_blockwise_swiglu_quantize_fp8(
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("fp8_linear_bf16(Tensor input, Tensor weight, float alpha, int variant, Tensor! out) -> ()");
   ops.def("fp8_linear_residual_bf16(Tensor input, Tensor weight, float alpha, int variant, Tensor! residual) -> ()");
+  ops.def("fp8_linear_bias_bf16(Tensor input, Tensor weight, Tensor bias, float alpha, Tensor! out) -> ()");
+  ops.def("fp8_linear_bias_residual_bf16(Tensor input, Tensor weight, Tensor bias, float alpha, Tensor! residual) -> ()");
+  ops.def("fp8_linear_bias_gelu_bf16(Tensor input, Tensor weight, Tensor bias, float alpha, Tensor! out) -> ()");
   ops.def("fp8_blockwise_linear_bf16("
           "Tensor input, Tensor weight, Tensor input_scale, "
           "Tensor weight_scale, Tensor! out) -> ()");
@@ -455,6 +560,11 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
 #if defined(CUDA_KERNEL)
   ops.impl("fp8_linear_bf16", torch::kCUDA, &fp8_linear_bf16);
   ops.impl("fp8_linear_residual_bf16", torch::kCUDA, &fp8_linear_residual_bf16);
+  ops.impl("fp8_linear_bias_bf16", torch::kCUDA, &fp8_linear_bias_bf16);
+  ops.impl("fp8_linear_bias_residual_bf16", torch::kCUDA,
+           &fp8_linear_bias_residual_bf16);
+  ops.impl("fp8_linear_bias_gelu_bf16", torch::kCUDA,
+           &fp8_linear_bias_gelu_bf16);
   ops.impl("fp8_blockwise_linear_bf16",
            torch::kCUDA,
            &fp8_blockwise_linear_bf16);

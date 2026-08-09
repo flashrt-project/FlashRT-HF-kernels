@@ -32,6 +32,7 @@ The full FlashRT model runtime and serving pipeline live upstream at
 - `ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift, eps=1e-5, packed=None, sf_swizzled=None)`
 - `ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16(x, scale_fp8, shift_fp8, scale_deq, shift_deq, eps=1e-5, packed=None, sf_swizzled=None)`
 - `layer_norm_no_affine_quant_fp8_static_bf16(x, act_scale, eps=1e-5, out=None)`
+- `layer_norm_no_affine_quant_nvfp4_swizzled_bf16(x, eps=1e-5, packed=None, sf_swizzled=None)`
 - `adaln_modulation6_bf16(adaln_params, layer_modulation, out=None)`
 - `swizzled_sf_size(rows, dim)`
 
@@ -106,6 +107,9 @@ NVFP4 producer:
 
 ```python
 packed, sf = ops.ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift)
+
+# GROOT N1.7 pre-FFN producer on Thor.
+packed_ln, sf_ln = ops.layer_norm_no_affine_quant_nvfp4_swizzled_bf16(x)
 ```
 
 Six-way DiT modulation:
@@ -124,13 +128,19 @@ python adaptive-layernorm-producers/benchmarks/benchmark.py --backend source --i
 ```
 
 The validation suite checks exact FP8 output for small producer shapes, exact
-NVFP4 packed/scalefactor output for representative shapes, and strict FP8
+NVFP4 packed/scalefactor output against the native staged BF16-norm plus FP4
+quantizer contract on SM110, and strict FP8
 boundary accounting for long video shapes. The long-shape policy requires
 `p99_abs == 0` and only a tiny count of adjacent FP8-code boundary differences
 against the eager reference.
 
 See `VALIDATION.md` and `benchmarks/RESULTS.md` for the current local RTX 5090
 source-build results.
+
+The SM110 FP4 producer uses the native GROOT N1.7 contract from FlashRT commit
+`24df793f4fa2d50780aea03b644208c6e0cb4162`. Its scale conversion and FP4 bin
+boundaries intentionally differ from the older SM120 producer; release tests
+compare each architecture against its own production contract.
 
 The aarch64 release variant `torch211-cxx11-cu130-aarch64-linux` contains
 native SM87 and SM110a code objects. Its SM110a path was validated on NVIDIA

@@ -56,3 +56,7 @@ CUDA 13.2, comparing the SIMT path against an FP32 eager convolution reference:
 - `nvfp4_causal_conv3d_residual_ncdhw_bf16`: max abs err 3.9e-3 (BF16 residual add rounding), cosine 0.99999
 
 The SIMT kernels are bit-faithful to the FP32 convolution reference on Thor.
+
+The SM110 validation is operation-level VAE coverage. It is not evidence that
+the operation participates in the Cosmos3-Edge denoise engine; source ownership
+and an explicit call-site audit are required before making a model-level claim.

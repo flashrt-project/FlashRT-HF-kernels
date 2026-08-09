@@ -120,7 +120,7 @@ def ref_ada(x, weight, style, eps):
     dim = x.shape[1]
     scale = style[:, :dim].float()
     shift = style[:, dim : 2 * dim].float()
-    gate = style[:, 2 * dim :].contiguous()
+    gate = style[:, 2 * dim :].expand(x.shape[0], -1).contiguous()
     normed = rms_norm(x, weight, eps)
     return (normed * (1.0 + scale) + shift).to(torch.bfloat16), gate.to(torch.bfloat16)
 
@@ -130,7 +130,12 @@ def ref_gate_residual_fp8(residual, x, gate, weight, style, scale, eps):
     dim = updated.shape[1]
     style_scale = style[:, :dim].float()
     shift = style[:, dim : 2 * dim].float()
-    gate_out = style[:, 2 * dim :].contiguous().to(torch.bfloat16)
+    gate_out = (
+        style[:, 2 * dim :]
+        .expand(updated.shape[0], -1)
+        .contiguous()
+        .to(torch.bfloat16)
+    )
     normed = rms_norm(updated, weight, eps)
     fp8 = ((normed * (1.0 + style_scale) + shift) / scale.float().reshape(())).to(torch.float8_e4m3fn)
     return updated, fp8, gate_out
@@ -177,8 +182,10 @@ def assert_fp8_boundary_distribution(name: str, got: torch.Tensor, expected: tor
     )
 
 
-def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
+def run_shape(ops, label: str, rows: int, dim: int, eps: float, broadcast: bool = False) -> None:
     x, residual, gate, weight, style, scale = make_case(rows, dim)
+    if broadcast:
+        style = style[:1].contiguous()
     got, got_gate = ops.ada_rms_norm_style_bf16(x, weight, style, eps)
     exp, exp_gate = ref_ada(x, weight, style, eps)
     assert_close_distribution(f"{label}/ada_out", got, exp, 0.0, 0.015625)
@@ -210,6 +217,39 @@ def run(args) -> None:
         shapes = {"small": shapes["small"]}
     for label, (rows, dim) in shapes.items():
         run_shape(ops, label, rows, dim, args.eps)
+        run_shape(ops, f"{label}_broadcast", rows, dim, args.eps, broadcast=True)
+
+    x, residual, gate, weight, style, scale = make_case(64, 1024)
+    style = style[:1].contiguous()
+    eager_out, eager_gate = ops.ada_rms_norm_style_bf16(
+        x, weight, style, args.eps
+    )
+    graph_out = torch.empty_like(x)
+    graph_gate = torch.empty_like(x)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.ada_rms_norm_style_bf16(
+            x, weight, style, args.eps, graph_out, graph_gate
+        )
+    graph.replay()
+    if not torch.equal(graph_out, eager_out) or not torch.equal(
+        graph_gate, eager_gate
+    ):
+        raise AssertionError("broadcast AdaRMS CUDA Graph mismatch")
+
+    if args.backend == "installed":
+        def invoke(value, norm_weight, style_value):
+            return ops.ada_rms_norm_style_bf16(
+                value, norm_weight, style_value, args.eps
+            )
+
+        compiled_out, compiled_gate = torch.compile(
+            invoke, fullgraph=True
+        )(x, weight, style)
+        if not torch.equal(compiled_out, eager_out) or not torch.equal(
+            compiled_gate, eager_gate
+        ):
+            raise AssertionError("broadcast AdaRMS torch.compile mismatch")
 
 
 def main() -> None:

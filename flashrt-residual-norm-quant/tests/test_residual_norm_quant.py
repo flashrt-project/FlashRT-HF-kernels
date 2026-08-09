@@ -60,6 +60,12 @@ class SourceOps:
         )
         return out
 
+    def residual_add_rms_norm_bf16(self, residual, x, weight, eps=1e-6, out=None):
+        if out is None:
+            out = torch.empty_like(x, dtype=torch.bfloat16)
+        self._ops.residual_add_rms_norm_bf16(residual, x, weight, float(eps), out)
+        return out
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -270,6 +276,28 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float) -> None:
         exp_res_fp8,
     )
 
+    residual.copy_(residual_in)
+    got_res_bf16 = ops.residual_add_rms_norm_bf16(
+        residual, x, weight, eps
+    )
+    assert_close_distribution(
+        f"{label}/residual_add_rms_norm_bf16_inplace",
+        residual,
+        exp_residual,
+        p99_abs_limit=0.0,
+        p99_rel_limit=0.0,
+    )
+    added_fp32 = residual_in.float() + x.float()
+    added_rms = torch.rsqrt(added_fp32.square().mean(1, keepdim=True) + eps)
+    expected_bf16 = (exp_residual.float() * added_rms * weight.float()).to(torch.bfloat16)
+    assert_close_distribution(
+        f"{label}/residual_add_rms_norm_bf16",
+        got_res_bf16,
+        expected_bf16,
+        p99_abs_limit=0.015625,
+        p99_rel_limit=0.02,
+    )
+
 
 def run_rejection_tests(ops) -> None:
     x, residual, weight, bias, scale = make_case(4, 128)
@@ -298,6 +326,37 @@ def run_rejection_tests(ops) -> None:
     )
 
 
+def run_cosmos_edge_graph(ops, eps: float) -> None:
+    rows, dim = 128, 2048
+    x = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+    residual_base = torch.randn_like(x)
+    weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16)
+    residual = residual_base.clone()
+    out = torch.empty_like(x)
+
+    graph = torch.cuda.CUDAGraph()
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph):
+        ops.residual_add_rms_norm_bf16(residual, x, weight, eps, out=out)
+
+    reference_residual = residual_base.clone()
+    reference_out = ops.residual_add_rms_norm_bf16(
+        reference_residual, x, weight, eps
+    )
+    residual.copy_(residual_base)
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(residual, reference_residual, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(out, reference_out, rtol=0.0, atol=0.0)
+    first_residual, first_out = residual.clone(), out.clone()
+    residual.copy_(residual_base)
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(residual, first_residual, rtol=0.0, atol=0.0)
+    torch.testing.assert_close(out, first_out, rtol=0.0, atol=0.0)
+    print("PASS cosmos_edge/residual_add_rms_norm_bf16 CUDA Graph replay")
+
+
 def run(args) -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
@@ -309,6 +368,7 @@ def run(args) -> None:
         "pi05_decoder": (10, 1024),
         "pi05_vision": (512, 1152),
         "groot_vl": (1024, 2048),
+        "cosmos_edge": (128, 2048),
         "video_prefill": (2520, 2048),
     }
     if args.mode == "smoke":
@@ -316,6 +376,8 @@ def run(args) -> None:
 
     for label, (rows, dim) in shapes.items():
         run_shape(ops, label, rows, dim, args.eps)
+    if args.mode == "full":
+        run_cosmos_edge_graph(ops, args.eps)
     run_rejection_tests(ops)
 
 

@@ -21,6 +21,10 @@ should call the same Tensor APIs rather than model-specific entry points.
   `FP8 up GEMM -> bias/GELU -> FP8 requant -> FP8 down GEMM -> bias`.
 - `bf16_fp8_gelu_mlp_bf16`: BF16 region entry that performs static input
   quantization and the full FP8 GELU MLP behind one traceable custom-op call.
+- `fp8_gelu_mlp_v2_bf16`: full FP8 GELU MLP with the down bias fused into the
+  GEMM accumulator epilogue.
+- `bf16_fp8_gelu_mlp_v2_bf16`: BF16-input and static-padding twin of the v2
+  fused-bias MLP.
 
 ## When To Use
 
@@ -84,10 +88,9 @@ Current local CUDA validation is on RTX 5090. ROCm validation for this package
 is scoped to the AMD `gfx942` FP8-FNUZ path. CDNA4/OCP-FP8 and RDNA targets are
 not claimed by this package version.
 
-The BF16-entry API in this revision is published in the current x86_64 CUDA
-and ROCm build matrix. An older aarch64 directory retained by the incremental
-Hub repository predates this API and is not a BF16-entry compatibility claim.
-Build and validate a matching aarch64 variant before enabling this API there.
+The release gate rebuilds the Tensor API for each published CUDA/ROCm variant;
+an artifact is not considered compatible merely because an older directory
+with the same platform tag exists on the Hub.
 
 ## Notes
 

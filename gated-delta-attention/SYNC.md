@@ -17,3 +17,9 @@ Public package rename:
 The sequence kernel keeps FP32 recurrent state internally and casts it only at
 the public BF16 state boundary. The package adds Tensor validation and graph-
 safe preallocated output handling; it does not change the CUDA arithmetic.
+
+The v5 generic producer/chunk/WY API parameterizes the existing native CUDA
+addressing by `num_v_heads`, `num_k_heads`, and `head_dim`. The original
+48/16/128 entry points remain unchanged and dispatch through the same kernel.
+The additional validated profile is 32/16/128 with conv width 8192. All WY
+workspace and MMA stages use explicit value/key head counts.

@@ -63,6 +63,10 @@ paths consume prepacked FP8 or NVFP4 activations/weights and expose optional
 preallocated outputs for CUDA Graph runtimes. Unsupported channel, kernel,
 stride and architecture combinations raise before launch.
 
-The SM110 BF16 function is opt-in and is not the default backend. On the three
-Cosmos3-Edge VAE sites it is accurate but slower than cuDNN; see the benchmark
-ledger.
+The SM110 BF16 function is an opt-in VAE bring-up probe. The current
+`CosmosEdgeThor` quantized denoise engine does not call this operation: its
+model-level speedup comes from the FP8/FP4 projection pipeline, static caches,
+FA4, native scheduling, and whole-loop CUDA Graph execution. On three real VAE
+Conv3D shapes the standalone BF16 v0 probe is accurate but slower than cuDNN,
+so the VAE path keeps its stronger cuDNN/layout-specific routes. See the
+benchmark ledger for the separately scoped measurements.

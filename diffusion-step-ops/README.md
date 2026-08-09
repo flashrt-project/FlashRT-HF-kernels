@@ -40,3 +40,9 @@ next_sample, current_m, current_last = ops.unipc_step_f32_bf16(
 
 All APIs require CUDA contiguous tensors. Unsupported shapes fail at the
 wrapper boundary.
+
+The generic tail APIs cover the Cosmos3-Edge runtime contracts without
+model-specific aliases: `pack_tail_bf16` is equivalent to the native
+fill-flat-velocity kernel, and `extract_tail_f32_to_bf16` is equivalent to the
+native copy-action-tail kernel. Validation includes production
+`flat_dim=1,201,920`, `tail_numel=3,840`, and exact CUDA Graph replay.

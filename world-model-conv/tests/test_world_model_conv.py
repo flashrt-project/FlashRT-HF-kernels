@@ -157,19 +157,15 @@ def load_source_ops() -> SourceOps:
         "portable_conv_simt.cu",
     ]
     sm110_sources = ["bf16_conv3d_v0_sm110.cu"]
-    cuda_major = int((torch.version.cuda or "0").split(".", 1)[0])
-    if cuda_major >= 13:
-        # CUDA 13 builder variants may combine both eligible targets into one
-        # extension. Compile the same union here so weak fallback symbols and
-        # strong native implementations are tested together.
-        cuda_sources = [
-            *sm120_sources,
-            *sm110_sources,
-            "world_model_conv_sm110_stubs.cu",
-            "world_model_conv_sm120_stubs.cu",
-        ]
-    else:
+    if (major, minor) == (11, 0):
+        cuda_sources = [*sm110_sources, "world_model_conv_sm110_stubs.cu"]
+    elif (major, minor) == (12, 0):
         cuda_sources = [*sm120_sources, "world_model_conv_sm120_stubs.cu"]
+    else:
+        raise RuntimeError(
+            "world-model-conv source tests require an SM110 or SM120 device; "
+            f"got SM{major}{minor}"
+        )
     load(
         name=namespace,
         sources=[

@@ -3,6 +3,8 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <array>
+#include <atomic>
 #include <limits>
 
 #if defined(CUDA_KERNEL)
@@ -18,6 +20,8 @@
 namespace {
 
 constexpr int64_t kPageSize = 128;
+constexpr int kMaxCachedCudaDevices = 64;
+std::array<std::atomic<int>, kMaxCachedCudaDevices> g_cached_sm_counts{};
 
 struct XqaShape {
   int64_t num_q_heads;
@@ -30,6 +34,10 @@ bool supported_shape(XqaShape const& shape) {
           shape.head_dim == 256) ||
          (shape.num_q_heads == 32 && shape.num_kv_heads == 8 &&
           shape.head_dim == 128) ||
+         (shape.num_q_heads == 32 && shape.num_kv_heads == 16 &&
+          shape.head_dim == 128) ||
+         (shape.num_q_heads == 16 && shape.num_kv_heads == 2 &&
+          shape.head_dim == 256) ||
          (shape.num_q_heads == 16 && shape.num_kv_heads == 8 &&
           shape.head_dim == 128);
 }
@@ -111,7 +119,7 @@ void xqa_bf16_fp8kv(
   XqaShape shape{};
   const int64_t q_seq = q_seq_len_from_shape(q, &shape);
   TORCH_CHECK(q_seq > 0 && q_seq <= 32,
-              "v1 XQA package supports 1 <= q_seq <= 32 speculative/decode rows");
+              "XQA package supports 1 <= q_seq <= 32 speculative/decode rows");
 
   check_fp8_e4m3(k_cache, "k_cache");
   check_fp8_e4m3(v_cache, "v_cache");
@@ -122,7 +130,8 @@ void xqa_bf16_fp8kv(
               "unsupported XQA shape: q_heads=", shape.num_q_heads,
               ", kv_heads=", shape.num_kv_heads,
               ", head_dim=", shape.head_dim,
-              "; supported configurations are 24/4/256, 32/8/128, and 16/8/128");
+              "; supported configurations are 24/4/256, 16/2/256, 32/8/128, "
+              "32/16/128, and 16/8/128");
   TORCH_CHECK(k_cache.size(1) == kPageSize &&
                   k_cache.size(3) == shape.head_dim,
               "k_cache/v_cache page or head dimension does not match q");
@@ -169,24 +178,49 @@ void xqa_bf16_fp8kv(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(q.device());
   if (sm_count <= 0) {
-    cudaDeviceProp prop{};
     const int device = q.get_device();
-    TORCH_CHECK(cudaGetDeviceProperties(&prop, device) == cudaSuccess,
-                "cudaGetDeviceProperties failed");
-    sm_count = prop.multiProcessorCount;
+    TORCH_CHECK(device >= 0 && device < kMaxCachedCudaDevices,
+                "CUDA device index exceeds the XQA property cache");
+    int cached_sm_count =
+        g_cached_sm_counts[device].load(std::memory_order_relaxed);
+    if (cached_sm_count <= 0) {
+      TORCH_CHECK(
+          cudaDeviceGetAttribute(&cached_sm_count,
+                                 cudaDevAttrMultiProcessorCount,
+                                 device) == cudaSuccess,
+          "failed to resolve CUDA multiprocessor count");
+      g_cached_sm_counts[device].store(
+          cached_sm_count, std::memory_order_relaxed);
+    }
+    sm_count = cached_sm_count;
   }
   auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
   if (shape.head_dim == 256) {
-    flashrt_xqa_bf16_fp8kv(
-        q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
-        static_cast<const int32_t*>(page_table.data_ptr()),
-        reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
-        reinterpret_cast<const uint32_t*>(mask.data_ptr()), out.data_ptr(),
-        reinterpret_cast<uint32_t*>(semaphores.data_ptr()), scratch.data_ptr(),
-        checked_int(max_seq_len, "max_seq_len"),
-        checked_int(q_seq, "q_seq"), checked_int(sm_count, "sm_count"),
-        static_cast<float>(q_scale), static_cast<float>(kv_scale), enable_pdl,
-        k_stride_page, k_stride_token, k_stride_head, stream);
+    if (shape.num_q_heads == 16 && shape.num_kv_heads == 2) {
+      flashrt_xqa_bf16_fp8kv_d256_g8(
+          q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
+          static_cast<const int32_t*>(page_table.data_ptr()),
+          reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
+          reinterpret_cast<const uint32_t*>(mask.data_ptr()), out.data_ptr(),
+          reinterpret_cast<uint32_t*>(semaphores.data_ptr()), scratch.data_ptr(),
+          checked_int(max_seq_len, "max_seq_len"),
+          checked_int(q_seq, "q_seq"),
+          checked_int(shape.num_kv_heads, "num_kv_heads"),
+          checked_int(sm_count, "sm_count"), static_cast<float>(q_scale),
+          static_cast<float>(kv_scale), enable_pdl, k_stride_page,
+          k_stride_token, k_stride_head, stream);
+    } else {
+      flashrt_xqa_bf16_fp8kv(
+          q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
+          static_cast<const int32_t*>(page_table.data_ptr()),
+          reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
+          reinterpret_cast<const uint32_t*>(mask.data_ptr()), out.data_ptr(),
+          reinterpret_cast<uint32_t*>(semaphores.data_ptr()), scratch.data_ptr(),
+          checked_int(max_seq_len, "max_seq_len"),
+          checked_int(q_seq, "q_seq"), checked_int(sm_count, "sm_count"),
+          static_cast<float>(q_scale), static_cast<float>(kv_scale), enable_pdl,
+          k_stride_page, k_stride_token, k_stride_head, stream);
+    }
   } else {
     flashrt_xqa_bf16_fp8kv_d128(
         q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),

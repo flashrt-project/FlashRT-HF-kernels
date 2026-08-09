@@ -29,7 +29,19 @@ void xqa(
   const int64_t stride_page = 128 * kv_heads * head_dim;
   const int64_t stride_token = kv_heads * head_dim;
   if (head_dim == 256) {
-    flashrt_xqa_bf16_fp8kv(
+    if (q_heads == 16 && kv_heads == 2) {
+      flashrt_xqa_bf16_fp8kv_d256_g8(
+          q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
+          static_cast<const int32_t*>(page_table.data_ptr()),
+          reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
+          reinterpret_cast<const uint32_t*>(mask.data_ptr()), out.data_ptr(),
+          reinterpret_cast<uint32_t*>(semaphores.data_ptr()),
+          scratch.data_ptr(), max_seq_len, q_seq, kv_heads,
+          prop.multiProcessorCount, static_cast<float>(q_scale),
+          static_cast<float>(kv_scale), enable_pdl, stride_page, stride_token,
+          head_dim, stream);
+    } else {
+      flashrt_xqa_bf16_fp8kv(
         q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),
         static_cast<const int32_t*>(page_table.data_ptr()),
         reinterpret_cast<const uint32_t*>(seq_lens.data_ptr()),
@@ -38,6 +50,7 @@ void xqa(
         scratch.data_ptr(), max_seq_len, q_seq, prop.multiProcessorCount,
         static_cast<float>(q_scale), static_cast<float>(kv_scale), enable_pdl,
         stride_page, stride_token, head_dim, stream);
+    }
   } else {
     flashrt_xqa_bf16_fp8kv_d128(
         q.data_ptr(), k_cache.data_ptr(), v_cache.data_ptr(),

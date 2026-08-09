@@ -13,6 +13,7 @@ void ada_rms_norm_style_bf16(
     void* out,
     void* gate_out,
     int rows,
+    int style_rows,
     int dim,
     float eps,
     cudaStream_t stream);
@@ -26,6 +27,7 @@ void gate_residual_ada_norm_fp8_static_bf16(
     void* out,
     void* gate_out,
     int rows,
+    int style_rows,
     int dim,
     float eps,
     const float* scale,

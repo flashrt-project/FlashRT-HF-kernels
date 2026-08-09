@@ -12,6 +12,7 @@
 #include "cutlass/gemm/collective/collective_builder.hpp"
 #include "cutlass/epilogue/dispatch_policy.hpp"
 #include "cutlass/epilogue/collective/collective_builder.hpp"
+#include "cutlass/epilogue/fusion/operations.hpp"
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/epilogue/thread/activation.h"
@@ -240,6 +241,56 @@ using Main = typename cutlass::gemm::collective::CollectiveBuilder<
 using Gemm = cutlass::gemm::device::GemmUniversalAdapter<
     cutlass::gemm::kernel::GemmUniversal<Shape<int,int,int,int>, Main, Epi>>;
 }  // namespace sm100_wide_bf16out
+
+// Wide projection with a per-column BF16 bias. This keeps the public
+// row-major [N,K] weight contract and removes the layout-dependent cuBLASLt
+// penalty on PI0.5/SigLIP down projections.
+namespace sm100_wide_bias_bf16out {
+using Tile = Shape<_256, _128, _128>;
+using Cluster = Shape<_2, _2, _1>;
+using Fusion = cutlass::epilogue::fusion::LinCombPerColBias<
+    cutlass_bf16, float, cutlass_bf16, cutlass_bf16>;
+using Epi = typename cutlass::epilogue::collective::CollectiveBuilder<
+    cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+    Tile, Cluster, cutlass::epilogue::collective::EpilogueTileAuto,
+    float, float, cutlass_bf16, cutlass::layout::RowMajor, 8,
+    cutlass_bf16, cutlass::layout::RowMajor, 8,
+    cutlass::epilogue::collective::EpilogueScheduleAuto, Fusion>::CollectiveOp;
+using Main = typename cutlass::gemm::collective::CollectiveBuilder<
+    cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+    cutlass_fp8, cutlass::layout::RowMajor, 16,
+    cutlass_fp8, cutlass::layout::ColumnMajor, 16,
+    float, Tile, Cluster,
+    cutlass::gemm::collective::StageCountAutoCarveout<
+        static_cast<int>(sizeof(typename Epi::SharedStorage))>,
+    cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
+using Gemm = cutlass::gemm::device::GemmUniversalAdapter<
+    cutlass::gemm::kernel::GemmUniversal<Shape<int,int,int,int>, Main, Epi>>;
+}  // namespace sm100_wide_bias_bf16out
+
+namespace sm100_wide_bias_gelu_bf16out {
+using Tile = Shape<_256, _128, _128>;
+using Cluster = Shape<_2, _2, _1>;
+using Fusion = cutlass::epilogue::fusion::LinCombPerColBiasEltAct<
+    cutlass::epilogue::thread::GELU_taylor,
+    cutlass_bf16, float, cutlass_bf16, cutlass_bf16>;
+using Epi = typename cutlass::epilogue::collective::CollectiveBuilder<
+    cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+    Tile, Cluster, cutlass::epilogue::collective::EpilogueTileAuto,
+    float, float, cutlass_bf16, cutlass::layout::RowMajor, 8,
+    cutlass_bf16, cutlass::layout::RowMajor, 8,
+    cutlass::epilogue::collective::EpilogueScheduleAuto, Fusion>::CollectiveOp;
+using Main = typename cutlass::gemm::collective::CollectiveBuilder<
+    cutlass::arch::Sm100, cutlass::arch::OpClassTensorOp,
+    cutlass_fp8, cutlass::layout::RowMajor, 16,
+    cutlass_fp8, cutlass::layout::ColumnMajor, 16,
+    float, Tile, Cluster,
+    cutlass::gemm::collective::StageCountAutoCarveout<
+        static_cast<int>(sizeof(typename Epi::SharedStorage))>,
+    cutlass::gemm::collective::KernelScheduleAuto>::CollectiveOp;
+using Gemm = cutlass::gemm::device::GemmUniversalAdapter<
+    cutlass::gemm::kernel::GemmUniversal<Shape<int,int,int,int>, Main, Epi>>;
+}  // namespace sm100_wide_bias_gelu_bf16out
 
 namespace sm100_t1_bf16out {
 using Tile = Shape<_128, _256, _128>;

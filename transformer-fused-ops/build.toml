@@ -38,3 +38,19 @@ src = [
   "csrc/kernels/relu2_quantize_fp8.cu",
   "csrc/kernels/relu2_quantize_fp8.cuh",
 ]
+
+[kernel.transformer_fused_ops_sm110_fp16]
+backend = "cuda"
+depends = ["torch"]
+include = ["csrc"]
+cuda-minver = "13"
+cuda-capabilities = ["11.0a"]
+cuda-flags = ["-O3"]
+src = [
+  "csrc/kernels/vec_fp16_backbone.cu",
+  "csrc/kernels/vec_fp16_backbone.cuh",
+  "csrc/kernels/vec_fp16_dispatch.cu",
+  "csrc/kernels/vec_fp16_dispatch.cuh",
+  "csrc/kernels/vec_bf16_producers.cu",
+  "csrc/kernels/vec_bf16_producers.cuh",
+]

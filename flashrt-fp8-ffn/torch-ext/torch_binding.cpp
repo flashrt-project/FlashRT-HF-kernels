@@ -3,6 +3,7 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <cstdlib>
 #include <limits>
 
 #if defined(CUDA_KERNEL)
@@ -182,6 +183,13 @@ void launch_fp8_linear_bias_bf16(
       reinterpret_cast<const float*>(weight_scale.data_ptr()), stream);
   if (fused) return;
 #endif
+  const char* require_fused =
+      std::getenv("FLASHRT_FP8_FFN_REQUIRE_BIAS_EPILOGUE");
+  TORCH_CHECK(
+      require_fused == nullptr || require_fused[0] == '\0' ||
+          require_fused[0] == '0',
+      "cuBLASLt FP8 BIAS epilogue was required but is unavailable for shape ",
+      input.size(0), "x", weight.size(0), "x", input.size(1));
   launch_fp8_gemm_bf16(input, weight, input_scale, weight_scale, out);
   launch_add_bias_bf16(out, bias);
 }
@@ -391,6 +399,104 @@ void bf16_fp8_gelu_mlp_bf16(
   launch_add_bias_bf16(out, down_bias);
 }
 
+// v2 twins: identical contract to the v1 MLP entries, with the down
+// projection's bias carried in the GEMM epilogue (cublasLt BIAS, with
+// the runtime fallback launch_fp8_linear_bias_bf16 already owns) —
+// one launch and one full write of `out` less per call. The v1
+// entries stay untouched: same symbols, same behaviour.
+void fp8_gelu_mlp_v2_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& up_weight,
+    torch::Tensor const& up_bias,
+    torch::Tensor const& down_weight,
+    torch::Tensor const& down_bias,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& up_weight_scale,
+    torch::Tensor const& hidden_scale,
+    torch::Tensor const& down_weight_scale,
+    torch::Tensor& hidden_bf16,
+    torch::Tensor& hidden_fp8,
+    torch::Tensor& out) {
+  check_fp8_gemm_args(input, up_weight, input_scale, up_weight_scale,
+                      hidden_bf16);
+  check_fp8_gemm_args(hidden_fp8, down_weight, hidden_scale, down_weight_scale,
+                      out);
+  check_bf16_vector(up_bias, "up_bias");
+  check_bf16_vector(down_bias, "down_bias");
+  TORCH_CHECK(up_bias.size(0) == up_weight.size(0),
+              "up_bias length must match up_weight.shape[0]");
+  TORCH_CHECK(down_bias.size(0) == down_weight.size(0),
+              "down_bias length must match down_weight.shape[0]");
+  TORCH_CHECK(up_bias.get_device() == input.get_device(),
+              "up_bias must be on the same CUDA device as input");
+  TORCH_CHECK(down_bias.get_device() == input.get_device(),
+              "down_bias must be on the same CUDA device as input");
+  TORCH_CHECK(hidden_fp8.sizes() == hidden_bf16.sizes(),
+              "hidden_fp8 must have the same shape as hidden_bf16");
+  TORCH_CHECK(up_weight.size(0) == down_weight.size(1),
+              "up_weight.shape[0] must match down_weight.shape[1]");
+  TORCH_CHECK(down_weight.size(0) == out.size(1),
+              "down_weight.shape[0] must match out.shape[1]");
+
+  launch_fp8_gemm_bf16(input, up_weight, input_scale, up_weight_scale,
+                       hidden_bf16);
+  launch_bias_gelu_quant(hidden_bf16, up_bias, hidden_scale, hidden_fp8);
+  launch_fp8_linear_bias_bf16(hidden_fp8, down_weight, down_bias,
+                              hidden_scale, down_weight_scale, out);
+}
+
+void bf16_fp8_gelu_mlp_v2_bf16(
+    torch::Tensor const& input,
+    torch::Tensor const& up_weight,
+    torch::Tensor const& up_bias,
+    torch::Tensor const& down_weight,
+    torch::Tensor const& down_bias,
+    torch::Tensor const& input_scale,
+    torch::Tensor const& up_weight_scale,
+    torch::Tensor const& hidden_scale,
+    torch::Tensor const& down_weight_scale,
+    torch::Tensor& input_fp8,
+    torch::Tensor& hidden_bf16,
+    torch::Tensor& hidden_fp8,
+    torch::Tensor& out) {
+  check_bf16_matrix(input, "input");
+  check_fp8_matrix(input_fp8, "input_fp8");
+  TORCH_CHECK(input.get_device() == input_fp8.get_device(),
+              "input and input_fp8 must be on the same CUDA device");
+  check_scale(input_scale, "input_scale", input.get_device());
+  TORCH_CHECK(input_fp8.size(0) >= input.size(0) &&
+                  input_fp8.size(1) == input.size(1),
+              "input_fp8 must have shape (padded_m, input.shape[1]) with "
+              "padded_m >= input.shape[0]");
+  TORCH_CHECK(hidden_bf16.size(0) == input_fp8.size(0) &&
+                  hidden_fp8.size(0) == input_fp8.size(0) &&
+                  out.size(0) == input_fp8.size(0),
+              "all scratch outputs must use input_fp8.shape[0] padded rows");
+  check_fp8_gemm_args(input_fp8, up_weight, input_scale, up_weight_scale,
+                      hidden_bf16);
+  check_fp8_gemm_args(hidden_fp8, down_weight, hidden_scale,
+                      down_weight_scale, out);
+  check_bf16_vector(up_bias, "up_bias");
+  check_bf16_vector(down_bias, "down_bias");
+  TORCH_CHECK(up_bias.size(0) == up_weight.size(0),
+              "up_bias length must match up_weight.shape[0]");
+  TORCH_CHECK(down_bias.size(0) == down_weight.size(0),
+              "down_bias length must match down_weight.shape[0]");
+  TORCH_CHECK(up_bias.get_device() == input.get_device(),
+              "up_bias must be on the same CUDA device as input");
+  TORCH_CHECK(down_bias.get_device() == input.get_device(),
+              "down_bias must be on the same CUDA device as input");
+  TORCH_CHECK(hidden_fp8.sizes() == hidden_bf16.sizes(),
+              "hidden_fp8 must have the same shape as hidden_bf16");
+
+  launch_quantize_mpad(input, input_scale, input_fp8);
+  launch_fp8_gemm_bf16(input_fp8, up_weight, input_scale, up_weight_scale,
+                       hidden_bf16);
+  launch_bias_gelu_quant(hidden_bf16, up_bias, hidden_scale, hidden_fp8);
+  launch_fp8_linear_bias_bf16(hidden_fp8, down_weight, down_bias,
+                              hidden_scale, down_weight_scale, out);
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("fp8_gemm_bf16("
           "Tensor input, Tensor weight, Tensor input_scale, "
@@ -411,6 +517,18 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
           "Tensor up_weight_scale, Tensor hidden_scale, "
           "Tensor down_weight_scale, Tensor! hidden_bf16, "
           "Tensor! hidden_fp8, Tensor! out) -> ()");
+  ops.def("fp8_gelu_mlp_v2_bf16("
+          "Tensor input, Tensor up_weight, Tensor up_bias, "
+          "Tensor down_weight, Tensor down_bias, Tensor input_scale, "
+          "Tensor up_weight_scale, Tensor hidden_scale, "
+          "Tensor down_weight_scale, Tensor! hidden_bf16, "
+          "Tensor! hidden_fp8, Tensor! out) -> ()");
+  ops.def("bf16_fp8_gelu_mlp_v2_bf16("
+          "Tensor input, Tensor up_weight, Tensor up_bias, "
+          "Tensor down_weight, Tensor down_bias, Tensor input_scale, "
+          "Tensor up_weight_scale, Tensor hidden_scale, "
+          "Tensor down_weight_scale, Tensor! input_fp8, "
+          "Tensor! hidden_bf16, Tensor! hidden_fp8, Tensor! out) -> ()");
   ops.def("bf16_fp8_gelu_mlp_bf16("
           "Tensor input, Tensor up_weight, Tensor up_bias, "
           "Tensor down_weight, Tensor down_bias, Tensor input_scale, "
@@ -432,6 +550,10 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("bf16_fp8_gelu_mlp_bf16",
            torch::kCUDA,
            &bf16_fp8_gelu_mlp_bf16);
+  ops.impl("fp8_gelu_mlp_v2_bf16", torch::kCUDA, &fp8_gelu_mlp_v2_bf16);
+  ops.impl("bf16_fp8_gelu_mlp_v2_bf16",
+           torch::kCUDA,
+           &bf16_fp8_gelu_mlp_v2_bf16);
 #endif
 }
 

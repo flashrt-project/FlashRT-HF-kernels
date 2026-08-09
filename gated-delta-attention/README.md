@@ -2,9 +2,9 @@
 
 FlashRT native CUDA BF16 Gated DeltaNet / linear-attention state kernels.
 
-The first public profile targets Qwen3.6-style dimensions:
+The package supports two validated linear-attention producer profiles:
 
-- value heads: `48`
+- value/key heads: `48/16` and `32/16`
 - key/value head dim: `128`
 - BF16 q/k/v/g/beta/out
 - BF16 or FP32 recurrent state
@@ -21,11 +21,15 @@ The first public profile targets Qwen3.6-style dimensions:
 - `gated_delta_chunk_smem_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`
 - `gated_delta_recurrent_sequence_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`
 - `lin_split_qkv_broadcast_bf16(conv_out, q48=None, k48=None, v48=None)`
+- `lin_split_qkv_broadcast_h_bf16(conv_out, num_v_heads, num_k_heads, head_dim=128, ...)`
 - `lin_split_qkv_gqa_bf16(conv_out, q16=None, k16=None, v48=None)`
 - `split_q_gate_bf16(q_proj, q_pre=None, gate=None)`
 - `gdn_gating_bf16(a, b, neg_exp_A_log, dt_bias, g_out=None, beta_out=None)`
+- `gdn_gating_h_bf16(a, b, neg_exp_A_log, dt_bias, num_heads=None, ...)`
 - `gdn_gating_strided_bf16(a, b, neg_exp_A_log, dt_bias, rows, a_stride, b_stride, ...)`
+- `gdn_gating_strided_h_bf16(a, b, neg_exp_A_log, dt_bias, rows, num_heads, a_stride, b_stride, ...)`
 - `gdn_chunk_from_conv_smem_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, ...)`
+- `gdn_chunk_from_conv_smem_h_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, num_v_heads, num_k_heads, ...)`
 - `gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g, ...)`
 - `gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum, A=None)`
 - `gdn_wy_solve_tril_b64_f32(A, S, Ai=None)`
@@ -37,18 +41,26 @@ The first public profile targets Qwen3.6-style dimensions:
 - `gdn_wy_chunk_h_b64_mma_fla_bf16(k16_l2, w_pack, u_pack, g_cumsum, state, ...)`
 - `gdn_wy_output_o_b64_mma_fla_bf16(q_pack_hv, k_pack_hv, v_pack, h0, g_cumsum, ...)`
 - `gdn_wy_output_o_b64_mma_fla_rawk_bf16(q_pack_hv, k16_l2, v_pack, h0, g_cumsum, ...)`
+- `gdn_wy_norm_cumsum_pack_qk_h_bf16(q, k, g, num_v_heads, num_k_heads, ...)`
+- `gdn_wy_kkt_b64_h_bf16(k_l2, beta, g_cumsum, num_v_heads, num_k_heads, ...)`
+- `gdn_wy_solve_tril_b64_h_f32(A, S, num_v_heads, ...)`
+- `gdn_wy_cast_ai_h_f32_to_bf16(Ai, S, num_v_heads, ...)`
+- `gdn_wy_recompute_wu_b64_mma_fla_h_bf16(...)`
+- `gdn_wy_chunk_h_b64_mma_fla_h_bf16(...)`
+- `gdn_wy_output_o_b64_mma_fla_h_bf16(...)`
+- `gdn_wy_output_o_b64_mma_fla_rawk_h_bf16(...)`
 
-The v3 API covers both decode recurrence and Qwen3.6-style prefill/WY
+The v5 API covers both decode recurrence and linear-attention prefill/WY
 building blocks. It does not package generic FlashAttention.
 
-`gated_delta_recurrent_sequence_bf16` scans `(S,H,128)` in one SM120
+`gated_delta_recurrent_sequence_bf16` scans `(S,H,128)` in one SM110/SM120
 launch. Its recurrent state remains FP32 inside the scan and is converted to
 the caller's BF16 `state` tensor only once at the end. This differs from the
 legacy chunk contract, which rounds state to BF16 after each token.
 
 The v3 FLA-style MMA path requires NVIDIA `sm_80+` because it uses BF16
 `mma.sync` instructions. The package build targets Ampere, Ada, Hopper, and
-Blackwell CUDA capabilities.
+Blackwell CUDA capabilities, including the native `sm_110a` Thor artifact.
 
 ## Usage
 
@@ -56,7 +68,7 @@ Blackwell CUDA capabilities.
 from kernels import get_kernel
 import torch
 
-gdn = get_kernel("flashrt/gated-delta-attention", version=3, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=5, trust_remote_code=True)
 
 B, H, D = 1, 48, 128
 q = torch.randn(B, H, D, device="cuda", dtype=torch.bfloat16)
@@ -68,6 +80,56 @@ state = torch.zeros(B, H, D, D, device="cuda", dtype=torch.bfloat16)
 
 out = gdn.gated_delta_recurrent_bf16(q, k, v, g, beta, state)
 ```
+
+Generic H32/H16 producer and fused prefill path:
+
+```python
+S, Hv, Hk, D = 64, 32, 16, 128
+conv_out = torch.randn(S, (2 * Hk + Hv) * D, device="cuda", dtype=torch.bfloat16)
+a = torch.randn(S, Hv, device="cuda", dtype=torch.bfloat16)
+b = torch.randn_like(a)
+neg_exp_A_log = -torch.rand(Hv, device="cuda", dtype=torch.float32)
+dt_bias = torch.randn(Hv, device="cuda", dtype=torch.float32)
+state = torch.zeros(Hv, D, D, device="cuda", dtype=torch.bfloat16)
+
+q, k, v = gdn.lin_split_qkv_broadcast_h_bf16(conv_out, Hv, Hk)
+g, beta = gdn.gdn_gating_h_bf16(a, b, neg_exp_A_log, dt_bias)
+out = gdn.gdn_chunk_from_conv_smem_h_bf16(
+    conv_out, a, b, neg_exp_A_log, dt_bias, state,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+
+# H32/H16 WY prefill uses the same native stages with model-neutral head args.
+q16 = conv_out[:, : Hk * D].view(S, Hk, D).contiguous()
+k16 = conv_out[:, Hk * D : 2 * Hk * D].view(S, Hk, D).contiguous()
+q_l2, k_l2, q_pack, _, g_cumsum = (
+    gdn.gdn_wy_norm_cumsum_pack_qk_h_bf16(
+        q16, k16, g, num_v_heads=Hv, num_k_heads=Hk
+    )
+)
+A = gdn.gdn_wy_kkt_b64_h_bf16(
+    k_l2, beta, g_cumsum, num_v_heads=Hv, num_k_heads=Hk
+)
+Ai = gdn.gdn_wy_solve_tril_b64_h_f32(A, S, num_v_heads=Hv)
+Ai_pack = gdn.gdn_wy_cast_ai_h_f32_to_bf16(Ai, S, num_v_heads=Hv)
+w_pack, u_pack = gdn.gdn_wy_recompute_wu_b64_mma_fla_h_bf16(
+    k_l2, v, beta, g_cumsum, Ai_pack,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+h0, _, v_pack, k_pack = gdn.gdn_wy_chunk_h_b64_mma_fla_h_bf16(
+    k_l2, w_pack, u_pack, g_cumsum, state,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+out = gdn.gdn_wy_output_o_b64_mma_fla_h_bf16(
+    q_pack, k_pack, v_pack, h0, g_cumsum,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+```
+
+The generic producer requires `Hv % Hk == 0` and currently supports
+`head_dim=128`. `neg_exp_A_log` and `dt_bias` are FP32 by contract; inputs,
+state, and outputs are BF16. The fused chunk updates `state` in place and is
+CUDA Graph replay safe after normal warmup.
 
 Prefill-style WY pipeline:
 

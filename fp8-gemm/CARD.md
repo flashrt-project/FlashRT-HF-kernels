@@ -12,10 +12,17 @@ been swept across PI0.5, GROOT, Cosmos Edge, and LingBot VLA projection shapes.
 
 - `fp8_linear_bf16(input, weight, alpha=1.0, out=None, variant=0)`
 - `fp8_linear_residual_bf16(input, weight, residual, alpha=1.0, variant=0)`
+- `fp8_linear_bias_bf16(input, weight, bias, alpha=1.0, out=None)`
+- `fp8_linear_bias_residual_bf16(input, weight, bias, residual, alpha=1.0)`
+- `fp8_linear_bias_gelu_bf16(input, weight, bias, alpha=1.0, out=None)`
 - `fp8_blockwise_linear_bf16(input, weight, input_scale, weight_scale, out=None)`
 - `select_fp8_linear_tile(m, n, k, variant=0)`
 
 On SM110, keep `variant=0` for the tuned public dispatcher. Variants `1`, `2`,
 and `3` force Sq, T1, and Wide respectively for diagnostics.
+
+SM110 also provides BF16 bias, in-place bias+residual, and tanh-GELU+bias
+epilogues for SigLIP-style projection and MLP shapes. The validated large-M
+plain GEMM band is `M=65..1024`.
 
 See the repository README for shape contracts, validation status, and examples.

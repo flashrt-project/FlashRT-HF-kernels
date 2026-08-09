@@ -1,14 +1,18 @@
 # Source Sync
 
 - Upstream FlashRT source: `../official/FlashRT`
-- SM110 sync commit: `132049d7c3a3534fb7d35676cd726f39408b1af6`
+- Original SM110 sync commit: `132049d7c3a3534fb7d35676cd726f39408b1af6`
+- GROOT N1.7 fused-epilogue sync commit:
+  `24df793f4fa2d50780aea03b644208c6e0cb4162`
 - Initial package date: June 20, 2026
 
 Copied source files:
 
 - `csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cu/.cuh`
 - `csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm100.cu/.cuh`
+- `csrc/gemm/fp4/cutlass_fp4_gemm_bias_bf16_sm100.cu/.cuh`
 - `csrc/quantize/quantize_fp4_sfa.cu/.cuh`
+- `csrc/quantize/quantize_fp4_sfa_bf16.cu/.cuh`
 - `cutlass/util/packed_stride.hpp`, copied from CUTLASS tools util headers
   into `csrc/cutlass/util/packed_stride.hpp` so the Hub package does not
   depend on a local `third_party/cutlass/tools/util/include` path.
@@ -23,6 +27,9 @@ Local packaging edits:
 
 - Added Tensor-facing PyTorch custom ops in `torch-ext/torch_binding.cpp`.
 - Added Python wrappers and fake registrations in `torch-ext/fp4_gemm`.
+- Added the BF16 direct SFA/SFB producer as an input-type specialization of
+  the existing FP16 producer. Its E2M1 encoding and CUTLASS scale layout are
+  unchanged; the additive entry removes a standalone activation cast.
 - Public APIs accept CUDA tensors only; no raw pointers or stream arguments.
 - CUTLASS SM100/SM120 block-scaled layout support is treated as package scope,
   not as a test-only compiler define.
@@ -35,8 +42,8 @@ Local packaging edits:
 Architecture limits:
 
 - The canonical BF16-output GEMM and SFA/SFB helpers support SM110 and SM120.
-- Residual, bias/GELU, FP4-output, and Stream-K epilogues use the existing
-  SM120 implementation. They reject on SM110 rather than silently falling
-  back or calling an incompatible image.
-- SM110 requires CUDA 13 and CUTLASS 4.5; SM120 requires CUDA 12.8 and
-  CUTLASS 4.0.
+- Bias, residual, and bias/GELU-to-FP4 epilogues have an independent SM110
+  backend copied from the production GROOT N1.7 path. Stream-K remains an
+  SM120-only API and rejects on SM110.
+- SM110 requires CUDA 13 and the package's pinned CUTLASS 4.4 target; SM120
+  requires CUDA 12.8 and CUTLASS 4.0.
