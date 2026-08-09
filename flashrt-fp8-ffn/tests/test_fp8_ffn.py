@@ -163,6 +163,48 @@ class SourceOps:
         )
         return out[: x.shape[0]]
 
+    def fp8_gelu_mlp_v2_bf16(
+        self, x, up_w, up_b, down_w, down_b, x_scale, up_w_scale,
+        hidden_scale, down_w_scale, hidden=None, hidden_fp8=None, out=None
+    ):
+        if hidden is None:
+            hidden = torch.empty((x.shape[0], up_w.shape[0]), device=x.device, dtype=torch.bfloat16)
+        if hidden_fp8 is None:
+            hidden_fp8 = torch.empty_like(hidden, dtype=fp8_dtype())
+        if out is None:
+            out = torch.empty((x.shape[0], down_w.shape[0]), device=x.device, dtype=torch.bfloat16)
+        self._ops.fp8_gelu_mlp_v2_bf16(
+            x, up_w, up_b, down_w, down_b, x_scale, up_w_scale,
+            hidden_scale, down_w_scale, hidden, hidden_fp8, out
+        )
+        return out
+
+    def bf16_fp8_gelu_mlp_v2_bf16(
+        self, x, up_w, up_b, down_w, down_b, x_scale, up_w_scale,
+        hidden_scale, down_w_scale, input_fp8=None, hidden_bf16=None,
+        hidden_fp8=None, out=None, *, pad_to=None
+    ):
+        padded_m = x.shape[0] if pad_to is None else pad_to
+        if input_fp8 is None:
+            input_fp8 = torch.empty(
+                (padded_m, x.shape[1]), device=x.device, dtype=fp8_dtype()
+            )
+        if hidden_bf16 is None:
+            hidden_bf16 = torch.empty(
+                (padded_m, up_w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        if hidden_fp8 is None:
+            hidden_fp8 = torch.empty_like(hidden_bf16, dtype=fp8_dtype())
+        if out is None:
+            out = torch.empty(
+                (padded_m, down_w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        self._ops.bf16_fp8_gelu_mlp_v2_bf16(
+            x, up_w, up_b, down_w, down_b, x_scale, up_w_scale,
+            hidden_scale, down_w_scale, input_fp8, hidden_bf16, hidden_fp8, out
+        )
+        return out[: x.shape[0]]
+
 
 def _preload_cublaslt() -> None:
     for parent in Path(torch.__file__).resolve().parents:
@@ -249,6 +291,20 @@ def ref_mlp(x, up_w, up_b, down_w, down_b, x_scale, up_w_scale, hidden_scale, do
     )
     out = ref_gemm(hidden_fp8, down_w, hidden_scale, down_w_scale)
     return (out.float() + down_b.float()).to(torch.bfloat16)
+
+
+def ref_mlp_v2(
+    x, up_w, up_b, down_w, down_b, x_scale, up_w_scale,
+    hidden_scale, down_w_scale,
+):
+    _, hidden_fp8 = ref_linear_bias_gelu_quant(
+        x, up_w, up_b, x_scale, up_w_scale, hidden_scale
+    )
+    return (
+        dequant_fp8(hidden_fp8, hidden_scale)
+        @ dequant_fp8(down_w, down_w_scale).T
+        + down_b.float()
+    ).to(torch.bfloat16)
 
 
 def make_case(M: int, K: int, H: int, N: int):
@@ -406,6 +462,31 @@ def run(args) -> None:
             ref_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s),
         )
 
+        # v2: same math with the down bias in the GEMM epilogue. Where
+        # the fused path engages, the bias rides the fp32 accumulator
+        # (one bf16 rounding fewer than the staged add) — adjacent-bin
+        # differences only; on the runtime fallback it is bit-equal.
+        got_mlp_v2 = ops.fp8_gelu_mlp_v2_bf16(
+            x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s
+        )
+        fused_down_reference = (
+            dequant_fp8(got_hidden_fp8, hid_s)
+            @ dequant_fp8(down_w, dn_s).T
+            + down_b.float()
+        ).to(torch.bfloat16)
+        assert_close(
+            f"{label}/fp8_gelu_mlp_v2_bf16_vs_fused_reference",
+            got_mlp_v2,
+            fused_down_reference,
+            atol=0.25,
+            rtol=0.03,
+        )
+        report_distribution(
+            f"{label}/fp8_gelu_mlp_v2_bf16_vs_v1",
+            got_mlp_v2,
+            got_mlp,
+        )
+
     projection_shapes = {
         "decode_m1_d2048_o": (1, 2048, 2048),
         "small_m8_d1536_o": (8, 1536, 1536),
@@ -531,6 +612,18 @@ def run(args) -> None:
             atol=0.0,
             rtol=0.0,
         )
+        got_v2 = ops.bf16_fp8_gelu_mlp_v2_bf16(
+            x_bf16, up_w, up_b, down_w, down_b, x_scale, up_s, hid_s, dn_s,
+            pad_to=padded_m,
+        )
+        assert_distribution_close(
+            f"{label}/bf16_fp8_gelu_mlp_v2_vs_v1",
+            got_v2,
+            got,
+            p99_abs_limit=float("inf"),
+            p99_rel_floor1_limit=0.01,
+            cosine_min=0.9999,
+        )
 
     M, K, H, N = 51, 128, 256, 128
     x_bf16 = torch.randn((M, K), device="cuda", dtype=torch.bfloat16) * 0.25
@@ -588,6 +681,43 @@ def run(args) -> None:
     if out.dtype != torch.bfloat16:
         raise AssertionError(f"output dtype must be bfloat16, got {out.dtype}")
     print("PASS bf16_region/output_dtype: torch.bfloat16")
+
+    input_fp8_v2 = torch.empty_like(input_fp8)
+    hidden_bf16_v2 = torch.empty_like(hidden_bf16)
+    hidden_fp8_v2 = torch.empty_like(hidden_fp8)
+    out_v2 = torch.empty_like(out)
+
+    def region_v2(value):
+        return ops.bf16_fp8_gelu_mlp_v2_bf16(
+            value, up_weight, up_bias, down_weight, down_bias, x_scale,
+            up_scale, hidden_scale, down_scale, input_fp8=input_fp8_v2,
+            hidden_bf16=hidden_bf16_v2, hidden_fp8=hidden_fp8_v2,
+            out=out_v2, pad_to=padded_m,
+        )
+
+    expected_v2 = region_v2(x_bf16).clone()
+    compiled_v2 = torch.compile(region_v2, fullgraph=True)
+    assert_close(
+        "bf16_region_v2/torch_compile_fullgraph",
+        compiled_v2(x_bf16),
+        expected_v2,
+        atol=0.0,
+        rtol=0.0,
+    )
+    graph_v2 = torch.cuda.CUDAGraph()
+    region_v2(x_bf16)
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph_v2):
+        region_v2(x_bf16)
+    graph_v2.replay()
+    torch.cuda.synchronize()
+    assert_close(
+        "bf16_region_v2/cuda_graph_replay",
+        out_v2[:M],
+        expected_v2,
+        atol=0.0,
+        rtol=0.0,
+    )
 
     linear_weight = quantize_fp8(
         torch.randn((N, K), device="cuda", dtype=torch.bfloat16) * 0.02,

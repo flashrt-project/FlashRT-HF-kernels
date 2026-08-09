@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Gated DeltaNet (linear attention) kernels for Qwen3.6 — Phase 3.3 / 3.4.
+// Gated DeltaNet (linear attention) kernels for model-neutral head profiles.
 // Implements the same math as transformers/models/qwen3_5/modeling_qwen3_5.py
 // torch_recurrent_gated_delta_rule and torch_chunk_gated_delta_rule, fused
 // into single-launch kernels for SM120a / RTX 5090.
 //
-// Qwen3.6 layer config (linear-attn):
+// Initial 48-head layer config (linear-attn):
 //   * num_v_heads = 48, num_k_heads = 16   (Q/K broadcast 3x)
 //   * head_k_dim  = head_v_dim = 128
 //   * use_qk_l2norm_in_kernel = True
@@ -37,7 +37,7 @@ namespace kernels {
 //   state : (B, num_v_heads, head_k_dim, head_v_dim)  in/out
 //   out   : (B, num_v_heads, head_v_dim)
 //
-// Constraints: head_k_dim == head_v_dim == 128 (Qwen3.6); kernel is
+// Constraints: head_k_dim == head_v_dim == 128; kernel is
 // templated on it for register-allocation efficiency, but exposes a
 // runtime check for correctness.
 //
@@ -162,6 +162,21 @@ void qwen36_lin_split_qkv_broadcast_bf16(
     int S,
     cudaStream_t stream);
 
+// Generic linear-attention layout:
+// conv_out: (S, (2 * num_k_heads + num_v_heads) * head_dim)
+// q/k/v:    (S, num_v_heads, head_dim), with Q/K broadcast by
+//           num_v_heads / num_k_heads.
+void lin_split_qkv_broadcast_h_bf16(
+    const void* conv_out,
+    void*       q,
+    void*       k,
+    void*       v,
+    int S,
+    int num_v_heads,
+    int num_k_heads,
+    int head_dim,
+    cudaStream_t stream);
+
 // Split linear-attention conv output for the chunk/WY GQA path.
 // conv_out: (S, 10240) = Q(16*128), K(16*128), V(48*128)
 // q16/k16:  contiguous (S, 16, 128)
@@ -188,8 +203,8 @@ void qwen36_split_q_gate_bf16(
 // Fused Gated DeltaNet gate preparation:
 //   beta = sigmoid(b)
 //   g    = neg_exp_A_log[h] * log1p(exp(a + dt_bias[h]))
-// Inputs a/b are (S, 48) bf16, per-head constants are (48) fp32,
-// outputs beta/g are (S, 48) bf16.
+// Inputs a/b and outputs beta/g are (S, num_heads) bf16. Per-head
+// constants are (num_heads) fp32.
 void qwen36_gdn_gating_bf16(
     const void* a,
     const void* b,
@@ -227,6 +242,23 @@ void qwen36_gdn_chunk_from_conv_smem_bf16(
     void*       out,
     int S,
     int num_v_heads,
+    bool use_qk_l2norm,
+    cudaStream_t stream);
+
+void gdn_chunk_from_conv_smem_h_bf16(
+    const void* conv_out,
+    const void* a,
+    const void* b,
+    const float* neg_exp_A_log,
+    const float* dt_bias,
+    void*       state,
+    void*       out,
+    int S,
+    int num_v_heads,
+    int num_k_heads,
+    int head_dim,
+    int a_stride,
+    int b_stride,
     bool use_qk_l2norm,
     cudaStream_t stream);
 
@@ -336,6 +368,56 @@ void qwen36_gdn_wy_output_o_b64_bf16(
     const void* g_cumsum,
     void*       out,
     int S,
+    cudaStream_t stream);
+
+// Additive head-parameterized WY entry points. The current production
+// profiles are (num_v_heads,num_k_heads,head_dim)=(48,16,128) and
+// (32,16,128); keeping the profile explicit prevents model-specific names
+// from leaking into the public package API.
+void gdn_wy_norm_cumsum_pack_qk_h_bf16(
+    const void* q,
+    const void* k,
+    const void* g,
+    void* q_l2,
+    void* k_l2,
+    void* q_pack_hv,
+    void* k_pack_hk,
+    void* g_cumsum,
+    int S,
+    int num_v_heads,
+    int num_k_heads,
+    int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_kkt_b64_h_bf16(
+    const void* k_l2, const void* beta, const void* g_cumsum, void* A,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_solve_tril_b64_h_f32(
+    const void* A, void* Ai, int S, int num_v_heads,
+    cudaStream_t stream);
+
+void gdn_wy_cast_ai_h_f32_to_bf16(
+    const void* Ai, void* Ai_pack, int S, int num_v_heads,
+    cudaStream_t stream);
+
+void gdn_wy_recompute_wu_b64_h_bf16(
+    const void* k_l2, const void* v, const void* beta,
+    const void* g_cumsum, const void* Ai, void* w, void* u,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_chunk_h_b64_h_bf16(
+    const void* k_l2, const void* u, const void* w,
+    const void* g_cumsum, void* state, void* h0, void* v_new,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
+    cudaStream_t stream);
+
+void gdn_wy_output_o_b64_h_bf16(
+    const void* q_l2, const void* k_l2, const void* v_new,
+    const void* h0, const void* g_cumsum, void* out,
+    int S, int num_v_heads, int num_k_heads, int head_dim,
     cudaStream_t stream);
 
 }  // namespace kernels

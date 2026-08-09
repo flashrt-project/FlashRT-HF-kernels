@@ -34,3 +34,7 @@ Source validation selects the installed architecture. SM120 runs the existing
 FP8/NVFP4 matrix. SM110 runs four BF16 boundary/channel cases plus
 `torch.compile(fullgraph=True)`. The SM110 source is byte-synced from FlashRT
 commit `9972f0f` (`csrc/conv/bf16_conv3d_v0_sm110.cu`).
+
+The SM110 validation is operation-level VAE coverage. It is not evidence that
+the operation participates in the Cosmos3-Edge denoise engine; source ownership
+and an explicit call-site audit are required before making a model-level claim.

@@ -21,8 +21,8 @@ def _check_adaptive_shapes(
         raise RuntimeError("x.shape[1] must be even")
     if weight.shape != (dim,):
         raise RuntimeError("weight must have shape (dim,)")
-    if style.shape != (rows, 3 * dim):
-        raise RuntimeError("style must have shape (rows, 3 * dim)")
+    if style.shape not in ((rows, 3 * dim), (1, 3 * dim)):
+        raise RuntimeError("style must have shape (rows, 3 * dim) or (1, 3 * dim)")
     if out.shape != x.shape or gate_out.shape != x.shape:
         raise RuntimeError("out and gate_out must have the same shape as x")
 
@@ -68,7 +68,10 @@ def ada_rms_norm_style_bf16(
     out: torch.Tensor | None = None,
     gate_out: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply RMSNorm, style scale/shift, and return the style gate."""
+    """Apply RMSNorm and style modulation.
+
+    ``style`` may be per-row ``(rows, 3 * dim)`` or broadcast ``(1, 3 * dim)``.
+    """
 
     if out is None:
         out = torch.empty_like(x)
@@ -89,7 +92,10 @@ def gate_residual_ada_norm_fp8_static_bf16(
     out: torch.Tensor | None = None,
     gate_out: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Update residual in place, apply AdaRMSNorm, and emit static-scale FP8."""
+    """Update residual in place, apply AdaRMSNorm, and emit static-scale FP8.
+
+    ``style`` may be per-row ``(rows, 3 * dim)`` or broadcast ``(1, 3 * dim)``.
+    """
 
     if out is None:
         out = torch.empty_like(residual, dtype=torch.float8_e4m3fn)

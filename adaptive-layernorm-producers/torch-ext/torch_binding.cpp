@@ -12,6 +12,12 @@
 #include "adaln_modulation6.cuh"
 #include "dit_layer_norm_fp8.cuh"
 #include "registration.h"
+#include "sm110_fp4_dispatch.cuh"
+
+flash_rt::adaln_producers::hub::AdaLayerNormFp4Dispatch
+    flash_rt::adaln_producers::hub::ada_layer_norm_fp4_dispatch = nullptr;
+flash_rt::adaln_producers::hub::LayerNormFp4Dispatch
+    flash_rt::adaln_producers::hub::layer_norm_fp4_dispatch = nullptr;
 
 namespace {
 
@@ -336,6 +342,22 @@ void ada_layer_norm_quant_nvfp4_swizzled_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(x.device());
   auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  auto const* props = at::cuda::getDeviceProperties(x.get_device());
+  if (props->major == 11 && props->minor == 0) {
+    TORCH_CHECK(
+        flash_rt::adaln_producers::hub::ada_layer_norm_fp4_dispatch != nullptr,
+        "SM110 AdaLayerNorm-to-FP4 source is not present in this build");
+    const int rc =
+        flash_rt::adaln_producers::hub::ada_layer_norm_fp4_dispatch(
+            x.data_ptr(), scale.data_ptr(), shift.data_ptr(),
+            packed.data_ptr(), sf_swizzled.data_ptr(),
+            static_cast<int>(x.size(0)), static_cast<int>(x.size(1)),
+            static_cast<float>(eps), stream);
+    TORCH_CHECK(rc == 0,
+                "ada_layer_norm_quant_nvfp4_swizzled_bf16 failed with rc=",
+                rc);
+    return;
+  }
   flash_rt::quantize::ada_layer_norm_nvfp4_swizzled(
       x.data_ptr(),
       scale.data_ptr(),
@@ -348,6 +370,37 @@ void ada_layer_norm_quant_nvfp4_swizzled_bf16(
       stream);
 #else
   TORCH_CHECK(false, "adaptive-layernorm-producers was not built with CUDA support");
+#endif
+}
+
+void layer_norm_no_affine_quant_nvfp4_swizzled_bf16(
+    torch::Tensor const& x,
+    double eps,
+    torch::Tensor& packed,
+    torch::Tensor& sf_swizzled) {
+  check_x(x);
+  check_nvfp4_out(x, packed, sf_swizzled);
+
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  auto const* props = at::cuda::getDeviceProperties(x.get_device());
+  TORCH_CHECK(props->major == 11 && props->minor == 0,
+              "layer_norm_no_affine_quant_nvfp4_swizzled_bf16 currently "
+              "requires SM110; got SM", props->major, props->minor);
+  TORCH_CHECK(
+      flash_rt::adaln_producers::hub::layer_norm_fp4_dispatch != nullptr,
+      "SM110 LayerNorm-to-FP4 source is not present in this build");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::adaln_producers::hub::layer_norm_fp4_dispatch(
+      x.data_ptr(), packed.data_ptr(), sf_swizzled.data_ptr(),
+      static_cast<int>(x.size(0)), static_cast<int>(x.size(1)),
+      static_cast<float>(eps), stream);
+  TORCH_CHECK(
+      rc == 0,
+      "layer_norm_no_affine_quant_nvfp4_swizzled_bf16 failed with rc=", rc);
+#else
+  TORCH_CHECK(false,
+              "adaptive-layernorm-producers was not built with CUDA support");
 #endif
 }
 
@@ -488,6 +541,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16("
           "Tensor x, Tensor scale_fp8, Tensor shift_fp8, Tensor scale_deq, Tensor shift_deq, "
           "float eps, Tensor! packed, Tensor! sf_swizzled) -> ()");
+  ops.def("layer_norm_no_affine_quant_nvfp4_swizzled_bf16("
+          "Tensor x, float eps, Tensor! packed, Tensor! sf_swizzled) -> ()");
   ops.def("layer_norm_no_affine_quant_fp8_static_bf16("
           "Tensor x, Tensor act_scale, float eps, Tensor! out) -> ()");
   ops.def("adaln_modulation6_bf16("
@@ -516,6 +571,9 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16",
            torch::kCUDA,
            &ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16);
+  ops.impl("layer_norm_no_affine_quant_nvfp4_swizzled_bf16",
+           torch::kCUDA,
+           &layer_norm_no_affine_quant_nvfp4_swizzled_bf16);
   ops.impl("layer_norm_no_affine_quant_fp8_static_bf16",
            torch::kCUDA,
            &layer_norm_no_affine_quant_fp8_static_bf16);

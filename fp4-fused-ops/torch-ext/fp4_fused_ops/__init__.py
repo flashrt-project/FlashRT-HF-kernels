@@ -16,7 +16,8 @@ def sfa_size_bytes(rows: int, dim: int, is_sfb: bool = False, device: torch.devi
 
 def _alloc_fp4(rows: int, dim: int, device: torch.device | str):
     packed = torch.empty((rows, dim // 2), device=device, dtype=torch.uint8)
-    sfa = torch.empty((sfa_size_bytes(rows, dim, False, device=device),), device=device, dtype=torch.uint8)
+    # Tile-layout padding entries are not written by every producer.
+    sfa = torch.zeros((sfa_size_bytes(rows, dim, False, device=device),), device=device, dtype=torch.uint8)
     return packed, sfa
 
 
@@ -86,8 +87,110 @@ def _silu_two_mul_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("geglu_two_mul_nvfp4_native"))
+def _geglu_two_native_fake(gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed, out_sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gelu_mul_nvfp4_bf16"))
+def _gelu_mul_bf16_fake(merged, inv_s, packed, sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("rms_norm_mul_nvfp4_bf16"))
+def _rms_mul_bf16_fake(x, inv_s, eps: float, packed, sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("residual_add_rms_norm_nvfp4_bf16"))
+def _res_rms_bf16_fake(residual, x, inv_s, eps: float, packed, sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_fp8_bf16"))
+def _layer_norm_fp8_bf16_fake(x, gamma, beta, eps: float, out) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_nvfp4_bf16"))
+def _layer_norm_nvfp4_bf16_fake(x, gamma, beta, inv_s, eps: float, packed, sfa) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("dequantize_fp4_sfa_fp16"))
 def _dequant_fake(packed: torch.Tensor, sfa: torch.Tensor, out: torch.Tensor) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("adaptive_rms_norm_nvfp4_fp16"))
+def _adaptive_rms_fake(x, style, packed, sfa, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gated_residual_adaptive_rms_norm_nvfp4_fp16"))
+def _gated_adaptive_rms_fake(x, previous_gate, residual, style, packed, sfa, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("adaptive_rms_norm_nvfp4_bf16"))
+def _adaptive_rms_bf16_fake(x, style, packed, sfa, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gated_residual_adaptive_rms_norm_nvfp4_bf16"))
+def _gated_adaptive_rms_bf16_fake(
+    x, previous_gate, residual, style, packed, sfa, gate
+) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("adaptive_rms_norm_fp8_static_fp16"))
+def _adaptive_rms_fp8_fake(x, style, scale, out, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gated_residual_adaptive_rms_norm_fp8_static_fp16"))
+def _gated_adaptive_rms_fp8_fake(x, previous_gate, residual, style, scale, out, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("adaptive_rms_norm_e0m3_fp16"))
+def _adaptive_rms_e0m3_fake(x, style, use_rht: bool, packed, sfa, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gated_residual_adaptive_rms_norm_e0m3_fp16"))
+def _gated_adaptive_rms_e0m3_fake(x, previous_gate, residual, style, use_rht: bool, packed, sfa, gate) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gelu_mul_e0m3_fp16"))
+def _gelu_mul_e0m3_fake(merged, use_rht: bool, packed, sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("residual_add_rms_norm_quant_nvfp4_swizzled_bf16"))
+def _res_rms_nvfp4_bf16_fake(residual, x, weight, eps: float, packed, sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("relu2_quant_nvfp4_swizzled_fp16"))
+def _relu2_nvfp4_fake(x, packed, sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_fp8_fp16"))
+def _layer_norm_fp8_fake(x, gamma, beta, eps: float, out) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("layer_norm_nvfp4_fp16"))
+def _layer_norm_nvfp4_fake(x, gamma, beta, inv_s, eps: float, packed, sfa) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("gelu_mul_nvfp4_fp16"))
+def _gelu_mul_nvfp4_fake(merged, packed, sfa) -> None:
     return None
 
 
@@ -246,6 +349,431 @@ def silu_mul_two_mul_fp4_to_fp4(
     return out_packed, out_sfa
 
 
+def geglu_two_mul_nvfp4_native(
+    gate_packed: torch.Tensor,
+    gate_sfa: torch.Tensor,
+    up_packed: torch.Tensor,
+    up_sfa: torch.Tensor,
+    inv_s: torch.Tensor,
+    out_packed: torch.Tensor | None = None,
+    out_sfa: torch.Tensor | None = None,
+):
+    """Native-E2M1 LUT GeGLU combiner for split gate/up FP4 outputs."""
+    hidden = gate_packed.shape[1] * 2
+    if out_packed is None or out_sfa is None:
+        out_packed, out_sfa = _alloc_fp4(
+            gate_packed.shape[0], hidden, gate_packed.device
+        )
+    ops.geglu_two_mul_nvfp4_native(
+        gate_packed, gate_sfa, up_packed, up_sfa, inv_s,
+        out_packed, out_sfa
+    )
+    return out_packed, out_sfa
+
+
+def gelu_mul_nvfp4_bf16(
+    merged: torch.Tensor,
+    inv_s: torch.Tensor | None = None,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+):
+    """BF16 GeGLU producer with optional per-channel scaling and NVFP4 output."""
+    hidden = merged.shape[1] // 2
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(merged.shape[0], hidden, merged.device)
+    ops.gelu_mul_nvfp4_bf16(merged, inv_s, packed, sfa)
+    return packed, sfa
+
+
+def rms_norm_mul_nvfp4_bf16(
+    x: torch.Tensor,
+    inv_s: torch.Tensor,
+    eps: float = 1e-6,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+):
+    """BF16 RMSNorm, channel scaling, and native NVFP4 production."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.rms_norm_mul_nvfp4_bf16(x, inv_s, float(eps), packed, sfa)
+    return packed, sfa
+
+
+def residual_add_rms_norm_nvfp4_bf16(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    inv_s: torch.Tensor | None = None,
+    eps: float = 1e-6,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+):
+    """Update a BF16 residual, RMS-normalize, and produce native NVFP4."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.residual_add_rms_norm_nvfp4_bf16(
+        residual, x, inv_s, float(eps), packed, sfa
+    )
+    return residual, packed, sfa
+
+
+def layer_norm_fp8_bf16(
+    x: torch.Tensor,
+    gamma: torch.Tensor,
+    beta: torch.Tensor,
+    eps: float = 1e-6,
+    *,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Vectorized BF16 LayerNorm producer with FP8 E4M3 output."""
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.layer_norm_fp8_bf16(x, gamma, beta, float(eps), out)
+    return out
+
+
+def layer_norm_nvfp4_bf16(
+    x: torch.Tensor,
+    gamma: torch.Tensor,
+    beta: torch.Tensor,
+    inv_s: torch.Tensor | None = None,
+    eps: float = 1e-6,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+):
+    """Vectorized BF16 LayerNorm producer with native NVFP4 output."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.layer_norm_nvfp4_bf16(
+        x, gamma, beta, inv_s, float(eps), packed, sfa
+    )
+    return packed, sfa
+
+
+def adaptive_rms_norm_nvfp4_fp16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Apply adaptive RMSNorm and emit native NVFP4 plus the gate.
+
+    ``style`` has shape ``(rows, 3 * dim)`` and stores scale, shift, gate.
+    The optimized SM110 implementation currently supports ``dim=1024``.
+    """
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_nvfp4_fp16(x, style, packed, sfa, gate)
+    return packed, sfa, gate
+
+
+def gated_residual_adaptive_rms_norm_nvfp4_fp16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Update ``residual += x * previous_gate``, normalize, and emit NVFP4."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.gated_residual_adaptive_rms_norm_nvfp4_fp16(
+        x, previous_gate, residual, style, packed, sfa, gate
+    )
+    return residual, packed, sfa, gate
+
+
+def ada_rms_norm_quant_nvfp4_swizzled_fp16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Canonical name for the native FP16 AdaRMS-to-NVFP4 producer."""
+    return adaptive_rms_norm_nvfp4_fp16(
+        x, style, packed=packed, sfa=sf_swizzled, gate=gate
+    )
+
+
+def gate_res_ada_rms_norm_quant_nvfp4_swizzled_fp16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Canonical name for gated residual + AdaRMS-to-NVFP4."""
+    return gated_residual_adaptive_rms_norm_nvfp4_fp16(
+        x, previous_gate, residual, style,
+        packed=packed, sfa=sf_swizzled, gate=gate,
+    )
+
+
+def adaptive_rms_norm_nvfp4_bf16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Apply BF16 AdaRMSNorm and emit native NVFP4 plus the BF16 gate."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_nvfp4_bf16(x, style, packed, sfa, gate)
+    return packed, sfa, gate
+
+
+def gated_residual_adaptive_rms_norm_nvfp4_bf16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Update a BF16 gated residual, apply AdaRMSNorm, and emit NVFP4."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        x, previous_gate, residual, style, packed, sfa, gate
+    )
+    return residual, packed, sfa, gate
+
+
+def ada_rms_norm_quant_nvfp4_swizzled_bf16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Canonical BF16 alias for AdaRMSNorm-to-NVFP4."""
+    return adaptive_rms_norm_nvfp4_bf16(
+        x, style, packed=packed, sfa=sf_swizzled, gate=gate
+    )
+
+
+def gate_res_ada_rms_norm_quant_nvfp4_swizzled_bf16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    """Canonical BF16 alias for gated residual AdaRMSNorm-to-NVFP4."""
+    return gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        x, previous_gate, residual, style,
+        packed=packed, sfa=sf_swizzled, gate=gate,
+    )
+
+
+def adaptive_rms_norm_fp8_static_fp16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    scale: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_fp8_static_fp16(x, style, scale, out, gate)
+    return out, gate
+
+
+def adaptive_rms_norm_e0m3_fp16(
+    x: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    use_rht: bool = False,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_e0m3_fp16(
+        x, style, bool(use_rht), packed, sfa, gate
+    )
+    return packed, sfa, gate
+
+
+def gated_residual_adaptive_rms_norm_e0m3_fp16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    *,
+    use_rht: bool = False,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.gated_residual_adaptive_rms_norm_e0m3_fp16(
+        x, previous_gate, residual, style, bool(use_rht), packed, sfa, gate
+    )
+    return packed, sfa, gate
+
+
+def gelu_mul_e0m3_fp16(
+    merged: torch.Tensor,
+    *,
+    use_rht: bool = False,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+):
+    hidden = merged.shape[1] // 2
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(merged.shape[0], hidden, merged.device)
+    ops.gelu_mul_e0m3_fp16(merged, bool(use_rht), packed, sfa)
+    return packed, sfa
+
+
+def residual_add_rms_norm_quant_nvfp4_swizzled_bf16(
+    residual: torch.Tensor,
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-6,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+):
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.residual_add_rms_norm_quant_nvfp4_swizzled_bf16(
+        residual, x, weight, float(eps), packed, sfa
+    )
+    return packed, sfa
+
+
+def relu2_quant_nvfp4_swizzled_fp16(
+    x: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+):
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.relu2_quant_nvfp4_swizzled_fp16(x, packed, sfa)
+    return packed, sfa
+
+
+def gate_res_ada_rms_norm_quant_fp8_static_fp16(
+    x: torch.Tensor,
+    previous_gate: torch.Tensor,
+    residual: torch.Tensor,
+    style: torch.Tensor,
+    scale: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+    gate: torch.Tensor | None = None,
+):
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    if gate is None:
+        gate = torch.empty_like(x)
+    ops.gated_residual_adaptive_rms_norm_fp8_static_fp16(
+        x, previous_gate, residual, style, scale, out, gate
+    )
+    return residual, out, gate
+
+
+def silu_mul_quant_nvfp4_swizzled_fp16(
+    merged: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+):
+    """Canonical name for the register-only SiLU-mul-to-NVFP4 producer."""
+    return silu_mul_fp4_sfa_v2_fp16(
+        merged, packed=packed, sfa=sf_swizzled
+    )
+
+
+def layer_norm_fp8_fp16(
+    x: torch.Tensor,
+    gamma: torch.Tensor,
+    beta: torch.Tensor,
+    eps: float = 1e-5,
+    *,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Vectorized FP16 LayerNorm with FP8 E4M3 output on SM110."""
+    if out is None:
+        out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.layer_norm_fp8_fp16(x, gamma, beta, float(eps), out)
+    return out
+
+
+def layer_norm_nvfp4_fp16(
+    x: torch.Tensor,
+    gamma: torch.Tensor,
+    beta: torch.Tensor,
+    inv_s: torch.Tensor | None = None,
+    eps: float = 1e-5,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """FP16 LayerNorm with optional AWQ channel scaling and NVFP4 output."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.layer_norm_nvfp4_fp16(
+        x, gamma, beta, inv_s, float(eps), packed, sfa
+    )
+    return packed, sfa
+
+
+def gelu_mul_nvfp4_fp16(
+    merged: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute tanh-GELU(gate) * up and emit native NVFP4."""
+    rows, hidden = merged.shape[0], merged.shape[1] // 2
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(rows, hidden, merged.device)
+    ops.gelu_mul_nvfp4_fp16(merged, packed, sfa)
+    return packed, sfa
+
+
 def dequantize_fp4_sfa_fp16(
     packed: torch.Tensor,
     sfa: torch.Tensor,
@@ -392,19 +920,44 @@ def bf16_rms_norm_ncdhw(
 
 
 __all__ = [
+    "ada_rms_norm_quant_nvfp4_swizzled_fp16",
+    "adaptive_rms_norm_nvfp4_fp16",
+    "adaptive_rms_norm_nvfp4_bf16",
+    "adaptive_rms_norm_fp8_static_fp16",
+    "adaptive_rms_norm_e0m3_fp16",
     "bf16_rms_norm_ncdhw",
     "bf16_rms_silu_ncdhw",
     "dequantize_fp4_sfa_fp16",
+    "gated_residual_adaptive_rms_norm_nvfp4_fp16",
+    "gated_residual_adaptive_rms_norm_nvfp4_bf16",
+    "gated_residual_adaptive_rms_norm_e0m3_fp16",
+    "gate_res_ada_rms_norm_quant_nvfp4_swizzled_fp16",
+    "ada_rms_norm_quant_nvfp4_swizzled_bf16",
+    "gate_res_ada_rms_norm_quant_nvfp4_swizzled_bf16",
+    "gate_res_ada_rms_norm_quant_fp8_static_fp16",
+    "gelu_mul_nvfp4_fp16",
+    "gelu_mul_nvfp4_bf16",
+    "geglu_two_mul_nvfp4_native",
+    "gelu_mul_e0m3_fp16",
+    "layer_norm_fp8_fp16",
+    "layer_norm_fp8_bf16",
+    "layer_norm_nvfp4_fp16",
+    "layer_norm_nvfp4_bf16",
     "quantize_bf16_to_nvfp4_linear",
     "residual_add_rms_norm_fp4_sfa_fp16",
     "residual_add_rms_norm_fp4_sfa_v2_fp16",
     "residual_add_rms_norm_mul_fp4_sfa_fp16",
+    "residual_add_rms_norm_nvfp4_bf16",
+    "rms_norm_mul_nvfp4_bf16",
+    "residual_add_rms_norm_quant_nvfp4_swizzled_bf16",
     "rms_norm_fp4_sfa_fp16",
     "rms_silu_nvfp4_ndhwc_bf16",
     "sfa_size_bytes",
     "silu_mul_fp4_sfa_fp16",
     "silu_mul_fp4_sfa_v2_fp16",
+    "silu_mul_quant_nvfp4_swizzled_fp16",
     "silu_mul_mul_fp4_sfa_v2_fp16",
     "silu_mul_two_fp4_to_fp4",
     "silu_mul_two_mul_fp4_to_fp4",
+    "relu2_quant_nvfp4_swizzled_fp16",
 ]

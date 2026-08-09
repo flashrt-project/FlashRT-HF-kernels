@@ -15,4 +15,10 @@
   the M64/N16 tile and requires `N%16==0`.
 - CUDA 12.8+, SM120/SM121. Inference only.
 
+Validated 35B-A3B prefill shapes are `N=1024,K=2048` for fused gate/up and
+`N=2048,K=512` for down projection. The caller must produce stable
+expert-sorted tiles and preserve the token-to-tile row map for deterministic
+weighted unpermute. Those scheduling tensors are intentionally outside this
+compute-only ABI.
+
 No hidden dequantization or eager fallback occurs in this package.

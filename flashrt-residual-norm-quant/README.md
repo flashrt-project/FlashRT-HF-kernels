@@ -15,9 +15,12 @@ BF16 residual/x -> residual add -> RMSNorm -> static-scale FP8 E4M3 activation
 - `rms_norm_bf16(x, weight, eps=1e-6, out=None)`
 - `rms_norm_quant_fp8_static_bf16(x, weight, scale, eps=1e-6, out=None)`
 - `residual_add_rms_norm_quant_fp8_static_bf16(residual, x, weight, scale, eps=1e-6, out=None)`
+- `residual_add_rms_norm_bf16(residual, x, weight, eps=1e-6, out=None)`
 
 The residual API updates `residual` in place with `residual += x`, rounded to
 BF16, then emits the normalized FP8 activation.
+The no-quant twin preserves the same in-place BF16 residual contract and emits
+BF16, for runtimes whose next consumer is not low precision.
 
 ## Tensor Conventions
 
@@ -63,6 +66,10 @@ python flashrt-residual-norm-quant/tests/test_residual_norm_quant.py --backend s
 python flashrt-residual-norm-quant/benchmarks/benchmark.py --backend source --shapes all
 ```
 
-Current RTX 5090 source-extension rows pass with FP8 `p99_abs=0` across the
-initial PI0.5/VLA shape grid. Built-artifact and multi-hardware validation are
-pending.
+Current RTX 5090 source-extension rows pass the package's strict BF16/FP8
+distribution gates across the PI0.5, VLA, video, and Cosmos3-Edge shape grid.
+Built artifacts must pass the same gate before publication.
+
+The no-quant BF16 path is also gated at the Cosmos3-Edge production hidden
+size (`rows=128`, `dim=2048`) and preserves the in-place residual contract.
+Its static-output CUDA Graph replay is checked bitwise.

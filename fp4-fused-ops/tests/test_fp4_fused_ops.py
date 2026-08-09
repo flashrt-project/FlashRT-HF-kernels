@@ -86,7 +86,7 @@ class SourceOps:
     def alloc(self, rows: int, dim: int, device: str = "cuda") -> tuple[torch.Tensor, torch.Tensor]:
         return (
             torch.empty((rows, dim // 2), device=device, dtype=torch.uint8),
-            torch.empty((self.sfa_size_bytes(rows, dim, False),), device=device, dtype=torch.uint8),
+            torch.zeros((self.sfa_size_bytes(rows, dim, False),), device=device, dtype=torch.uint8),
         )
 
     def rms_norm_fp4_sfa_fp16(self, x, packed, sfa):
@@ -117,6 +117,100 @@ class SourceOps:
         self._ops.silu_mul_two_mul_fp4_to_fp4(
             gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed, out_sfa
         )
+
+    def geglu_two_mul_nvfp4_native(self, gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed, out_sfa):
+        self._ops.geglu_two_mul_nvfp4_native(
+            gate_packed, gate_sfa, up_packed, up_sfa, inv_s, out_packed, out_sfa
+        )
+
+    def gelu_mul_nvfp4_bf16(self, merged, inv_s, packed, sfa):
+        self._ops.gelu_mul_nvfp4_bf16(merged, inv_s, packed, sfa)
+
+    def rms_norm_mul_nvfp4_bf16(self, x, inv_s, eps, packed, sfa):
+        self._ops.rms_norm_mul_nvfp4_bf16(x, inv_s, float(eps), packed, sfa)
+
+    def residual_add_rms_norm_nvfp4_bf16(self, residual, x, inv_s, eps, packed, sfa):
+        self._ops.residual_add_rms_norm_nvfp4_bf16(
+            residual, x, inv_s, float(eps), packed, sfa
+        )
+
+    def layer_norm_fp8_bf16(self, x, gamma, beta, eps, out):
+        self._ops.layer_norm_fp8_bf16(x, gamma, beta, float(eps), out)
+
+    def layer_norm_nvfp4_bf16(self, x, gamma, beta, inv_s, eps, packed, sfa):
+        self._ops.layer_norm_nvfp4_bf16(
+            x, gamma, beta, inv_s, float(eps), packed, sfa
+        )
+
+    def adaptive_rms_norm_nvfp4_fp16(self, x, style, packed, sfa, gate):
+        self._ops.adaptive_rms_norm_nvfp4_fp16(x, style, packed, sfa, gate)
+
+    def gated_residual_adaptive_rms_norm_nvfp4_fp16(
+        self, x, previous_gate, residual, style, packed, sfa, gate
+    ):
+        self._ops.gated_residual_adaptive_rms_norm_nvfp4_fp16(
+            x, previous_gate, residual, style, packed, sfa, gate
+        )
+
+    def adaptive_rms_norm_nvfp4_bf16(self, x, style, packed, sfa, gate):
+        self._ops.adaptive_rms_norm_nvfp4_bf16(x, style, packed, sfa, gate)
+
+    def gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        self, x, previous_gate, residual, style, packed, sfa, gate
+    ):
+        self._ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+            x, previous_gate, residual, style, packed, sfa, gate
+        )
+
+    def adaptive_rms_norm_fp8_static_fp16(self, x, style, scale, out, gate):
+        self._ops.adaptive_rms_norm_fp8_static_fp16(x, style, scale, out, gate)
+
+    def gated_residual_adaptive_rms_norm_fp8_static_fp16(
+        self, x, previous_gate, residual, style, scale, out, gate
+    ):
+        self._ops.gated_residual_adaptive_rms_norm_fp8_static_fp16(
+            x, previous_gate, residual, style, scale, out, gate
+        )
+
+    def adaptive_rms_norm_e0m3_fp16(self, x, style, use_rht, packed, sfa, gate):
+        self._ops.adaptive_rms_norm_e0m3_fp16(
+            x, style, bool(use_rht), packed, sfa, gate
+        )
+
+    def gated_residual_adaptive_rms_norm_e0m3_fp16(
+        self, x, previous_gate, residual, style, use_rht, packed, sfa, gate
+    ):
+        self._ops.gated_residual_adaptive_rms_norm_e0m3_fp16(
+            x, previous_gate, residual, style, bool(use_rht), packed, sfa, gate
+        )
+
+    def gelu_mul_e0m3_fp16(self, merged, use_rht, packed, sfa):
+        self._ops.gelu_mul_e0m3_fp16(
+            merged, bool(use_rht), packed, sfa
+        )
+
+    def residual_add_rms_norm_quant_nvfp4_swizzled_bf16(
+        self, residual, x, weight, eps, packed, sfa
+    ):
+        self._ops.residual_add_rms_norm_quant_nvfp4_swizzled_bf16(
+            residual, x, weight, float(eps), packed, sfa
+        )
+
+    def relu2_quant_nvfp4_swizzled_fp16(self, x, packed, sfa):
+        self._ops.relu2_quant_nvfp4_swizzled_fp16(x, packed, sfa)
+
+    def layer_norm_fp8_fp16(self, x, gamma, beta, eps, out):
+        self._ops.layer_norm_fp8_fp16(x, gamma, beta, float(eps), out)
+
+    def layer_norm_nvfp4_fp16(
+        self, x, gamma, beta, inv_s, eps, packed, sfa
+    ):
+        self._ops.layer_norm_nvfp4_fp16(
+            x, gamma, beta, inv_s, float(eps), packed, sfa
+        )
+
+    def gelu_mul_nvfp4_fp16(self, merged, packed, sfa):
+        self._ops.gelu_mul_nvfp4_fp16(merged, packed, sfa)
 
     def dequantize_fp4_sfa_fp16(self, packed, sfa, out):
         self._ops.dequantize_fp4_sfa_fp16(packed, sfa, out)
@@ -169,7 +263,7 @@ def alloc_fp4(ops, rows: int, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
 
     return (
         torch.empty((rows, dim // 2), device="cuda", dtype=torch.uint8),
-        torch.empty(
+        torch.zeros(
             (ops.sfa_size_bytes(rows, dim, False),),
             device="cuda",
             dtype=torch.uint8,
@@ -201,7 +295,15 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "fused_fp4" / "norm_silu_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "adarms_nvfp4_bf16.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "pi05_bf16_fp4_producers.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "layer_norm_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "siglip_ln_vec.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "silu_mul_fp4_sfa_vec.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "dequantize_fp4_sfa.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "adarms_fp8_static_fp16.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "pi05_e0m3_act.cu"),
+            str(PACKAGE / "csrc" / "fused_fp4" / "cosmos3_edge_fp4.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "res_rms_fp4_sfa_v2.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "res_rms_mul_fp4_sfa.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "silu_mul_fp4_sfa_v2.cu"),
@@ -215,11 +317,14 @@ def load_source_ops() -> SourceOps:
         extra_include_paths=[str(PACKAGE / "csrc"), str(PACKAGE / "csrc" / "quantize"), str(cutlass_include), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
         extra_cuda_cflags=[
+            "-std=c++17",
             "-O3",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
             "--use_fast_math",
             "-DCUDA_KERNEL",
+            "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
+            "-DFLASHRT_HAVE_COSMOS3_EDGE=1",
         ],
         verbose=False,
     )
@@ -230,7 +335,14 @@ def load_installed_ops(artifact: str | None):
     if artifact:
         sys.path.insert(0, artifact)
     try:
-        return importlib.import_module("fp4_fused_ops")
+        module = importlib.import_module("fp4_fused_ops")
+        # Exercise the installed torch.library ABI with the same explicit
+        # output-buffer contract used by source tests.  The public Python
+        # helpers intentionally expose a more convenient keyword API.
+        adapter = object.__new__(SourceOps)
+        adapter._ops = module.ops
+        adapter._anchor = torch.empty((1,), device="cuda", dtype=torch.uint8)
+        return adapter
     finally:
         if artifact:
             sys.path.remove(artifact)
@@ -240,6 +352,12 @@ def make_fp16(shape: tuple[int, int], seed: int, scale: float = 0.25) -> torch.T
     gen = torch.Generator(device="cuda")
     gen.manual_seed(seed)
     return (torch.randn(shape, device="cuda", generator=gen) * scale).to(torch.float16).contiguous()
+
+
+def make_bf16(shape: tuple[int, int], seed: int, scale: float = 0.25) -> torch.Tensor:
+    gen = torch.Generator(device="cuda")
+    gen.manual_seed(seed)
+    return (torch.randn(shape, device="cuda", generator=gen) * scale).to(torch.bfloat16).contiguous()
 
 
 def check_equal(a: torch.Tensor, b: torch.Tensor) -> bool:
@@ -279,6 +397,778 @@ def check_fp4_path_equivalence_threshold(max_abs: float, mean_abs: float, p99_ab
 
 def check_fp4_quant_reference_threshold(max_abs: float, mean_abs: float, p99_abs: float, cosine: float) -> bool:
     return max_abs <= 1.0 and mean_abs <= 0.10 and p99_abs <= 0.40 and cosine >= 0.99
+
+
+def run_fp8_adarms_checks(ops) -> list[CaseResult]:
+    results: list[CaseResult] = []
+    rows, dim = 10, 1024
+    x = make_fp16((rows, dim), 2026080601, 0.2)
+    style = make_fp16((rows, 3 * dim), 2026080602, 0.1)
+    scale = torch.tensor([0.02], device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_fp8_static_fp16(x, style, scale, out, gate)
+    torch.cuda.synchronize()
+    mod_scale, shift, gate_ref = style.chunk(3, dim=-1)
+    rstd = torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6)
+    expected = x.float() * rstd * (1.0 + mod_scale.float()) + shift.float()
+    expected_fp8 = (expected / scale).clamp(-448, 448).to(torch.float8_e4m3fn)
+    dequant = out.float() * scale
+    diff = (dequant - expected).abs().flatten()
+    cosine = float(torch.nn.functional.cosine_similarity(
+        dequant.flatten(), expected.flatten(), dim=0).item())
+    metrics = (float(diff.max()), float(diff.mean()), float(torch.quantile(diff, 0.99)), cosine)
+    gate_equal = torch.equal(gate, gate_ref)
+    results.append(CaseResult(
+        case="pi05_adaptive_rms_fp8_rows10_dim1024", rows=rows, dim=dim,
+        check="adaptive_rms_norm_fp8_bit_exact_math", packed_equal=torch.equal(out.view(torch.uint8), expected_fp8.view(torch.uint8)),
+        sfa_equal=True, residual_equal=gate_equal,
+        max_abs=metrics[0], mean_abs=metrics[1], p99_abs=metrics[2],
+        cosine=metrics[3], passed=(gate_equal and torch.equal(out.view(torch.uint8), expected_fp8.view(torch.uint8))),
+    ))
+
+    delta = make_fp16((rows, dim), 2026080603, 0.1)
+    previous_gate = make_fp16((rows, dim), 2026080604, 0.1)
+    residual = make_fp16((rows, dim), 2026080605, 0.15)
+    residual_initial = residual.clone()
+    residual_math = residual.float() + delta.float() * previous_gate.float()
+    residual_ref = residual_math.to(torch.float16)
+    ops.gated_residual_adaptive_rms_norm_fp8_static_fp16(
+        delta, previous_gate, residual, style, scale, out, gate
+    )
+    torch.cuda.synchronize()
+    rstd = torch.rsqrt(residual_math.square().mean(-1, keepdim=True) + 1e-6)
+    expected = residual_ref.float() * rstd * (1.0 + mod_scale.float()) + shift.float()
+    expected_fp8 = (expected / scale).clamp(-448, 448).to(torch.float8_e4m3fn)
+    dequant = out.float() * scale
+    diff = (dequant - expected).abs().flatten()
+    cosine = float(torch.nn.functional.cosine_similarity(
+        dequant.flatten(), expected.flatten(), dim=0).item())
+    metrics = (float(diff.max()), float(diff.mean()), float(torch.quantile(diff, 0.99)), cosine)
+    residual_equal = torch.equal(residual, residual_ref)
+    graph = torch.cuda.CUDAGraph()
+    residual.copy_(residual_initial)
+    torch.cuda.synchronize()
+    with torch.cuda.graph(graph):
+        ops.gated_residual_adaptive_rms_norm_fp8_static_fp16(
+            delta, previous_gate, residual, style, scale, out, gate
+        )
+    residual.copy_(residual_initial)
+    graph.replay()
+    torch.cuda.synchronize()
+    first = (residual.clone(), out.clone(), gate.clone())
+    residual.copy_(residual_initial)
+    graph.replay()
+    torch.cuda.synchronize()
+    second = (residual.clone(), out.clone(), gate.clone())
+    graph_equal = all(torch.equal(a, b) for a, b in zip(first, second))
+    results.append(CaseResult(
+        case="pi05_gate_res_adaptive_rms_fp8_rows10_dim1024", rows=rows, dim=dim,
+        check="gate_res_adaptive_rms_fp8_bit_exact_math_graph", packed_equal=(graph_equal and torch.equal(out.view(torch.uint8), expected_fp8.view(torch.uint8))),
+        sfa_equal=True, residual_equal=residual_equal,
+        max_abs=metrics[0], mean_abs=metrics[1], p99_abs=metrics[2],
+        cosine=metrics[3], passed=(residual_equal and graph_equal and torch.equal(out.view(torch.uint8), expected_fp8.view(torch.uint8))),
+    ))
+    return results
+
+
+def run_bf16_adarms_nvfp4_checks(ops) -> list[CaseResult]:
+    results: list[CaseResult] = []
+    dim = 1024
+    for rows in (1, 10, 51, 105):
+        x = make_bf16((rows, dim), 2026080700 + rows, 0.2)
+        style = make_bf16((rows, 3 * dim), 2026080800 + rows, 0.1)
+        packed, sfa = alloc_fp4(ops, rows, dim)
+        gate = torch.empty_like(x)
+        ops.adaptive_rms_norm_nvfp4_bf16(x, style, packed, sfa, gate)
+        torch.cuda.synchronize()
+
+        scale, shift, gate_ref = style.chunk(3, dim=-1)
+        rstd = torch.rsqrt(x.float().square().mean(-1, keepdim=True) + 1e-6)
+        norm_ref = (
+            x.float() * rstd * (1.0 + scale.float()) + shift.float()
+        ).to(torch.bfloat16)
+        max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+            ops, packed, sfa, norm_ref.half()
+        )
+        gate_exact = torch.equal(gate, gate_ref)
+        results.append(CaseResult(
+            case=f"adarms_nvfp4_bf16_rows{rows}_dim{dim}",
+            rows=rows, dim=dim, check="gate_exact_and_nvfp4_vs_bf16_math",
+            packed_equal=True, sfa_equal=True, residual_equal=gate_exact,
+            max_abs=max_abs, mean_abs=mean_abs, p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(gate_exact and check_fp4_quant_reference_threshold(
+                max_abs, mean_abs, p99_abs, cosine
+            )),
+        ))
+
+        previous_gate = make_bf16((rows, dim), 2026080900 + rows, 0.1)
+        residual = make_bf16((rows, dim), 2026081000 + rows, 0.15)
+        residual_initial = residual.clone()
+        update_math = residual.float() + x.float() * previous_gate.float()
+        residual_ref = update_math.to(torch.bfloat16)
+        ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+            x, previous_gate, residual, style, packed, sfa, gate
+        )
+        torch.cuda.synchronize()
+        rstd = torch.rsqrt(update_math.square().mean(-1, keepdim=True) + 1e-6)
+        norm_ref = (
+            residual_ref.float() * rstd * (1.0 + scale.float()) + shift.float()
+        ).to(torch.bfloat16)
+        max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+            ops, packed, sfa, norm_ref.half()
+        )
+        residual_exact = torch.equal(residual, residual_ref)
+        gate_exact = torch.equal(gate, gate_ref)
+
+        graph_exact = True
+        if rows == 10:
+            graph = torch.cuda.CUDAGraph()
+            residual.copy_(residual_initial)
+            torch.cuda.synchronize()
+            with torch.cuda.graph(graph):
+                ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+                    x, previous_gate, residual, style, packed, sfa, gate
+                )
+            residual.copy_(residual_initial)
+            graph.replay()
+            torch.cuda.synchronize()
+            first = (residual.clone(), packed.clone(), sfa.clone(), gate.clone())
+            residual.copy_(residual_initial)
+            graph.replay()
+            torch.cuda.synchronize()
+            second = (residual.clone(), packed.clone(), sfa.clone(), gate.clone())
+            graph_exact = all(torch.equal(a, b) for a, b in zip(first, second))
+
+        results.append(CaseResult(
+            case=f"gate_res_adarms_nvfp4_bf16_rows{rows}_dim{dim}",
+            rows=rows, dim=dim,
+            check="residual_gate_graph_exact_and_nvfp4_vs_bf16_math",
+            packed_equal=graph_exact, sfa_equal=graph_exact,
+            residual_equal=residual_exact,
+            max_abs=max_abs, mean_abs=mean_abs, p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(residual_exact and gate_exact and graph_exact and
+                    check_fp4_quant_reference_threshold(
+                        max_abs, mean_abs, p99_abs, cosine
+                    )),
+        ))
+    return results
+
+
+def run_e0m3_and_cosmos_fp4_checks(ops) -> list[CaseResult]:
+    results: list[CaseResult] = []
+    rows, dim = 10, 1024
+    x = make_fp16((rows, dim), 2026080611, 0.2)
+    style = make_fp16((rows, 3 * dim), 2026080612, 0.1)
+    packed_a, sfa_a = alloc_fp4(ops, rows, dim)
+    packed_b, sfa_b = alloc_fp4(ops, rows, dim)
+    gate_a, gate_b = torch.empty_like(x), torch.empty_like(x)
+    ops.adaptive_rms_norm_e0m3_fp16(
+        x, style, False, packed_a, sfa_a, gate_a
+    )
+    ops.adaptive_rms_norm_e0m3_fp16(
+        x, style, False, packed_b, sfa_b, gate_b
+    )
+    torch.cuda.synchronize()
+    deterministic = (
+        torch.equal(packed_a, packed_b)
+        and torch.equal(sfa_a, sfa_b)
+        and torch.equal(gate_a, gate_b)
+    )
+    gate_exact = torch.equal(gate_a, style[:, 2 * dim :])
+    results.append(CaseResult(
+        case="pi05_adaptive_rms_e0m3_rows10_dim1024", rows=rows, dim=dim,
+        check="e0m3_deterministic_and_gate_exact", packed_equal=deterministic,
+        sfa_equal=torch.equal(sfa_a, sfa_b), residual_equal=gate_exact,
+        max_abs=None, mean_abs=None, p99_abs=None, cosine=None,
+        passed=(deterministic and gate_exact and int(packed_a.sum()) != 0),
+    ))
+
+    previous_gate = make_fp16((rows, dim), 2026080613, 0.1)
+    residual = make_fp16((rows, dim), 2026080614, 0.15)
+    residual_initial = residual.clone()
+    residual_ref = (
+        residual_initial.float() + x.float() * previous_gate.float()
+    ).half()
+    ops.gated_residual_adaptive_rms_norm_e0m3_fp16(
+        x, previous_gate, residual, style, True, packed_a, sfa_a, gate_a
+    )
+    torch.cuda.synchronize()
+    residual_exact = torch.equal(residual, residual_ref)
+    graph = torch.cuda.CUDAGraph()
+    residual.copy_(residual_initial)
+    with torch.cuda.graph(graph):
+        ops.gated_residual_adaptive_rms_norm_e0m3_fp16(
+            x, previous_gate, residual, style, True, packed_a, sfa_a, gate_a
+        )
+    residual.copy_(residual_initial)
+    graph.replay()
+    first = (residual.clone(), packed_a.clone(), sfa_a.clone(), gate_a.clone())
+    residual.copy_(residual_initial)
+    graph.replay()
+    torch.cuda.synchronize()
+    graph_exact = all(
+        torch.equal(a, b)
+        for a, b in zip(first, (residual, packed_a, sfa_a, gate_a))
+    )
+    results.append(CaseResult(
+        case="pi05_gate_res_adaptive_rms_e0m3_rht_rows10_dim1024",
+        rows=rows, dim=dim, check="residual_and_graph_bit_exact",
+        packed_equal=graph_exact, sfa_equal=graph_exact,
+        residual_equal=residual_exact, max_abs=None, mean_abs=None,
+        p99_abs=None, cosine=None,
+        passed=(residual_exact and graph_exact and torch.equal(gate_a, style[:, 2 * dim :])),
+    ))
+
+    merged = make_fp16((rows, 2 * 2048), 2026080615, 0.2)
+    geglu_a, geglu_sfa_a = alloc_fp4(ops, rows, 2048)
+    geglu_b, geglu_sfa_b = alloc_fp4(ops, rows, 2048)
+    ops.gelu_mul_e0m3_fp16(merged, True, geglu_a, geglu_sfa_a)
+    ops.gelu_mul_e0m3_fp16(merged, True, geglu_b, geglu_sfa_b)
+    torch.cuda.synchronize()
+    geglu_exact = torch.equal(geglu_a, geglu_b) and torch.equal(geglu_sfa_a, geglu_sfa_b)
+    results.append(CaseResult(
+        case="pi05_gelu_mul_e0m3_rht_rows10_dim2048", rows=rows, dim=2048,
+        check="e0m3_geglu_deterministic", packed_equal=geglu_exact,
+        sfa_equal=torch.equal(geglu_sfa_a, geglu_sfa_b), residual_equal=None,
+        max_abs=None, mean_abs=None, p99_abs=None, cosine=None,
+        passed=(geglu_exact and int(geglu_a.sum()) != 0),
+    ))
+
+    rows, dim = 51, 2048
+    residual = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16) * 0.1
+    update = torch.randn_like(residual) * 0.1
+    weight = torch.randn((dim,), device="cuda", dtype=torch.bfloat16) * 0.1 + 1
+    residual_initial = residual.clone()
+    packed, sfa = alloc_fp4(ops, rows, dim)
+    ops.residual_add_rms_norm_quant_nvfp4_swizzled_bf16(
+        residual, update, weight, 1e-6, packed, sfa
+    )
+    torch.cuda.synchronize()
+    residual_math = residual_initial.float() + update.float()
+    residual_ref = residual_math.bfloat16()
+    norm_ref = residual_math * torch.rsqrt(
+        residual_math.square().mean(-1, keepdim=True) + 1e-6
+    ) * weight.float()
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, norm_ref.half()
+    )
+    residual_exact = torch.equal(residual, residual_ref)
+    results.append(CaseResult(
+        case="cosmos_edge_res_rms_nvfp4_rows51_dim2048", rows=rows, dim=dim,
+        check="residual_exact_and_nvfp4_vs_math", packed_equal=True,
+        sfa_equal=True, residual_equal=residual_exact, max_abs=max_abs,
+        mean_abs=mean_abs, p99_abs=p99_abs, cosine=cosine,
+        passed=(residual_exact and check_fp4_quant_reference_threshold(max_abs, mean_abs, p99_abs, cosine)),
+    ))
+
+    relu_input = torch.randn((rows, 8192), device="cuda", dtype=torch.float16) * 0.2
+    packed, sfa = alloc_fp4(ops, rows, 8192)
+    ops.relu2_quant_nvfp4_swizzled_fp16(relu_input, packed, sfa)
+    torch.cuda.synchronize()
+    relu_ref = torch.relu(relu_input.float()).square().half()
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, relu_ref
+    )
+    results.append(CaseResult(
+        case="cosmos_edge_relu2_nvfp4_rows51_dim8192", rows=rows, dim=8192,
+        check="relu2_nvfp4_vs_math", packed_equal=True, sfa_equal=True,
+        residual_equal=None, max_abs=max_abs, mean_abs=mean_abs,
+        p99_abs=p99_abs, cosine=cosine,
+        passed=check_fp4_quant_reference_threshold(max_abs, mean_abs, p99_abs, cosine),
+    ))
+    return results
+
+
+def run_pi05_thor_producer_checks(ops) -> list[CaseResult]:
+    """Validate SM110 producers and report their expected quantization loss.
+
+    These kernels emit NVFP4/FP8, so comparing their dequantized values with
+    the pre-quantization FP16 tensor is a quantization-quality check, not an
+    exact-equivalence check.  Residual and gate outputs remain bit-exact.  The
+    native producer implementations are copied byte-for-byte from the PI0.5
+    production runtime and are additionally covered there by fused-vs-staged
+    and end-to-end parity tests.
+    """
+
+    if torch.cuda.get_device_capability(0) != (11, 0):
+        return []
+
+    results: list[CaseResult] = []
+    rows, dim = 10, 1024
+    x = make_fp16((rows, dim), 20260725, 0.2)
+    style = make_fp16((rows, 3 * dim), 20260726, 0.1)
+    packed, sfa = alloc_fp4(ops, rows, dim)
+    packed.zero_()
+    sfa.zero_()
+    gate = torch.empty_like(x)
+    ops.adaptive_rms_norm_nvfp4_fp16(x, style, packed, sfa, gate)
+    torch.cuda.synchronize()
+
+    scale, shift, gate_ref = style.chunk(3, dim=-1)
+    rstd = torch.rsqrt(x.float().square().mean(dim=-1, keepdim=True) + 1e-6)
+    normed_ref = (
+        x.float() * rstd * (1.0 + scale.float()) + shift.float()
+    ).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, normed_ref
+    )
+    gate_equal = check_equal(gate, gate_ref)
+    results.append(
+        CaseResult(
+            case="pi05_adaptive_rms_rows10_dim1024",
+            rows=rows,
+            dim=dim,
+            check="adaptive_rms_norm_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=gate_equal,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(
+                gate_equal
+                and check_fp4_quant_reference_threshold(
+                    max_abs, mean_abs, p99_abs, cosine
+                )
+            ),
+        )
+    )
+
+    delta = make_fp16((rows, dim), 20260727, 0.1)
+    previous_gate = make_fp16((rows, dim), 20260728, 0.1)
+    residual = make_fp16((rows, dim), 20260729, 0.15)
+    residual_ref = (
+        residual.float() + delta.float() * previous_gate.float()
+    ).to(torch.float16)
+    packed.zero_()
+    sfa.zero_()
+    ops.gated_residual_adaptive_rms_norm_nvfp4_fp16(
+        delta, previous_gate, residual, style, packed, sfa, gate
+    )
+    torch.cuda.synchronize()
+    rstd = torch.rsqrt(
+        residual_ref.float().square().mean(dim=-1, keepdim=True) + 1e-6
+    )
+    normed_ref = (
+        residual_ref.float() * rstd * (1.0 + scale.float()) + shift.float()
+    ).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, normed_ref
+    )
+    residual_equal = check_equal(residual, residual_ref)
+    gate_equal = check_equal(gate, gate_ref)
+    results.append(
+        CaseResult(
+            case="pi05_gated_residual_adaptive_rms_rows10_dim1024",
+            rows=rows,
+            dim=dim,
+            check="gated_residual_adaptive_rms_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=residual_equal,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=(
+                residual_equal
+                and gate_equal
+                and check_fp4_quant_reference_threshold(
+                    max_abs, mean_abs, p99_abs, cosine
+                )
+            ),
+        )
+    )
+
+    rows, dim, eps = 768, 1152, 1e-5
+    x = make_fp16((rows, dim), 20260730, 1.5)
+    gamma = (make_fp16((1, dim), 20260731, 0.2).reshape(dim) + 1).contiguous()
+    beta = make_fp16((1, dim), 20260732, 0.1).reshape(dim).contiguous()
+    inv_s = (torch.rand(dim, device="cuda", dtype=torch.float16) + 0.5).contiguous()
+    mean = x.float().mean(dim=-1, keepdim=True)
+    var = (x.float() - mean).square().mean(dim=-1, keepdim=True)
+    ln_ref = (
+        (x.float() - mean) * torch.rsqrt(var + eps) * gamma.float()
+        + beta.float()
+    ).to(torch.float16)
+
+    out_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+    ops.layer_norm_fp8_fp16(x, gamma, beta, eps, out_fp8)
+    torch.cuda.synchronize()
+    ref_fp8 = ln_ref.to(torch.float8_e4m3fn)
+    fp8_diff = (out_fp8.float() - ref_fp8.float()).abs().flatten()
+    fp8_cos = float(torch.nn.functional.cosine_similarity(
+        out_fp8.float().flatten(), ref_fp8.float().flatten(), dim=0
+    ))
+    fp8_agree = float((out_fp8.view(torch.uint8) == ref_fp8.view(torch.uint8)).float().mean())
+    results.append(
+        CaseResult(
+            case="siglip_layer_norm_rows768_dim1152",
+            rows=rows,
+            dim=dim,
+            check="layer_norm_fp8_quantization_quality_vs_math",
+            packed_equal=float(torch.quantile(fp8_diff, 0.99)) == 0.0,
+            sfa_equal=True,
+            residual_equal=None,
+            max_abs=float(fp8_diff.max()),
+            mean_abs=float(fp8_diff.mean()),
+            p99_abs=float(torch.quantile(fp8_diff, 0.99)),
+            cosine=fp8_cos,
+            # Reduction order differs from eager LayerNorm at FP8 bin
+            # boundaries.  The production acceptance test separately checks
+            # >99.9% byte agreement against the native LayerNorm kernel.
+            passed=(
+                float(torch.quantile(fp8_diff, 0.99)) == 0.0
+                and float(fp8_diff.mean()) <= 5e-4
+                and fp8_cos >= 0.99998
+            ),
+        )
+    )
+
+    packed, sfa = alloc_fp4(ops, rows, dim)
+    ops.layer_norm_nvfp4_fp16(x, gamma, beta, inv_s, eps, packed, sfa)
+    awq_ref = (ln_ref.float() * inv_s.float()).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, awq_ref
+    )
+    results.append(
+        CaseResult(
+            case="siglip_layer_norm_awq_rows768_dim1152",
+            rows=rows,
+            dim=dim,
+            check="layer_norm_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=None,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=check_fp4_quant_reference_threshold(
+                max_abs, mean_abs, p99_abs, cosine
+            ),
+        )
+    )
+
+    merged = make_fp16((51, 4096), 20260733, 0.4)
+    packed, sfa = alloc_fp4(ops, 51, 2048)
+    ops.gelu_mul_nvfp4_fp16(merged, packed, sfa)
+    gate_values, up_values = merged.chunk(2, dim=-1)
+    gelu_ref = (
+        torch.nn.functional.gelu(
+            gate_values.float(), approximate="tanh"
+        )
+        * up_values.float()
+    ).to(torch.float16)
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, gelu_ref
+    )
+    results.append(
+        CaseResult(
+            case="pi05_gelu_mul_rows51_dim2048",
+            rows=51,
+            dim=2048,
+            check="gelu_mul_nvfp4_vs_math",
+            packed_equal=True,
+            sfa_equal=True,
+            residual_equal=None,
+            max_abs=max_abs,
+            mean_abs=mean_abs,
+            p99_abs=p99_abs,
+            cosine=cosine,
+            passed=check_fp4_quant_reference_threshold(
+                max_abs, mean_abs, p99_abs, cosine
+            ),
+        )
+    )
+    return results
+
+
+def run_pi05_thor_bf16_batch3_checks(ops) -> list[CaseResult]:
+    """Gate every BF16 producer added for the PI0.5 Thor FP4 chain."""
+
+    if torch.cuda.get_device_capability(0) != (11, 0):
+        return []
+
+    results: list[CaseResult] = []
+
+    # B2: one-row style broadcast must be byte-identical to materializing the
+    # same style for every decoder row. This also covers first-layer/no-residual
+    # and recurrent gated-residual forms.
+    rows, dim = 10, 1024
+    x = make_fp16((rows, dim), 2026080801, 0.2).bfloat16()
+    style_one = make_fp16((1, 3 * dim), 2026080802, 0.1).bfloat16()
+    style_full = style_one.expand(rows, -1).contiguous()
+    packed_one, sfa_one = alloc_fp4(ops, rows, dim)
+    packed_full, sfa_full = alloc_fp4(ops, rows, dim)
+    gate_one = torch.empty_like(x)
+    gate_full = torch.empty_like(x)
+    ops.adaptive_rms_norm_nvfp4_bf16(
+        x, style_one, packed_one, sfa_one, gate_one
+    )
+    ops.adaptive_rms_norm_nvfp4_bf16(
+        x, style_full, packed_full, sfa_full, gate_full
+    )
+    torch.cuda.synchronize()
+    broadcast_exact = (
+        torch.equal(packed_one, packed_full)
+        and torch.equal(sfa_one, sfa_full)
+        and torch.equal(gate_one, gate_full)
+    )
+    results.append(CaseResult(
+        case="pi05_bf16_adarms_style_broadcast", rows=rows, dim=dim,
+        check="one_row_style_equals_expanded_style",
+        packed_equal=torch.equal(packed_one, packed_full),
+        sfa_equal=torch.equal(sfa_one, sfa_full),
+        residual_equal=torch.equal(gate_one, gate_full), max_abs=0.0,
+        mean_abs=0.0, p99_abs=0.0, cosine=1.0,
+        passed=broadcast_exact,
+    ))
+
+    delta = make_fp16((rows, dim), 2026080803, 0.1).bfloat16()
+    previous_gate = make_fp16((rows, dim), 2026080804, 0.1).bfloat16()
+    residual_seed = make_fp16((rows, dim), 2026080805, 0.15).bfloat16()
+    residual_one = residual_seed.clone()
+    residual_full = residual_seed.clone()
+    packed_one.zero_()
+    packed_full.zero_()
+    sfa_one.zero_()
+    sfa_full.zero_()
+    ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        delta, previous_gate, residual_one, style_one,
+        packed_one, sfa_one, gate_one,
+    )
+    ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        delta, previous_gate, residual_full, style_full,
+        packed_full, sfa_full, gate_full,
+    )
+    torch.cuda.synchronize()
+    gated_exact = (
+        torch.equal(residual_one, residual_full)
+        and torch.equal(packed_one, packed_full)
+        and torch.equal(sfa_one, sfa_full)
+        and torch.equal(gate_one, gate_full)
+    )
+    results.append(CaseResult(
+        case="pi05_bf16_gate_res_adarms_style_broadcast", rows=rows,
+        dim=dim, check="gated_one_row_style_equals_expanded_style",
+        packed_equal=torch.equal(packed_one, packed_full),
+        sfa_equal=torch.equal(sfa_one, sfa_full),
+        residual_equal=torch.equal(residual_one, residual_full),
+        max_abs=0.0, mean_abs=0.0, p99_abs=0.0, cosine=1.0,
+        passed=gated_exact,
+    ))
+
+    # Capture only after eager warmup, matching production CUDA Graph setup.
+    graph_residual = residual_seed.clone()
+    graph_packed, graph_sfa = alloc_fp4(ops, rows, dim)
+    graph_gate = torch.empty_like(x)
+    ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+        delta, previous_gate, graph_residual, style_one,
+        graph_packed, graph_sfa, graph_gate,
+    )
+    graph_residual.copy_(residual_seed)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.gated_residual_adaptive_rms_norm_nvfp4_bf16(
+            delta, previous_gate, graph_residual, style_one,
+            graph_packed, graph_sfa, graph_gate,
+        )
+    graph_residual.copy_(residual_seed)
+    graph.replay()
+    torch.cuda.synchronize()
+    first = (
+        graph_residual.clone(), graph_packed.clone(), graph_sfa.clone(),
+        graph_gate.clone(),
+    )
+    graph_residual.copy_(residual_seed)
+    graph.replay()
+    torch.cuda.synchronize()
+    graph_exact = all(torch.equal(a, b) for a, b in zip(
+        first, (graph_residual, graph_packed, graph_sfa, graph_gate)
+    ))
+    results.append(CaseResult(
+        case="pi05_bf16_gate_res_adarms_graph", rows=rows, dim=dim,
+        check="cuda_graph_replay_bit_exact", packed_equal=graph_exact,
+        sfa_equal=graph_exact, residual_equal=graph_exact, max_abs=0.0,
+        mean_abs=0.0, p99_abs=0.0, cosine=1.0, passed=graph_exact,
+    ))
+
+    # B3: BF16 GeGLU producer, including the optional AWQ inverse scale.
+    rows, dim = 51, 2048
+    merged = make_fp16((rows, 2 * dim), 2026080810, 0.3).bfloat16()
+    inv_s = (make_fp16((1, dim), 2026080811, 0.05) + 1).reshape(dim).bfloat16()
+    packed, sfa = alloc_fp4(ops, rows, dim)
+    ops.gelu_mul_nvfp4_bf16(merged, inv_s, packed, sfa)
+    gate_values, up_values = merged.chunk(2, dim=-1)
+    ref = (
+        torch.nn.functional.gelu(gate_values.float(), approximate="tanh")
+        * up_values.float() * inv_s.float()
+    ).bfloat16().half()
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, ref
+    )
+    results.append(CaseResult(
+        case="pi05_bf16_geglu_rows51_dim2048", rows=rows, dim=dim,
+        check="bf16_geglu_nvfp4_vs_math", packed_equal=True, sfa_equal=True,
+        residual_equal=None, max_abs=max_abs, mean_abs=mean_abs,
+        p99_abs=p99_abs, cosine=cosine,
+        passed=check_fp4_quant_reference_threshold(
+            max_abs, mean_abs, p99_abs, cosine
+        ),
+    ))
+
+    # B5: flat encoder RMS producers, with and without in-place residual.
+    rows, dim, eps = 64, 2048, 1e-6
+    x = make_fp16((rows, dim), 2026080820, 0.3).bfloat16()
+    inv_s = (make_fp16((1, dim), 2026080821, 0.05) + 1).reshape(dim).bfloat16()
+    packed, sfa = alloc_fp4(ops, rows, dim)
+    ops.rms_norm_mul_nvfp4_bf16(x, inv_s, eps, packed, sfa)
+    rms_ref = (
+        x.float() * torch.rsqrt(x.float().square().mean(-1, keepdim=True) + eps)
+        * inv_s.float()
+    ).bfloat16().half()
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, rms_ref
+    )
+    results.append(CaseResult(
+        case="encoder_bf16_rms_mul_rows64_dim2048", rows=rows, dim=dim,
+        check="bf16_rms_mul_nvfp4_vs_math", packed_equal=True,
+        sfa_equal=True, residual_equal=None, max_abs=max_abs,
+        mean_abs=mean_abs, p99_abs=p99_abs, cosine=cosine,
+        passed=check_fp4_quant_reference_threshold(
+            max_abs, mean_abs, p99_abs, cosine
+        ),
+    ))
+
+    update = make_fp16((rows, dim), 2026080822, 0.1).bfloat16()
+    residual_seed = make_fp16((rows, dim), 2026080823, 0.15).bfloat16()
+    residual = residual_seed.clone()
+    ops.residual_add_rms_norm_nvfp4_bf16(
+        residual, update, inv_s, eps, packed, sfa
+    )
+    residual_ref = (residual_seed.float() + update.float()).bfloat16()
+    rms_ref = (
+        residual_ref.float()
+        * torch.rsqrt(residual_ref.float().square().mean(-1, keepdim=True) + eps)
+        * inv_s.float()
+    ).bfloat16().half()
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, packed, sfa, rms_ref
+    )
+    residual_exact = torch.equal(residual, residual_ref)
+    results.append(CaseResult(
+        case="encoder_bf16_res_rms_mul_rows64_dim2048", rows=rows, dim=dim,
+        check="residual_exact_and_bf16_rms_mul_nvfp4_vs_math",
+        packed_equal=True, sfa_equal=True, residual_equal=residual_exact,
+        max_abs=max_abs, mean_abs=mean_abs, p99_abs=p99_abs, cosine=cosine,
+        passed=residual_exact and check_fp4_quant_reference_threshold(
+            max_abs, mean_abs, p99_abs, cosine
+        ),
+    ))
+
+    # B6: SigLIP BF16 LayerNorm producers at both production sequence bands.
+    for rows in (512, 768):
+        dim, eps = 1152, 1e-5
+        x = make_fp16((rows, dim), 2026080830 + rows, 1.0).bfloat16()
+        gamma = (make_fp16((1, dim), 2026080840 + rows, 0.1) + 1).reshape(dim).bfloat16()
+        beta = make_fp16((1, dim), 2026080850 + rows, 0.1).reshape(dim).bfloat16()
+        inv_s = (make_fp16((1, dim), 2026080860 + rows, 0.05) + 1).reshape(dim).bfloat16()
+        mean = x.float().mean(-1, keepdim=True)
+        var = (x.float() - mean).square().mean(-1, keepdim=True)
+        ln_float_ref = ((x.float() - mean) * torch.rsqrt(var + eps)
+                        * gamma.float() + beta.float())
+        ln_ref = ln_float_ref.bfloat16()
+
+        out_fp8 = torch.empty_like(x, dtype=torch.float8_e4m3fn)
+        ops.layer_norm_fp8_bf16(x, gamma, beta, eps, out_fp8)
+        # The fused FP8 producer quantizes the FP32 normalization result
+        # directly, like the established FP16 vector kernel. There is no
+        # materialized BF16 tensor at this seam.
+        ref_fp8 = ln_float_ref.to(torch.float8_e4m3fn)
+        diff = (out_fp8.float() - ref_fp8.float()).abs().flatten()
+        cosine = float(torch.nn.functional.cosine_similarity(
+            out_fp8.float().flatten(), ref_fp8.float().flatten(), dim=0
+        ))
+        p99_abs = float(torch.quantile(diff, 0.99))
+        results.append(CaseResult(
+            case=f"siglip_bf16_ln_fp8_rows{rows}_dim1152", rows=rows,
+            dim=dim, check="bf16_layer_norm_fp8_vs_math",
+            packed_equal=p99_abs == 0.0, sfa_equal=True,
+            residual_equal=None, max_abs=float(diff.max()),
+            mean_abs=float(diff.mean()), p99_abs=p99_abs, cosine=cosine,
+            passed=p99_abs == 0.0 and float(diff.mean()) <= 5e-4
+            and cosine >= 0.99998,
+        ))
+
+        packed, sfa = alloc_fp4(ops, rows, dim)
+        ops.layer_norm_nvfp4_bf16(
+            x, gamma, beta, inv_s, eps, packed, sfa
+        )
+        ref = (ln_ref.float() * inv_s.float()).bfloat16().half()
+        max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+            ops, packed, sfa, ref
+        )
+        results.append(CaseResult(
+            case=f"siglip_bf16_ln_fp4_rows{rows}_dim1152", rows=rows,
+            dim=dim, check="bf16_layer_norm_nvfp4_vs_math",
+            packed_equal=True, sfa_equal=True, residual_equal=None,
+            max_abs=max_abs, mean_abs=mean_abs, p99_abs=p99_abs,
+            cosine=cosine, passed=check_fp4_quant_reference_threshold(
+                max_abs, mean_abs, p99_abs, cosine
+            ),
+        ))
+
+    # B4: native LUT split-GU combiner must stay in the same quantized value
+    # envelope as the established arithmetic path when inv_s is identity.
+    rows, dim = 10, 4096
+    raw_gate = make_fp16((rows, dim), 2026080870, 0.5)
+    raw_up = make_fp16((rows, dim), 2026080871, 0.5)
+    unit_gelu = float(torch.nn.functional.gelu(
+        torch.tensor(1.0), approximate="tanh"
+    ))
+    # The package's existing GeGLU producer is used here only as an FP4 pack
+    # oracle. A unit gate makes its output the requested raw distribution.
+    gate_input = torch.cat((
+        torch.ones_like(raw_gate), raw_gate / unit_gelu
+    ), dim=-1).contiguous()
+    up_input = torch.cat((
+        torch.ones_like(raw_up), raw_up / unit_gelu
+    ), dim=-1).contiguous()
+    gate_packed, gate_sfa = alloc_fp4(ops, rows, dim)
+    up_packed, up_sfa = alloc_fp4(ops, rows, dim)
+    ops.silu_mul_fp4_sfa_v2_fp16(gate_input, gate_packed, gate_sfa)
+    ops.silu_mul_fp4_sfa_v2_fp16(up_input, up_packed, up_sfa)
+    native_packed, native_sfa = alloc_fp4(ops, rows, dim)
+    inv_s = torch.ones(dim, device="cuda", dtype=torch.float16)
+    ops.geglu_two_mul_nvfp4_native(
+        gate_packed, gate_sfa, up_packed, up_sfa, inv_s,
+        native_packed, native_sfa,
+    )
+    gate_deq = torch.empty((rows, dim), device="cuda", dtype=torch.float16)
+    up_deq = torch.empty_like(gate_deq)
+    ops.dequantize_fp4_sfa_fp16(gate_packed, gate_sfa, gate_deq)
+    ops.dequantize_fp4_sfa_fp16(up_packed, up_sfa, up_deq)
+    ref = (torch.nn.functional.gelu(
+        gate_deq.float(), approximate="tanh"
+    ) * up_deq.float()).half()
+    max_abs, mean_abs, p99_abs, cosine = dequant_metrics_vs_ref(
+        ops, native_packed, native_sfa, ref
+    )
+    results.append(CaseResult(
+        case="pi05_split_gu_native_rows10_dim4096", rows=rows, dim=dim,
+        check="native_lut_combiner_vs_dequant_math", packed_equal=True,
+        sfa_equal=True, residual_equal=None, max_abs=max_abs,
+        mean_abs=mean_abs, p99_abs=p99_abs, cosine=cosine,
+        passed=check_fp4_quant_reference_threshold(
+            max_abs, mean_abs, p99_abs, cosine
+        ),
+    ))
+    return results
 
 
 def encode_ue4m3_ceil(value: float) -> int:
@@ -885,7 +1775,12 @@ def main() -> int:
         results.extend(run_case(ops, name, rows, dim))
     results.extend(run_linear_nvfp4_checks(ops))
     results.extend(run_ncdhw_bf16_checks(ops))
+    results.extend(run_fp8_adarms_checks(ops))
+    results.extend(run_bf16_adarms_nvfp4_checks(ops))
+    results.extend(run_e0m3_and_cosmos_fp4_checks(ops))
     results.extend(run_unsupported_checks(ops))
+    results.extend(run_pi05_thor_producer_checks(ops))
+    results.extend(run_pi05_thor_bf16_batch3_checks(ops))
 
     passed = sum(1 for item in results if item.passed)
     payload = {

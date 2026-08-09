@@ -10,7 +10,13 @@ from ._ops import add_op_namespace_prefix, ops
 
 
 PAGE_SIZE = 128
-SUPPORTED_CONFIGS = ((24, 4, 256), (32, 8, 128), (16, 8, 128))
+SUPPORTED_CONFIGS = (
+    (24, 4, 256),
+    (16, 2, 256),
+    (32, 8, 128),
+    (32, 16, 128),
+    (16, 8, 128),
+)
 
 
 @torch.library.register_fake(add_op_namespace_prefix("xqa_bf16_fp8kv"))
@@ -58,7 +64,7 @@ def _xqa_bf16_fp8kv_fake(
 
 
 def causal_spec_mask(q_seq: int, *, device: torch.device | str = "cuda", dtype: torch.dtype = torch.int32) -> torch.Tensor:
-    """Return the packed lower-triangular mask expected by the v1 XQA kernel."""
+    """Return the packed lower-triangular mask expected by the XQA kernel."""
 
     q_seq = int(q_seq)
     words = (q_seq + 31) // 32

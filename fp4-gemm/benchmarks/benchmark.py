@@ -141,6 +141,50 @@ def bench_case(helpers, ops, native, name: str, shape: tuple[int, int, int], war
     return results
 
 
+def bench_bf16_producer(ops, native, k: int, warmup: int, iters: int):
+    x = torch.randn((1, k), device="cuda", dtype=torch.bfloat16)
+    direct_packed, direct_sfa = ops.alloc_fp4(1, k)
+    compat_packed, compat_sfa = ops.alloc_fp4(1, k)
+    native_packed, native_sfa = ops.alloc_fp4(1, k)
+    stream = torch.cuda.current_stream().cuda_stream
+
+    def direct():
+        ops.quantize_fp4_sfa_bf16(
+            x, direct_packed, direct_sfa, False
+        )
+
+    def compat():
+        ops.quantize_fp4_sfa_fp16(
+            x.to(torch.float16), compat_packed, compat_sfa, False
+        )
+
+    def native_direct():
+        native.quantize_bf16_to_nvfp4_swizzled(
+            x.data_ptr(), native_packed.data_ptr(), native_sfa.data_ptr(),
+            1, k, stream,
+        )
+
+    direct()
+    compat()
+    torch.cuda.synchronize()
+    direct_us = measure(direct, warmup, iters)
+    compat_us = measure(compat, warmup, iters)
+    native_us = measure(native_direct, warmup, iters)
+    return {
+        "M": 1,
+        "K": k,
+        "direct_bf16_us": direct_us,
+        "cast_plus_fp16_us": compat_us,
+        "native_bf16_us": native_us,
+        "speedup_vs_cast_plus_fp16": compat_us / direct_us,
+        "wrapper_over_native": direct_us / native_us,
+        "packed_exact_vs_fp16_contract": bool(
+            torch.equal(direct_packed, compat_packed)
+        ),
+        "note": "native_bf16 uses a distinct FlashRT quantization strategy",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -171,7 +215,8 @@ def main() -> int:
         "small_m16_n128_k128": (16, 128, 128),
         "small_m32_n256_k256": (32, 256, 256),
         "mlp_tile_m64_n512_k512": (64, 512, 512),
-        "groot_dit_projection": (51, 1536, 1536),
+        "groot_n17_dit_projection": (41, 1536, 1536),
+        "groot_legacy_dit_projection": (51, 1536, 1536),
         "vla_projection": (105, 2048, 2048),
         "motus_up": (360, 14336, 3072),
         "motus_down": (360, 3072, 14336),
@@ -187,12 +232,17 @@ def main() -> int:
                 helpers, ops, native, name, shape, args.warmup, args.iterations
             )
         )
+    producer_results = [
+        bench_bf16_producer(ops, native, k, args.warmup, args.iterations)
+        for k in (5120, 6144, 17408)
+    ]
     payload = {
         "mode": args.mode,
         "backend": args.backend,
         "device": torch.cuda.get_device_name(),
         "torch": torch.__version__,
         "results": [asdict(item) for item in results],
+        "bf16_producer_results": producer_results,
     }
     print(json.dumps(payload, indent=2))
     if args.json_out:

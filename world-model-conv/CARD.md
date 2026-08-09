@@ -49,4 +49,6 @@ It is intended for static-buffer diffusion/world-model runtimes where avoiding
 
 This kernel uses Blackwell architecture-specific FP8 MMA instructions and is
 compiled for SM120a. The separate BF16 probe artifact is compiled for SM110a;
-it is exposed for development and parity work but does not replace cuDNN.
+it is exposed for development and parity work but does not replace cuDNN. It
+is not used by the current Cosmos3-Edge quantized denoise pipeline, whose
+model-level speedup is a separate multi-kernel/runtime result.

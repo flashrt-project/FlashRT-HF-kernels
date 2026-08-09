@@ -60,6 +60,50 @@ static int cutlass_run_impl(void* A, void* B, void* D,
     return 0;
 }
 
+template <typename GemmOp>
+static int cutlass_run_bias_impl(
+    void* A, void* B, void* bias, void* D, int M, int N, int K,
+    float alpha, float beta, cudaStream_t stream) {
+    using ElementA = typename GemmOp::ElementA;
+    using ElementB = typename GemmOp::ElementB;
+    using ElementC = typename GemmOp::ElementC;
+    using ElementD = typename GemmOp::ElementD;
+    using ElementBias = cutlass::bfloat16_t;
+
+    auto stride_A = cutlass::make_cute_packed_stride(
+        typename GemmOp::GemmKernel::StrideA{}, {M, K, 1});
+    auto stride_B = cutlass::make_cute_packed_stride(
+        typename GemmOp::GemmKernel::StrideB{}, {N, K, 1});
+    auto stride_C = cutlass::make_cute_packed_stride(
+        typename GemmOp::GemmKernel::StrideC{}, {M, N, 1});
+    auto stride_D = cutlass::make_cute_packed_stride(
+        typename GemmOp::GemmKernel::StrideD{}, {M, N, 1});
+
+    typename GemmOp::Arguments args{
+        cutlass::gemm::GemmUniversalMode::kGemm,
+        {M, N, K, 1},
+        {reinterpret_cast<ElementA*>(A), stride_A,
+         reinterpret_cast<ElementB*>(B), stride_B},
+        {{alpha, beta}, reinterpret_cast<ElementC*>(D), stride_C,
+         reinterpret_cast<ElementD*>(D), stride_D}
+    };
+    args.epilogue.thread.bias_ptr =
+        reinterpret_cast<ElementBias const*>(bias);
+
+    GemmOp gemm;
+    const size_t ws_size = GemmOp::get_workspace_size(args);
+    static cutlass::device_memory::allocation<uint8_t> workspace(0);
+    if (ws_size > workspace.size()) {
+        workspace = cutlass::device_memory::allocation<uint8_t>(ws_size);
+    }
+    auto status = gemm.can_implement(args);
+    if (status != cutlass::Status::kSuccess) return -11;
+    status = gemm.initialize(args, workspace.get(), stream);
+    if (status != cutlass::Status::kSuccess) return -12;
+    status = gemm.run(stream);
+    return status == cutlass::Status::kSuccess ? 0 : -13;
+}
+
 // Exported C functions.
 extern "C" {
 
@@ -113,6 +157,20 @@ int cutlass_fp8_wide_bf16out(void* A, void* B, void* D, int M, int N, int K,
 int cutlass_fp8_t1_bf16out(void* A, void* B, void* D, int M, int N, int K,
                             float alpha, float beta, cudaStream_t stream) {
     return cutlass_run_impl<sm100_t1_bf16out::Gemm>(A, B, D, M, N, K, alpha, beta, stream);
+}
+
+int cutlass_fp8_wide_bias_bf16out(
+    void* A, void* B, void* bias, void* D, int M, int N, int K,
+    float alpha, float beta, cudaStream_t stream) {
+    return cutlass_run_bias_impl<sm100_wide_bias_bf16out::Gemm>(
+        A, B, bias, D, M, N, K, alpha, beta, stream);
+}
+
+int cutlass_fp8_wide_bias_gelu_bf16out(
+    void* A, void* B, void* bias, void* D, int M, int N, int K,
+    float alpha, cudaStream_t stream) {
+    return cutlass_run_bias_impl<sm100_wide_bias_gelu_bf16out::Gemm>(
+        A, B, bias, D, M, N, K, alpha, 0.0f, stream);
 }
 
 }  // extern "C"

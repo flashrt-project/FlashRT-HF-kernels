@@ -22,7 +22,14 @@ backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
 cuda-minver = "12.8"
+cuda-flags = [
+  "-DFLASHRT_HAVE_COSMOS3_EDGE=1",
+  "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+]
 src = [
   "csrc/qkv_cache_rope.cu",
   "csrc/qkv_cache_rope.cuh",
+  "csrc/cosmos_edge/cosmos3_edge_misc.cu",
+  "csrc/cosmos_edge/cosmos3_edge_misc.cuh",
+  "csrc/cosmos_edge/common.cuh",
 ]

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import importlib
 import json
 import math
 import os
@@ -135,16 +136,22 @@ def rms_norm(x, weight, eps):
 def ref_ada(x, weight, style, eps):
     dim = x.shape[1]
     normed = rms_norm(x, weight, eps)
-    y = normed * (1.0 + style[:, :dim].float()) + style[:, dim : 2 * dim].float()
-    return y.to(torch.bfloat16), style[:, 2 * dim :].contiguous().to(torch.bfloat16)
+    style_scale = style[:, :dim].float().expand(x.shape[0], -1)
+    style_shift = style[:, dim : 2 * dim].float().expand(x.shape[0], -1)
+    style_gate = style[:, 2 * dim :].expand(x.shape[0], -1)
+    y = normed * (1.0 + style_scale) + style_shift
+    return y.to(torch.bfloat16), style_gate.contiguous().to(torch.bfloat16)
 
 
 def ref_fused(residual, x, gate, weight, style, scale, eps):
     updated = (residual.float() + x.float() * gate.float()).to(torch.bfloat16)
     dim = updated.shape[1]
     normed = rms_norm(updated, weight, eps)
-    y = (normed * (1.0 + style[:, :dim].float()) + style[:, dim : 2 * dim].float()) / scale.float().reshape(())
-    return updated, y.to(torch.float8_e4m3fn), style[:, 2 * dim :].contiguous().to(torch.bfloat16)
+    style_scale = style[:, :dim].float().expand(updated.shape[0], -1)
+    style_shift = style[:, dim : 2 * dim].float().expand(updated.shape[0], -1)
+    style_gate = style[:, 2 * dim :].expand(updated.shape[0], -1)
+    y = (normed * (1.0 + style_scale) + style_shift) / scale.float().reshape(())
+    return updated, y.to(torch.float8_e4m3fn), style_gate.contiguous().to(torch.bfloat16)
 
 
 def time_us(fn, warmup, iters):
@@ -174,9 +181,12 @@ def metrics(got, expected):
     )
 
 
-def run_one(ops, name, shape, args):
+def run_one(ops, name, shape, args, broadcast: bool):
     rows, dim = shape
     x, residual, gate, weight, style, scale = make_case(rows, dim)
+    if broadcast:
+        style = style[:1].contiguous()
+        name = f"{name}_broadcast"
     out = torch.empty_like(x)
     gate_out = torch.empty_like(x)
     fp8_out = torch.empty_like(x, dtype=torch.float8_e4m3fn)
@@ -235,6 +245,10 @@ def main():
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iters", type=int, default=20)
     parser.add_argument("--eps", type=float, default=1e-6)
+    parser.add_argument(
+        "--style-mode", choices=["per-row", "broadcast", "both"],
+        default="both"
+    )
     parser.add_argument("--output", default=None)
     parser.add_argument("--markdown", default=None)
     args = parser.parse_args()
@@ -244,7 +258,10 @@ def main():
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     results = []
     for name in SHAPE_GROUPS[args.shapes]:
-        results.extend(run_one(ops, name, SHAPES[name], args))
+        if args.style_mode in ("per-row", "both"):
+            results.extend(run_one(ops, name, SHAPES[name], args, False))
+        if args.style_mode in ("broadcast", "both"):
+            results.extend(run_one(ops, name, SHAPES[name], args, True))
     for r in results:
         print(
             f"{r.status} {r.shape}/{r.kernel}: flashrt={r.flashrt_us:.3f}us "

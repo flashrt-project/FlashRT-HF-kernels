@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -38,6 +39,7 @@ SHAPES = {
 }
 
 SM110_SHAPES = {
+    "large_m_boundary_65": (65, 2048, 2048),
     # PI0.5 / PI0 decoder and encoder projection families.
     "pi05_action_qkv": (51, 2048, 2560),
     "pi05_action_o": (51, 2048, 2048),
@@ -53,6 +55,11 @@ SM110_SHAPES = {
     "cosmos_edge_action": (64, 2048, 9216),
     "lingbot_vision_o": (1024, 1280, 1280),
     "lingbot_action_gate_up": (105, 2048, 16384),
+    # PI0.5 Thor prefill tower, full real row envelope.
+    "pi05_prefill_qkv": (712, 2048, 2560),
+    "pi05_prefill_o": (970, 2048, 2048),
+    "pi05_prefill_gate_up": (768, 2048, 32768),
+    "pi05_prefill_down": (768, 16384, 2048),
 }
 
 MODES = {
@@ -101,6 +108,30 @@ class SourceOps:
     def fp8_linear_residual_bf16(self, x, w, residual, alpha=1.0, variant=0):
         self._ops.fp8_linear_residual_bf16(x, w, float(alpha), int(variant), residual)
         return residual
+
+    def fp8_linear_bias_bf16(self, x, w, bias, alpha=1.0, out=None):
+        if out is None:
+            out = torch.empty(
+                (x.shape[0], w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        self._ops.fp8_linear_bias_bf16(x, w, bias, float(alpha), out)
+        return out
+
+    def fp8_linear_bias_residual_bf16(
+        self, x, w, bias, residual, alpha=1.0
+    ):
+        self._ops.fp8_linear_bias_residual_bf16(
+            x, w, bias, float(alpha), residual
+        )
+        return residual
+
+    def fp8_linear_bias_gelu_bf16(self, x, w, bias, alpha=1.0, out=None):
+        if out is None:
+            out = torch.empty(
+                (x.shape[0], w.shape[0]), device=x.device, dtype=torch.bfloat16
+            )
+        self._ops.fp8_linear_bias_gelu_bf16(x, w, bias, float(alpha), out)
+        return out
 
     def fp8_blockwise_linear_bf16(
         self, x, w, input_scale, weight_scale, out=None
@@ -178,6 +209,7 @@ def load_source_ops() -> SourceOps:
         cuda_sources = [
             str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu"),
             str(PACKAGE / "csrc" / "portable_fp8_blockwise_simt.cu"),
+            str(PACKAGE / "csrc" / "cublaslt_fp8_bias_sm110.cu"),
         ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY"
     else:
@@ -229,6 +261,12 @@ def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
             raise RuntimeError("SM110 variant must be in [0, 3]")
         if variant:
             return forced[variant]
+        if m >= 512 and k == 2048 and 2048 <= n <= 2560:
+            return "sm110_sq_bf16"
+        if m >= 512 and n >= 16 * k:
+            return "sm110_t1_bf16"
+        if m >= 512 and k >= 4 * n:
+            return "sm110_wide_bf16"
         if n >= 8 * k:
             return "sm110_wide_bf16"
         if m >= 128 and k >= 4 * n:
@@ -301,7 +339,8 @@ def compare(got: torch.Tensor, expected: torch.Tensor) -> tuple[float, float, fl
     diff = (got.float() - expected.float()).abs().flatten()
     max_abs = float(diff.max().item())
     mean_abs = float(diff.mean().item())
-    p99_abs = float(torch.quantile(diff, 0.99).item())
+    p99_rank = max(1, min(diff.numel(), math.ceil(0.99 * diff.numel())))
+    p99_abs = float(diff.kthvalue(p99_rank).values.item())
     cos = float(torch.nn.functional.cosine_similarity(got.float().flatten(), expected.float().flatten(), dim=0).item())
     return max_abs, mean_abs, p99_abs, cos
 
@@ -367,6 +406,72 @@ def run_residual_case(ops) -> Metrics:
         tolerance="max_abs<=0.5 mean_abs<=0.02 p99_abs<=0.25 cosine>=0.999",
         passed=passed,
     )
+
+
+def run_bias_cases(ops) -> int:
+    count = 0
+    shapes = [
+        (512, 1152, 4304),
+        (768, 4304, 1152),
+        (768, 1152, 3456),
+    ]
+    for m, k, n in shapes:
+        x, w = make_inputs(m, k, n, seed=7000 + m + k + n)
+        bias = (torch.randn((n,), device="cuda") * 0.1).to(torch.bfloat16)
+        alpha = 0.75
+        base = (x.float() @ w.float().T) * alpha
+
+        got = ops.fp8_linear_bias_bf16(x, w, bias, alpha=alpha)
+        expected = (base + bias.float()).to(torch.bfloat16)
+        maximum, mean, p99, cosine = compare(got, expected)
+        assert maximum <= 0.5 and mean <= 0.02 and p99 <= 0.25 and cosine >= 0.999, (
+            "bias", m, k, n, maximum, mean, p99, cosine
+        )
+
+        residual = (torch.randn((m, n), device="cuda") * 0.1).to(
+            torch.bfloat16
+        )
+        residual_before = residual.clone()
+        got_residual = ops.fp8_linear_bias_residual_bf16(
+            x, w, bias, residual, alpha=alpha
+        )
+        expected_residual = (
+            residual_before.float() + base + bias.float()
+        ).to(torch.bfloat16)
+        maximum, mean, p99, cosine = compare(got_residual, expected_residual)
+        assert maximum <= 0.5 and mean <= 0.02 and p99 <= 0.25 and cosine >= 0.999, (
+            "bias_residual", m, k, n, maximum, mean, p99, cosine
+        )
+
+        got_gelu = ops.fp8_linear_bias_gelu_bf16(x, w, bias, alpha=alpha)
+        expected_gelu = torch.nn.functional.gelu(
+            base + bias.float(), approximate="tanh"
+        ).to(torch.bfloat16)
+        maximum, mean, p99, cosine = compare(got_gelu, expected_gelu)
+        assert maximum <= 0.5 and mean <= 0.02 and p99 <= 0.25 and cosine >= 0.999, (
+            "bias_gelu", m, k, n, maximum, mean, p99, cosine
+        )
+        count += 3
+
+    m, k, n = (512, 1152, 4304)
+    x, w = make_inputs(m, k, n, seed=8801)
+    bias = torch.randn((n,), device="cuda", dtype=torch.bfloat16)
+
+    def invoke(input, weight, bias):
+        return ops.fp8_linear_bias_bf16(input, weight, bias)
+
+    eager = invoke(x, w, bias)
+    compiled = torch.compile(invoke, fullgraph=True)(x, w, bias)
+    torch.testing.assert_close(compiled, eager, rtol=0.0, atol=0.0)
+
+    graph_out = torch.empty_like(eager)
+    ops.fp8_linear_bias_bf16(x, w, bias, out=graph_out)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.fp8_linear_bias_bf16(x, w, bias, out=graph_out)
+    graph.replay()
+    torch.testing.assert_close(graph_out, eager, rtol=0.0, atol=0.0)
+    return count + 2
 
 
 def run_blockwise_case(
@@ -581,6 +686,9 @@ def main() -> None:
             )
             for variant in (1, 2, 3)
         )
+        bias_count = run_bias_cases(ops)
+    else:
+        bias_count = 0
     if capability in {(8, 9), (11, 0), (12, 0)}:
         blockwise_shapes = [
             ("blockwise_decode", (1, 1024, 1024)),
@@ -619,7 +727,12 @@ def main() -> None:
             raise AssertionError("M=257 must be rejected")
 
     failed = [row for row in rows if not row.passed]
-    payload = {"passed": len(rows) - len(failed), "failed": len(failed), "rows": [asdict(row) for row in rows]}
+    payload = {
+        "passed": len(rows) - len(failed) + bias_count,
+        "failed": len(failed),
+        "rows": [asdict(row) for row in rows],
+        "bias_checks": bias_count,
+    }
     print(json.dumps(payload, indent=2, sort_keys=True))
     if args.json_out:
         output_path = Path(args.json_out)
