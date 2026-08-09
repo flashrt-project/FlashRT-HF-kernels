@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import shutil
 import statistics
 import sys
@@ -152,8 +153,10 @@ def _compile_direct_extension(repo_dir: Path, name: str):
     import torch
     from torch.utils.cpp_extension import load
 
-    builder_root = Path("/home/heima/suliang/PI/kernels/kernel-builder/src/pyproject/templates/torch")
-    if not builder_root.exists():
+    builder_root = Path(os.environ.get("KERNEL_BUILDER_REGISTRATION_INCLUDE", ""))
+    if not builder_root.is_dir():
+        builder_root = Path("/home/heima/suliang/PI/kernels/kernel-builder/src/pyproject/templates/torch")
+    if not builder_root.is_dir():
         builder_root = Path("/workspace/PI/kernels/kernel-builder/src/pyproject/templates/torch")
     sources = [
         repo_dir / "torch-ext/torch_binding.cpp",

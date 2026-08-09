@@ -22,13 +22,10 @@ def load_source_ops(registration_include=None):
         )
     cutlass = os.environ.get("CUTLASS_INCLUDE")
     if not cutlass:
-        for version in ("4.0.0", "4.4.0", "4.5.2", "4.5.3"):
-            candidate = Path(f"/data/third_party/cutlass-{version}/include")
-            if (candidate / "cutlass" / "cutlass.h").is_file():
-                cutlass = str(candidate)
-                break
-    if not cutlass:
-        cutlass = "/home/heima/suliang/PI/official/FlashRT/third_party/cutlass/include"
+        raise RuntimeError(
+            "set CUTLASS_INCLUDE to a CUTLASS include directory to run the "
+            "source-mode grouped-moe-gemm tests"
+        )
     major, minor = torch.cuda.get_device_capability()
     os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}a"
     ns = "grouped_moe_gemm_source_test"

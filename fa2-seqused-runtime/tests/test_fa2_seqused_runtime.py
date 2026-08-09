@@ -25,9 +25,7 @@ REGISTRATION_INCLUDE = (
     / "templates"
     / "torch"
 )
-CUTLASS_INCLUDE = Path(os.environ.get(
-    "FA2_CUTLASS_INCLUDE", "/data/third_party/cutlass-3.6.0/include"
-))
+CUTLASS_INCLUDE = Path(os.environ.get("FA2_CUTLASS_INCLUDE", ""))
 
 SUPPORTED_HEAD_DIMS = tuple(range(8, 257, 8))
 SPLIT_HEAD_DIMS = tuple(range(40, 129, 8)) + tuple(range(232, 257, 8))
@@ -181,7 +179,10 @@ def load_source_ops() -> SourceOps:
     if not REGISTRATION_INCLUDE.is_dir():
         raise RuntimeError(f"missing kernel-builder registration include: {REGISTRATION_INCLUDE}")
     if not CUTLASS_INCLUDE.is_dir():
-        raise RuntimeError(f"missing CUTLASS include path: {CUTLASS_INCLUDE}")
+        raise RuntimeError(
+            f"set FA2_CUTLASS_INCLUDE to a CUTLASS include directory "
+            f"(got {CUTLASS_INCLUDE!r})"
+        )
     _preload_cublaslt()
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _arch_list())
     namespace = "fa2_seqused_runtime_test"

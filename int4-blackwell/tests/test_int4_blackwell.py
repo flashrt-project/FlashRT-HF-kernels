@@ -23,9 +23,7 @@ REGISTRATION_INCLUDE = (
     / "templates"
     / "torch"
 )
-CUTLASS_INCLUDE = Path(os.environ.get(
-    "INT4_BLACKWELL_CUTLASS_INCLUDE", "/data/third_party/cutlass-4.5.3/include"
-))
+CUTLASS_INCLUDE = Path(os.environ.get("INT4_BLACKWELL_CUTLASS_INCLUDE", ""))
 
 SUPPORTED = {(10, 0), (10, 3), (11, 0), (12, 0), (12, 1)}
 
@@ -93,7 +91,10 @@ def load_source_ops() -> SourceOps:
     if not REGISTRATION_INCLUDE.is_dir():
         raise RuntimeError(f"missing kernel-builder registration include: {REGISTRATION_INCLUDE}")
     if not CUTLASS_INCLUDE.is_dir():
-        raise RuntimeError(f"missing CUTLASS include path: {CUTLASS_INCLUDE}")
+        raise RuntimeError(
+            f"set INT4_BLACKWELL_CUTLASS_INCLUDE to a CUTLASS include directory "
+            f"(got {CUTLASS_INCLUDE!r})"
+        )
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _arch_list())
     namespace = "int4_blackwell_test"
     load(
