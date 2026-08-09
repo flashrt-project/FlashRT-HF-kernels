@@ -12,13 +12,17 @@ except Exception:  # source-tree tests before kernel-builder creates _ops.py
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
     half=x.shape[-1]//2; return torch.cat((-x[...,half:], x[...,:half]), dim=-1)
 def _align(freq: torch.Tensor, x: torch.Tensor, unsqueeze_dim: int) -> torch.Tensor:
+    if freq.dim() == 2:
+        freq = freq.reshape((1,) * (x.dim() - 2) + freq.shape)
+        return freq
     while freq.dim() < x.dim(): freq = freq.unsqueeze(unsqueeze_dim)
     return freq
+def _rope_one(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, qd: torch.dtype, unsqueeze_dim: int) -> torch.Tensor:
+    xf = x.to(qd)
+    return (xf * _align(cos, x, unsqueeze_dim).to(qd) + rotate_half(xf) * _align(sin, x, unsqueeze_dim).to(qd)).to(x.dtype)
 def apply_rope_train(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, unsqueeze_dim: int = 1):
-    c_q=_align(cos,q,int(unsqueeze_dim)); s_q=_align(sin,q,int(unsqueeze_dim)); c_k=_align(cos,k,int(unsqueeze_dim)); s_k=_align(sin,k,int(unsqueeze_dim))
     qd = torch.float64 if q.dtype == torch.float64 else torch.float32
-    kd = torch.float64 if k.dtype == torch.float64 else torch.float32
-    return (q.to(qd)*c_q.to(qd)+rotate_half(q.to(qd))*s_q.to(qd)).to(q.dtype), (k.to(kd)*c_k.to(kd)+rotate_half(k.to(kd))*s_k.to(kd)).to(k.dtype)
+    return _rope_one(q, cos, sin, qd, unsqueeze_dim), _rope_one(k, cos, sin, qd, unsqueeze_dim)
 def apply_rope_backward_reference(dq: torch.Tensor, dk: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, unsqueeze_dim: int = 1):
     return apply_rope_train(dq, dk, cos, -sin, unsqueeze_dim)
 def backend_marker(x: torch.Tensor) -> torch.Tensor:
