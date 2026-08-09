@@ -120,6 +120,11 @@ on:
           - fp8-cross-attention-blackwell
           - fused-mlp-megakernels-blackwell
           - masked-mha-runtime
+      variants:
+        description: "Optional comma-separated explicit build variants"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -252,10 +257,24 @@ jobs:
             git checkout "${{ github.sha }}"
             cd "${{ matrix.package }}"
 
-            nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
-              --max-jobs 4 \
-              --cores 8 \
-              --repo-id "flashrt/${{ matrix.package }}"
+            variants="${{ github.event.inputs.variants }}"
+            if [[ -z "$variants" ]]; then
+              nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
+                --max-jobs 4 \
+                --cores 8 \
+                --repo-id "flashrt/${{ matrix.package }}"
+            else
+              IFS=',' read -ra requested_variants <<< "$variants"
+              for variant in "${requested_variants[@]}"; do
+                variant="${variant//[[:space:]]/}"
+                [[ -n "$variant" ]] || continue
+                nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
+                  --variant "$variant" \
+                  --max-jobs 1 \
+                  --cores 8 \
+                  --repo-id "flashrt/${{ matrix.package }}"
+              done
+            fi
 
       - name: Mirror ${{ matrix.package }} for legacy kernels clients
         if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
