@@ -155,9 +155,15 @@ def _compile_direct_extension(repo_dir: Path, name: str):
 
     builder_root = Path(os.environ.get("KERNEL_BUILDER_REGISTRATION_INCLUDE", ""))
     if not builder_root.is_dir():
-        builder_root = Path("/home/heima/suliang/PI/kernels/kernel-builder/src/pyproject/templates/torch")
+        builder_root = (
+            repo_dir.parent.parent
+            / "kernels" / "kernel-builder" / "src" / "pyproject" / "templates" / "torch"
+        )
     if not builder_root.is_dir():
-        builder_root = Path("/workspace/PI/kernels/kernel-builder/src/pyproject/templates/torch")
+        raise RuntimeError(
+            "kernel-builder registration include not found; set "
+            "KERNEL_BUILDER_REGISTRATION_INCLUDE"
+        )
     sources = [
         repo_dir / "torch-ext/torch_binding.cpp",
         *sorted((repo_dir / "csrc").glob("*.cu")),

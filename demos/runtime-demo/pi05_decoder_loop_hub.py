@@ -22,6 +22,7 @@ import argparse
 import importlib
 import json
 import math
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -937,7 +938,7 @@ def run(args: argparse.Namespace) -> Result:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", default="/home/heima/suliang/PI/checkpoints/pi05_libero_pytorch")
+    parser.add_argument("--checkpoint", default=os.environ.get("PI05_CHECKPOINT_DIR", ""))
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--encoder-seq-len", type=int, default=560)

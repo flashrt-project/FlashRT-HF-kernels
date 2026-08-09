@@ -18,7 +18,7 @@ passed with `max=0.00146484`, `p99=0.00012207`, `mean=0.00001121`, and
 The SM100-family CUTLASS megakernel asserts at runtime on `sm_110a`, so the
 installed artifact routes SM110 to the portable SIMT fallback
 (`portable_geglu_simt.cu`). Measured against the installed
-`/data/test_thor/fused-mlp-megakernels-blackwell` artifact on Thor:
+`<installed-dir>/fused-mlp-megakernels-blackwell` artifact on Thor:
 
 | Shape | Eager us | Compile us | Wrapper us | Raw native us | vs eager |
 |---|---:|---:|---:|---:|---:|

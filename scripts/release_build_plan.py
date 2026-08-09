@@ -12,8 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = os.environ.get(
-    "KERNEL_BUILDER_DOCKER",
-    "/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker",
+    "KERNEL_BUILDER_DOCKER", "kernel-builder-docker"
 )
 PACKAGES = [
     "flashrt-gemm-epilogues",

@@ -178,10 +178,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--builder",
-        default=os.environ.get(
-            "KERNEL_BUILDER_DOCKER",
-            "/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker",
-        ),
+        default=os.environ.get("KERNEL_BUILDER_DOCKER", "kernel-builder-docker"),
         help="kernel-builder-docker command path",
     )
     parser.add_argument(
