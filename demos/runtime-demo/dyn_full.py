@@ -7,6 +7,15 @@ import pi05_decoder_loop_hub as dec
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 FP8=448.0
+
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
 class DynDecoder(dec.HubDecoderLoop):
     def _sc(self,a): return torch.clamp(a/FP8,min=1e-12).reshape(1).to(self.w.device,torch.float32)
     def __call__(self):
@@ -59,7 +68,9 @@ parser.add_argument(
 parser.add_argument("--warmup", type=int, default=8)
 parser.add_argument("--iters", type=int, default=30)
 parser.add_argument("--no-cuda-graph", action="store_true")
+parser.add_argument("--max-mem-gb", type=float, default=30.0)
 args = parser.parse_args()
+_apply_mem_cap(args.max_mem_gb)
 mode=args.mode
 if mode=="dynamic": dec.HubDecoderLoop=DynDecoder
 import pi05_hf_decoder_e2e as e2e

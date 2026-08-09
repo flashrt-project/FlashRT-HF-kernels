@@ -17,6 +17,17 @@ ROOT = PACKAGE.parent
 sys.path.insert(0, str(PACKAGE / "tests"))
 from test_padded_fp8_producers import load_source_ops  # noqa: E402
 
+
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 SHAPES = [
     ("decode", 1, 1, 1280, 16),
     ("groot-dit", 1, 40, 1536, 64),
@@ -112,7 +123,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=("source", "installed"), default="source")
     parser.add_argument("--artifact")
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     ops = load_ops(args.backend, args.artifact)
     native = load_native()
     print("op,shape,native_us,wrapper_us,eager_us,compile_us,wrapper/native")

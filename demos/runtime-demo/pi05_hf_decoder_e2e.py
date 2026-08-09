@@ -34,6 +34,16 @@ import torch
 import torch.nn.functional as F
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 PI_ROOT = ROOT.parent
 DEFAULT_CKPT = PI_ROOT / "checkpoints" / "pi05_libero_pytorch"
@@ -1717,6 +1727,7 @@ def run_hf_vision_encoder_decoder(args: argparse.Namespace) -> BridgeResult:
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
 
     exp = sub.add_parser("export-encoder")
     exp.add_argument("--checkpoint", type=Path, default=DEFAULT_CKPT)
@@ -1815,6 +1826,7 @@ def main() -> None:
     visencdec.add_argument("--output", type=Path)
 
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     if args.cmd == "export-encoder":
         export_encoder(args)
         return

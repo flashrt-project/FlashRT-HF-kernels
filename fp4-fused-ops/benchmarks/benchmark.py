@@ -14,6 +14,16 @@ from pathlib import Path
 import torch
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 TEST_FILE = ROOT / "fp4-fused-ops" / "tests" / "test_fp4_fused_ops.py"
 
@@ -93,7 +103,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
         iters,
     )
     stream = torch.cuda.current_stream().cuda_stream
-    native_f3_us = measure(
+    native_f3_us = float("nan") if native is None else measure(
         lambda: native.residual_add_rms_norm_fp4_sfa_v2_fp16(
             residual_v2.copy_(residual).data_ptr(), x.data_ptr(),
             packed.data_ptr(), sfa.data_ptr(), rows, dim, stream
@@ -106,7 +116,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
         warmup,
         iters,
     )
-    native_graph_f3_us = measure_graph(
+    native_graph_f3_us = float("nan") if native is None else measure_graph(
         lambda: native.residual_add_rms_norm_fp4_sfa_v2_fp16(
             residual_v2.copy_(residual).data_ptr(), x.data_ptr(),
             packed.data_ptr(), sfa.data_ptr(), rows, dim,
@@ -138,7 +148,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
     packed_v2, sfa_v2 = ops.alloc(rows, dim)
     ref_us = measure(lambda: ops.silu_mul_fp4_sfa_fp16(merged, packed_v1, sfa_v1), warmup, iters)
     f4_us = measure(lambda: ops.silu_mul_fp4_sfa_v2_fp16(merged, packed_v2, sfa_v2), warmup, iters)
-    native_f4_us = measure(
+    native_f4_us = float("nan") if native is None else measure(
         lambda: native.gate_geglu_fp4_sfa_v2_fp16(
             merged.data_ptr(), packed_v2.data_ptr(), sfa_v2.data_ptr(),
             rows, dim, stream
@@ -149,7 +159,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
     graph_f4_us = measure_graph(
         lambda: ops.silu_mul_fp4_sfa_v2_fp16(merged, packed_v2, sfa_v2), warmup, iters
     )
-    native_graph_f4_us = measure_graph(
+    native_graph_f4_us = float("nan") if native is None else measure_graph(
         lambda: native.gate_geglu_fp4_sfa_v2_fp16(
             merged.data_ptr(), packed_v2.data_ptr(), sfa_v2.data_ptr(), rows, dim,
             torch.cuda.current_stream().cuda_stream
@@ -177,7 +187,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
 
     inv_s = (torch.rand((dim,), device="cuda") * 0.25 + 0.875).to(torch.float16).contiguous()
     awq_us = measure(lambda: ops.silu_mul_mul_fp4_sfa_v2_fp16(merged, inv_s, packed_v2, sfa_v2), warmup, iters)
-    native_awq_us = measure(
+    native_awq_us = float("nan") if native is None else measure(
         lambda: native.gate_geglu_mul_fp4_sfa_v2_fp16(
             merged.data_ptr(), inv_s.data_ptr(), packed_v2.data_ptr(),
             sfa_v2.data_ptr(), rows, dim, stream
@@ -190,7 +200,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
         warmup,
         iters,
     )
-    native_graph_awq_us = measure_graph(
+    native_graph_awq_us = float("nan") if native is None else measure_graph(
         lambda: native.gate_geglu_mul_fp4_sfa_v2_fp16(
             merged.data_ptr(), inv_s.data_ptr(), packed_v2.data_ptr(),
             sfa_v2.data_ptr(), rows, dim, torch.cuda.current_stream().cuda_stream
@@ -226,7 +236,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
         warmup,
         iters,
     )
-    native_two_us = measure(
+    native_two_us = float("nan") if native is None else measure(
         lambda: native.geglu_two_fp4_to_fp4(
             gate_packed.data_ptr(), gate_sfa.data_ptr(), up_packed.data_ptr(),
             up_sfa.data_ptr(), out_packed.data_ptr(), out_sfa.data_ptr(),
@@ -240,7 +250,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
         warmup,
         iters,
     )
-    native_graph_two_us = measure_graph(
+    native_graph_two_us = float("nan") if native is None else measure_graph(
         lambda: native.geglu_two_fp4_to_fp4(
             gate_packed.data_ptr(), gate_sfa.data_ptr(), up_packed.data_ptr(),
             up_sfa.data_ptr(), out_packed.data_ptr(), out_sfa.data_ptr(), rows, dim,
@@ -254,7 +264,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
         warmup,
         iters,
     )
-    native_two_mul_us = measure(
+    native_two_mul_us = float("nan") if native is None else measure(
         lambda: native.geglu_two_mul_fp4_to_fp4(
             gate_packed.data_ptr(), gate_sfa.data_ptr(), up_packed.data_ptr(),
             up_sfa.data_ptr(), inv_s.data_ptr(), out_packed.data_ptr(),
@@ -268,7 +278,7 @@ def bench_case(helpers, ops, native, rows: int, dim: int, warmup: int, iters: in
         warmup,
         iters,
     )
-    native_graph_two_mul_us = measure_graph(
+    native_graph_two_mul_us = float("nan") if native is None else measure_graph(
         lambda: native.geglu_two_mul_fp4_to_fp4(
             gate_packed.data_ptr(), gate_sfa.data_ptr(), up_packed.data_ptr(),
             up_sfa.data_ptr(), inv_s.data_ptr(), out_packed.data_ptr(),
@@ -324,7 +334,9 @@ def main() -> int:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--json-out", default=None)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -337,11 +349,15 @@ def main() -> int:
     if not hasattr(ops, "alloc"):
         ops.alloc = lambda rows, dim: helpers.alloc_fp4(ops, rows, dim)
     native_root = Path(os.environ.get("FLASHRT_NATIVE_ROOT", str(ROOT.parent / "official" / "FlashRT")))
-    sys.path.insert(0, str(native_root))
-    try:
-        import flash_rt.flash_rt_fp4 as native
-    finally:
-        sys.path.pop(0)
+    native = None
+    if native_root.is_dir():
+        sys.path.insert(0, str(native_root))
+        try:
+            import flash_rt.flash_rt_fp4 as native
+        except Exception:
+            native = None
+        finally:
+            sys.path.pop(0)
 
     shapes = [(1, 1024), (10, 2048)] if args.mode == "smoke" else [(1, 1024), (10, 2048), (64, 2048), (128, 4096)]
     if args.mode == "thor-models":

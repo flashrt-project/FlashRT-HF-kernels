@@ -9,6 +9,16 @@ import torch.nn.functional as F
 from fa2_seqused_runtime import allocate_outputs, allocate_workspace, forward_static
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 SHAPES = [
     # GROOT DiT self/cross attention.
     ("groot-dit-self", 1, 51, 51, 32, 32, 48, False),
@@ -47,7 +57,9 @@ def time_us(fn, warmup=50, repeats=200):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dtype", choices=("bf16", "fp16"), default="bf16")
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     dtype = torch.bfloat16 if args.dtype == "bf16" else torch.float16
     print(
         "Workload,Mode,B,Sq,Sk,Hq,Hkv,D,FlashRT_us,SDPA_expandedGQA_us,Speedup,"

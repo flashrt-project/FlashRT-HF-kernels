@@ -11,6 +11,16 @@ from pathlib import Path
 import torch
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 def elapsed_us(fn, warmup: int = 10, repeats: int = 50) -> float:
     for _ in range(warmup):
         fn()
@@ -52,7 +62,7 @@ def reference_seq(q, k, v, g, beta, state0):
     return out.to(torch.bfloat16), st.to(torch.bfloat16)
 
 
-def run_case(ops, label: str, s: int, h: int, d: int = 128) -> dict:
+def run_case(ops, label: str, s: int, h: int, d: int = 128, do_compile: bool = True) -> dict:
     gen = torch.Generator(device="cuda").manual_seed(0)
     q = (torch.randn((s, h, d), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
     k = (torch.randn((s, h, d), device="cuda", generator=gen) * 0.05).to(torch.bfloat16)
@@ -72,9 +82,12 @@ def run_case(ops, label: str, s: int, h: int, d: int = 128) -> dict:
     ref = lambda: reference_seq(q, k, v, g, beta, state0)
     ref_us = elapsed_us(ref)
 
-    compiled = torch.compile(ref, mode="reduce-overhead")
-    compiled()
-    compile_us = elapsed_us(lambda: compiled())
+    if do_compile:
+        compiled = torch.compile(ref, mode="reduce-overhead")
+        compiled()
+        compile_us = elapsed_us(lambda: compiled())
+    else:
+        compile_us = float("nan")
 
     return {
         "label": label, "S": s, "H": h, "D": d,
@@ -88,15 +101,24 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="installed")
     parser.add_argument("--artifact")
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
+    parser.add_argument(
+        "--compile",
+        action="store_true",
+        help="run the torch.compile reference region (pathologically slow on SM110; "
+        "skipped by default there)",
+    )
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     ops = load_ops(args.backend, args.artifact)
+    do_compile = args.compile or torch.cuda.get_device_capability(0)[0] != 11
     print("label,S,H,D,kernel_us,reference_us,compile_us,vs_reference,vs_compile")
     for label, s, h in [
         ("seq_1k", 1024, 2),
         ("seq_2k", 2048, 4),
         ("seq_4k", 4096, 4),
     ]:
-        r = run_case(ops, label, s, h)
+        r = run_case(ops, label, s, h, do_compile=do_compile)
         print(
             f"{r['label']},{r['S']},{r['H']},{r['D']},{r['kernel_us']:.3f},"
             f"{r['reference_us']:.3f},{r['compile_us']:.3f},"

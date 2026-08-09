@@ -22,6 +22,16 @@ from test_adaptive_layernorm_producers import (  # noqa: E402
 )
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 def load_installed_ops(artifact: str | None):
     if artifact:
         sys.path.insert(0, artifact)
@@ -175,7 +185,9 @@ def main() -> None:
     parser.add_argument("--artifact", default=None)
     parser.add_argument("--iters", type=int, default=200)
     parser.add_argument("--markdown", default=None)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")

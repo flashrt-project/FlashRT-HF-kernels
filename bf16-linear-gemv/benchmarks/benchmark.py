@@ -11,6 +11,16 @@ from pathlib import Path
 import torch
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 def elapsed_us(fn, warmup: int = 20, repeats: int = 100) -> float:
     for _ in range(warmup):
         fn()
@@ -73,7 +83,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="installed")
     parser.add_argument("--artifact")
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     ops = load_ops(args.backend, args.artifact)
     print("label,N,K,kernel_v0_us,kernel_v1_us,kernel_unrolled_us,eager_us,compile_us,vs_eager_v0,vs_eager_v1,vs_eager_ur")
     for label, n, k in [

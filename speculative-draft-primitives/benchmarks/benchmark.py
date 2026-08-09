@@ -15,6 +15,16 @@ sys.path.insert(0, str(ROOT / "speculative-draft-primitives" / "tests"))
 from test_speculative_draft_primitives import load_installed_ops, load_source_ops  # noqa: E402
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 def time_us(fn, warmup: int, iters: int) -> float:
     for _ in range(warmup):
         fn()
@@ -33,7 +43,9 @@ def main() -> int:
     parser.add_argument("--mode", choices=["headline", "full"], default="headline")
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--iters", type=int, default=200)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
 
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     shapes = [(16, 32000), (16, 248320)] if args.mode == "headline" else [

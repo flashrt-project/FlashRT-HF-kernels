@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import importlib
 import json
 import math
 import os
@@ -14,6 +15,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
+
+
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -237,7 +248,9 @@ def main():
     parser.add_argument("--eps", type=float, default=1e-6)
     parser.add_argument("--output", default=None)
     parser.add_argument("--markdown", default=None)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
     torch.manual_seed(53)
