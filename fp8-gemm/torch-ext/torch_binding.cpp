@@ -10,6 +10,17 @@
 #if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
+#include <cuda.h>
+#endif
+
+// CUDA 12.x cannot compile the SM110 source component. Older kernel-builder
+// editions correctly omit that component through cuda-minver, but still
+// compile this binding without a component-presence define. Keep the binding
+// self-contained so those variants do not retain unresolved SM110 symbols.
+#if defined(CUDA_KERNEL) && CUDA_VERSION >= 13000 && \
+    !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
+    !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#define FLASHRT_FP8_GEMM_HAS_SM110 1
 #endif
 
 #if !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
@@ -24,8 +35,7 @@
 #include "fp8_block128_gemm_mma_sm89.cuh"
 #include "fp8_gemv_m1_sm89.cuh"
 #endif
-#if !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
-    !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#if defined(FLASHRT_FP8_GEMM_HAS_SM110)
 #include "cutlass_sm110_fp8_gemm.cuh"
 #endif
 #include "cublaslt_fp8_bias_sm110.cuh"
@@ -208,8 +218,7 @@ const char* sm110_tile_name_for_shape(int M, int N, int K, int variant) {
 }
 
 Sm110KernelFn sm110_kernel_for_shape(int M, int N, int K, int variant) {
-#if defined(CUDA_KERNEL) && !defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) && \
-    !defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#if defined(FLASHRT_FP8_GEMM_HAS_SM110)
   const char* tile = sm110_tile_name_for_shape(M, N, K, variant);
   if (std::string(tile) == "sm110_wide_bf16") return &cutlass_fp8_wide_bf16out;
   if (std::string(tile) == "sm110_t1_bf16") return &cutlass_fp8_t1_bf16out;
@@ -251,8 +260,7 @@ void launch(
                 "SM110 variant must be 0 (auto), 1 (Sq), 2 (T1), or 3 (Wide)");
     TORCH_CHECK(N % 16 == 0 && K % 16 == 0,
                 "SM110 CUTLASS FP8 GEMM requires N and K divisible by 16");
-#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
-    defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#if !defined(FLASHRT_FP8_GEMM_HAS_SM110)
     TORCH_CHECK(false, "SM110 FP8 GEMM source is not present in this build");
 #else
     Sm110KernelFn fn = sm110_kernel_for_shape(M, N, K, variant);
@@ -323,8 +331,7 @@ void launch_bias(
   const int K = checked_positive_int(input.size(1), "K");
   int rc;
   if (props->major == 11 && M >= 512 && K >= 3 * N) {
-#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
-    defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+#if !defined(FLASHRT_FP8_GEMM_HAS_SM110)
     TORCH_CHECK(false, "SM110 FP8 bias GEMM source is not present in this build");
 #else
     rc = epilogue == FlashRtFp8BiasEpilogue::kBiasGelu
