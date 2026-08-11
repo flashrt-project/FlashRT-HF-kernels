@@ -1,6 +1,6 @@
 {
   description = "Flake for FlashRT masked MHA runtime kernels";
-  inputs.kernel-builder.url = "github:huggingface/kernels/2c40e10d3da1392245ee81bd05b55fb3103b2b34";
+  inputs.kernel-builder.url = "github:flashrt-project/kernels/68b9786fc2b27b8f246a7a4ea1ff9e2b864ebd6a";
   outputs = { self, kernel-builder }:
     kernel-builder.lib.genKernelFlakeOutputs { inherit self; path = ./.; };
 }
