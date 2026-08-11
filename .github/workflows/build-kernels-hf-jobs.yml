@@ -297,10 +297,6 @@ jobs:
 
   build-fa2:
     name: Build fa2-seqused-runtime (${{ matrix.variant }})
-    if: >-
-      github.event_name != 'workflow_dispatch' ||
-      inputs.variants == '' ||
-      contains(inputs.variants, matrix.variant)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -322,7 +318,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
-        if: github.event_name == 'push' || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime'
+        if: >-
+          (github.event_name == 'push' || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime') &&
+          (github.event_name != 'workflow_dispatch' || inputs.variants == '' || contains(inputs.variants, matrix.variant))
 
       - name: Detect FA2 changes
         id: changes
@@ -340,7 +338,9 @@ jobs:
           fi
 
       - name: Ensure FA2 Kernel Hub repo exists
-        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime'
+        if: >-
+          ((github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime') &&
+          (github.event_name != 'workflow_dispatch' || inputs.variants == '' || contains(inputs.variants, matrix.variant))
         shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -359,7 +359,9 @@ jobs:
           PY
 
       - name: Build and upload FA2 variant via HF Jobs
-        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime'
+        if: >-
+          ((github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == 'fa2-seqused-runtime') &&
+          (github.event_name != 'workflow_dispatch' || inputs.variants == '' || contains(inputs.variants, matrix.variant))
         uses: huggingface/kernel-builder-job@main
         with:
           token: ${{ secrets.HF_TOKEN }}
