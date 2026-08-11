@@ -270,7 +270,11 @@ jobs:
               for variant in "${requested_variants[@]}"; do
                 variant="${variant//[[:space:]]/}"
                 [[ -n "$variant" ]] || continue
-                nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
+                builder="github:huggingface/kernels"
+                if [[ "$variant" == torch211-* ]]; then
+                  builder="github:flashrt-project/kernels/68b9786fc2b27b8f246a7a4ea1ff9e2b864ebd6a"
+                fi
+                nix run "$builder#kernel-builder" -- build-and-upload \
                   --variant "$variant" \
                   --max-jobs 1 \
                   --cores 8 \
