@@ -130,7 +130,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: flashrt-hf-kernel-build-${{ github.ref }}
+  # Keep automatic push releases serialized, but do not let independent
+  # single-package repair builds cancel one another while they are pending.
+  group: flashrt-hf-kernel-build-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.package || 'push' }}
   cancel-in-progress: false
 
 jobs:
