@@ -169,6 +169,8 @@ def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         raise RuntimeError("small-M dispatcher currently supports variant=0 only")
     if k % 32:
         raise RuntimeError("SM120 requires k divisible by 32")
+    if m > 64:
+        return "cublaslt_fp8_large_m"
     if m <= 16:
         if k % 256 == 0:
             return "ld_fp8_gemm_16x128x256_w4" if n % 128 == 0 else "ld_fp8_gemm_16x64x256_w4"
@@ -193,7 +195,7 @@ def select_fp8_linear_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         if n % 128 == 0:
             return "ld_fp8_gemm_64x128x128_w4"
         return "ld_fp8_gemm_64x64x128_w4"
-    raise RuntimeError("only M=1 decode or 2 <= M <= 64 small-M rows are supported")
+    raise RuntimeError("M must be positive")
 
 
 def fp8_linear_bf16(
@@ -209,7 +211,7 @@ def fp8_linear_bf16(
     ``(M, K)`` and ``(N, K)``. ``alpha`` is a host float, normally the product
     of static per-tensor input and weight scales. SM110 uses the production
     CUTLASS Sq/T1/Wide dispatcher over full model row counts; SM120 uses the
-    hand-tuned M<=64 path.
+    hand-tuned M<=64 path and cuBLASLt for larger row counts.
     """
 
     if out is None:
