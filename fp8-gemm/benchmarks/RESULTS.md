@@ -71,9 +71,9 @@ rows below were exact against the contract reference.
 | PI0.5 prefill gate/up `(768,2048,32768)` | 250.458 | 1963.989 | 7.84x |
 | PI0.5 prefill down `(768,16384,2048)` | 135.247 | 953.868 | 7.05x |
 
-The same cold test through `kernels==0.12.3` selected the legacy model `main`
-mirror and exposed the large-M and bias APIs. Its `.so` SHA-256 was identical
-to the canonical Kernel Hub v1 artifact.
+The same cold test through `kernels==0.12.3` selected the legacy model `v1`
+branch/tag and exposed the large-M and bias APIs. Its `.so` SHA-256 was
+identical to the canonical Kernel Hub v1 artifact.
 
 ## Headline Rows
 
@@ -133,7 +133,7 @@ correctness sweep remains the release gate.
 - SM110 aarch64 Hub artifacts: published for Torch 2.11 and 2.13; local
   installed-artifact correctness, compile, graph, and native-parity gates
   passed before upload.
-- Canonical Kernel Hub `v1` and legacy model `main` contain the same eight
+- Canonical Kernel Hub `v1` and legacy model `v1` contain the same eight
   compiled variants.
 
 ## NVIDIA Thor SM110 Results

@@ -24,9 +24,9 @@ The cold-cache Kernel Hub v1 artifact for
 RTX 5090. This includes the SM120 `nvfp4_gemm_bias_bf16` route, all public
 epilogues, BF16 quantization, CUDA Graph execution, and
 `torch.compile(fullgraph=True)`. The public bias output remained bitwise equal
-to the established package launcher. The `kernels==0.12.3` legacy `main`
-mirror loaded the same API, and its `.so` SHA-256 matched the canonical v1
-artifact exactly.
+to the established package launcher. The `kernels==0.12.3` legacy model `v1`
+branch/tag loaded the same API, and its `.so` SHA-256 matched the canonical
+Kernel Hub v1 artifact exactly.
 
 ## SM110 Bias Epilogue Dispatch (2026-08-07)
 

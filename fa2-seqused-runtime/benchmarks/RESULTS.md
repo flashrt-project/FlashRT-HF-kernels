@@ -68,3 +68,10 @@ These older rows retain the direct original-FlashRT comparison. A fresh-process
 tests, including the complete logical-head-dimension matrix, split-KV D<=64,
 causal/GQA paths, device `seqused_k`, CUDA Graph replay, rejection contracts,
 and `torch.compile(fullgraph=True)`.
+
+The final Kernel Hub v1 x86 matrix contains six variants: Torch 2.11 with
+CUDA 12.8/13.0, Torch 2.12 with CUDA 13.0/13.2, and Torch 2.13 with CUDA
+13.0/13.2. The compatibility model repository's `v1` branch/tag contains the
+same six build manifests. A cold `kernels==0.12.3` load selected that legacy
+v1 mirror, exposed both static entry points, and executed a BF16 CUDA smoke
+against SDPA with `max_abs=0` and cosine similarity `0.99999994`.

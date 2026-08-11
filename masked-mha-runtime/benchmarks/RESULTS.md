@@ -23,8 +23,8 @@ The cold-cache Kernel Hub v1
 seqused valid lengths `456/712/968`, unsupported-shape rejection, and bitwise
 CUDA Graph replay. The explicit/static wrapper ratio was `0.995x` on
 `(41,277,32,48)` and `1.010x` on `(1,1024,1,16)`. A cold
-`kernels==0.12.3` load exposed the same APIs, and canonical/legacy `.so`
-SHA-256 values were identical.
+`kernels==0.12.3` load from the legacy model `v1` branch/tag exposed the same
+APIs, and canonical/legacy `.so` SHA-256 values were identical.
 
 ## NVIDIA Thor installed artifact
 
