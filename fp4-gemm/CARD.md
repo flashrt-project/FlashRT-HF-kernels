@@ -64,8 +64,8 @@ a, sfa = ops.quantize_fp4_sfa_bf16(x)
 - Output is BF16.
 - `variant=-1` is the architecture-aware production auto-dispatch;
   `variant=0/1/2` expose diagnostic default, widen, and pingpong schedules.
-- The canonical BF16-output GEMM and FP4 pack/unpack helpers support SM110 and
-  SM120. SM110 also supports bias, bias+residual, and bias+GELU-to-FP4
+- The canonical BF16-output GEMM, fused bias GEMM, and FP4 pack/unpack helpers
+  support SM110 and SM120. SM110 also supports bias+residual and bias+GELU-to-FP4
   production epilogues used by the GROOT N1.7 Thor pipeline.
 - Dimensions used by Blackwell NVFP4 TMA are physically aligned to 32. For
   logical widths such as SigLIP 4304, use the bind-time padding/packing helpers

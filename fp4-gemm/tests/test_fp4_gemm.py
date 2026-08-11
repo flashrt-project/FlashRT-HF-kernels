@@ -695,6 +695,12 @@ def run_epilogue_case(ops, name: str, shape: tuple[int, int, int]):
     rows = []
 
     out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+    ops.nvfp4_gemm_bias_bf16(a, b, sfa, sfb, bias, out)
+    expected_bias = (matmul + bias.float().view(1, -1)).to(torch.bfloat16)
+    rows.append(result_row(
+        name, shape, "nvfp4_gemm_bias_bf16", out, expected_bias
+    ))
+
     ops.nvfp4_gemm_residual_bf16(a, b, sfa, sfb, residual, out)
     expected = (matmul + residual.float()).to(torch.bfloat16)
     rows.append(result_row(name, shape, "nvfp4_gemm_residual_bf16", out, expected))
@@ -731,7 +737,6 @@ def run_epilogue_case(ops, name: str, shape: tuple[int, int, int]):
     rows.append(result_row(name, shape, "nvfp4_gemm_streamk_bf16", out, expected_linear))
 
     ops.nvfp4_gemm_streamk_bias_bf16(a, b, sfa, sfb, bias, out)
-    expected_bias = (matmul + bias.float().view(1, -1)).to(torch.bfloat16)
     rows.append(result_row(name, shape, "nvfp4_gemm_streamk_bias_bf16", out, expected_bias))
     return rows
 

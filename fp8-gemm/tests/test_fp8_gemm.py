@@ -38,7 +38,7 @@ SHAPES = {
     "small_m64_k512_n1024": (64, 512, 1024),
 }
 
-SM110_SHAPES = {
+LARGE_M_SHAPES = {
     "large_m_boundary_65": (65, 2048, 2048),
     # PI0.5 / PI0 decoder and encoder projection families.
     "pi05_action_qkv": (51, 2048, 2560),
@@ -216,6 +216,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_ldmatrix_sm120.cu"),
             str(PACKAGE / "csrc" / "cutlass_sm120_block128_fp8_gemm.cu"),
+            str(PACKAGE / "csrc" / "cublaslt_fp8_bias_sm110.cu"),
         ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM120_ONLY"
     load(
@@ -315,7 +316,7 @@ def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         if n % 128 == 0:
             return "ld_fp8_gemm_64x128x128_w4"
         return "ld_fp8_gemm_64x64x128_w4"
-    raise RuntimeError("unsupported M")
+    return "cublaslt_fp8_large_m"
 
 
 def make_inputs(m: int, k: int, n: int, seed: int):
@@ -625,22 +626,23 @@ def main() -> None:
     if capability in {(11, 0), (12, 0)}:
         rows.extend(run_case(ops, name, SHAPES[name]) for name in MODES[args.mode])
         rows.append(run_residual_case(ops))
-    if capability == (11, 0) and args.mode == "full":
+    if capability in {(11, 0), (12, 0)} and args.mode == "full":
         rows.extend(
-            run_case(ops, name, shape) for name, shape in SM110_SHAPES.items()
-        )
-        rows.extend(
-            run_case(
-                ops,
-                f"sm110_forced_variant_{variant}",
-                SM110_SHAPES["pi05_action_gate_up"],
-                variant,
-            )
-            for variant in (1, 2, 3)
+            run_case(ops, name, shape) for name, shape in LARGE_M_SHAPES.items()
         )
         bias_count = run_bias_cases(ops)
     else:
         bias_count = 0
+    if capability == (11, 0) and args.mode == "full":
+        rows.extend(
+            run_case(
+                ops,
+                f"sm110_forced_variant_{variant}",
+                LARGE_M_SHAPES["pi05_action_gate_up"],
+                variant,
+            )
+            for variant in (1, 2, 3)
+        )
     if capability in {(8, 9), (12, 0)}:
         blockwise_shapes = [
             ("blockwise_decode", (1, 1024, 1024)),

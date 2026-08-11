@@ -265,10 +265,19 @@ void launch(
   } else {
     TORCH_CHECK(K % 32 == 0,
                 "SM120 FP8 GEMM requires K divisible by 32");
-    TORCH_CHECK(M <= 64,
-                "SM120 per-tensor FP8 path supports only M <= 64; got M=", M);
     if (residual) {
       TORCH_CHECK(M == 1, "SM120 residual path supports only M=1");
+    }
+    if (M > 64) {
+      TORCH_CHECK(variant == 0,
+                  "SM120 large-M cuBLASLt path supports variant=0 only");
+      const int rc = fp8_linear_cublaslt_bf16(
+          input.data_ptr(), weight.data_ptr(), nullptr, out.data_ptr(), M, N,
+          K, static_cast<float>(alpha), 0.0f,
+          FlashRtFp8BiasEpilogue::kNone, stream);
+      TORCH_CHECK(rc == 0, "SM120 large-M FP8 GEMM failed with rc=", rc,
+                  " for M=", M, " N=", N, " K=", K);
+      return;
     }
     const std::string tile = tile_name_for_shape(M, N, K, variant);
 #if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
@@ -304,18 +313,20 @@ void launch_bias(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(input.device());
   auto* props = at::cuda::getDeviceProperties(input.get_device());
-  TORCH_CHECK(props->major == 11 && props->minor == 0,
-              op_name, " requires SM110; got SM", props->major, props->minor);
-#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
-    defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
-  TORCH_CHECK(false, "SM110 FP8 bias GEMM source is not present in this build");
-#else
+  TORCH_CHECK((props->major == 11 && props->minor == 0) ||
+                  (props->major == 12 && props->minor == 0),
+              op_name, " requires SM110 or SM120; got SM", props->major,
+              props->minor);
   auto stream = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
   const int M = checked_positive_int(input.size(0), "M");
   const int N = checked_positive_int(weight.size(0), "N");
   const int K = checked_positive_int(input.size(1), "K");
   int rc;
-  if (M >= 512 && K >= 3 * N) {
+  if (props->major == 11 && M >= 512 && K >= 3 * N) {
+#if defined(FLASHRT_FP8_GEMM_SOURCE_SM89_ONLY) || \
+    defined(FLASHRT_FP8_GEMM_SOURCE_SM120_ONLY)
+    TORCH_CHECK(false, "SM110 FP8 bias GEMM source is not present in this build");
+#else
     rc = epilogue == FlashRtFp8BiasEpilogue::kBiasGelu
              ? cutlass_fp8_wide_bias_gelu_bf16out(
                    input.data_ptr(), weight.data_ptr(), bias.data_ptr(),
@@ -324,14 +335,14 @@ void launch_bias(
                    input.data_ptr(), weight.data_ptr(), bias.data_ptr(),
                    out.data_ptr(), M, N, K, static_cast<float>(alpha),
                    static_cast<float>(beta), stream);
+#endif
   } else {
-    rc = fp8_linear_bias_sm110_bf16(
+    rc = fp8_linear_cublaslt_bf16(
         input.data_ptr(), weight.data_ptr(), bias.data_ptr(), out.data_ptr(),
         M, N, K, static_cast<float>(alpha), static_cast<float>(beta),
         epilogue, stream);
   }
   TORCH_CHECK(rc == 0, op_name, " failed with rc=", rc);
-#endif
 #else
   TORCH_CHECK(false, "fp8-gemm was not built with CUDA support");
 #endif

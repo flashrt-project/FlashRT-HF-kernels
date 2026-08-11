@@ -27,15 +27,16 @@ Tensor contract:
 - `residual`: `torch.bfloat16`, shape `(1, N)` or `(N,)`, only supported for
   the `M=1` decode GEMV path.
 - `K % 16 == 0`; SM120 additionally requires `K % 32 == 0`.
-- On SM120, `M == 1` uses dedicated GEMV and `2 <= M <= 64` uses small-M
-  GEMM tiles.
+- On SM120, `M == 1` uses dedicated GEMV, `2 <= M <= 64` uses small-M
+  GEMM tiles, and `M > 64` uses the production same-contract cuBLASLt path.
+  The release gate includes `M=65` and PI0.5 prefill rows `712/768/970`.
 - On SM110 (Jetson AGX Thor), the per-tensor API uses the production FlashRT
   CUTLASS Sq/T1/Wide family and supports the validated model-shape matrix from
   decode through large vision/backbone rows. The large-M production band is
   validated from `M=65` through `M=1024`, including PI0.5 prefill QKV, O,
   gate/up, and down projections at `M=712..970`. `N` and `K` must be divisible
   by 16.
-- The three BF16 bias APIs are SM110-only. They accept BF16 `(N,)` bias and
+- The three BF16 bias APIs support SM110 and SM120. They accept BF16 `(N,)` bias and
   preserve the same row-major FP8 `(M,K)` input and `(N,K)` weight contract.
   The residual API updates a BF16 `(M,N)` tensor in place. The GELU API uses
   the tanh approximation.

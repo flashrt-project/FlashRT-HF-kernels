@@ -149,13 +149,20 @@ def load_source_ops() -> SourceOps:
             str(cutlass_include.parent / "tools" / "util" / "include"),
         ]
     else:
+        if not (cutlass_include / "cutlass" / "cutlass.h").is_file():
+            raise RuntimeError("set CUTLASS_INCLUDE for the SM120 source benchmark")
         cuda_sources = [
             str(PACKAGE / "csrc" / "fp8_gemv_m1_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_sm120.cu"),
             str(PACKAGE / "csrc" / "fp8_smallM_handtuned_ldmatrix_sm120.cu"),
+            str(PACKAGE / "csrc" / "cutlass_sm120_block128_fp8_gemm.cu"),
+            str(PACKAGE / "csrc" / "cublaslt_fp8_bias_sm110.cu"),
         ]
         source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM120_ONLY"
-        extra_includes = []
+        extra_includes = [
+            str(cutlass_include),
+            str(cutlass_include.parent / "tools" / "util" / "include"),
+        ]
     load(
         name=namespace,
         sources=[str(PACKAGE / "torch-ext" / "torch_binding.cpp"), *cuda_sources],
@@ -250,7 +257,7 @@ def select_tile(m: int, n: int, k: int, variant: int = 0) -> str:
         if n % 128 == 0:
             return "ld_fp8_gemm_64x128x128_w4"
         return "ld_fp8_gemm_64x64x128_w4"
-    raise RuntimeError("unsupported M")
+    return "cublaslt_fp8_large_m"
 
 
 def make_inputs(m: int, k: int, n: int, seed: int):

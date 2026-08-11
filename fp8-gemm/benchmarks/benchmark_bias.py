@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark SM110 BF16-output FP8 GEMM epilogues."""
+"""Benchmark SM110/SM120 BF16-output FP8 GEMM epilogues."""
 
 from __future__ import annotations
 
@@ -66,29 +66,59 @@ class SourceOps:
 def load_source_ops() -> SourceOps:
     from torch.utils.cpp_extension import load
 
-    cutlass = Path(os.environ["CUTLASS_INCLUDE"])
-    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "11.0a")
+    capability = torch.cuda.get_device_capability()
+    if capability == (11, 0):
+        cutlass = Path(os.environ["CUTLASS_INCLUDE"])
+        os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "11.0a")
+        cuda_sources = [
+            str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu"),
+            str(PACKAGE / "csrc" / "cublaslt_fp8_bias_sm110.cu"),
+        ]
+        source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY"
+        extra_includes = [
+            str(cutlass),
+            str(cutlass.parent / "tools" / "util" / "include"),
+        ]
+    elif capability[0] >= 12:
+        cutlass = Path(os.environ["CUTLASS_INCLUDE"])
+        os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0a")
+        cuda_sources = [
+            str(PACKAGE / "csrc" / "fp8_gemv_m1_sm120.cu"),
+            str(PACKAGE / "csrc" / "fp8_smallM_handtuned_sm120.cu"),
+            str(PACKAGE / "csrc" / "fp8_smallM_handtuned_ldmatrix_sm120.cu"),
+            str(PACKAGE / "csrc" / "cutlass_sm120_block128_fp8_gemm.cu"),
+            str(PACKAGE / "csrc" / "cublaslt_fp8_bias_sm110.cu"),
+        ]
+        source_define = "-DFLASHRT_FP8_GEMM_SOURCE_SM120_ONLY"
+        extra_includes = [
+            str(cutlass),
+            str(cutlass.parent / "tools" / "util" / "include"),
+        ]
+    else:
+        raise RuntimeError(f"SM110 or SM120 is required, got {capability}")
     namespace = "fp8_gemm_bias_source_bench"
     load(
         name=namespace,
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
-            str(PACKAGE / "csrc" / "cutlass_sm110_fp8_gemm.cu"),
-            str(PACKAGE / "csrc" / "cublaslt_fp8_bias_sm110.cu"),
+            *cuda_sources,
         ],
         extra_include_paths=[
             str(PACKAGE / "csrc"),
             str(REGISTRATION_INCLUDE),
-            str(cutlass),
-            str(cutlass.parent / "tools" / "util" / "include"),
+            *extra_includes,
         ],
         extra_cflags=[
             "-O3", "-DNDEBUG", "-DCUDA_KERNEL",
-            "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY",
+            source_define,
         ],
         extra_cuda_cflags=[
             "-O3", "-DNDEBUG", "--expt-relaxed-constexpr", "--use_fast_math",
-            "-DCUDA_KERNEL", "-DFLASHRT_FP8_GEMM_SOURCE_SM110_ONLY",
+            "-U__CUDA_NO_HALF_OPERATORS__",
+            "-U__CUDA_NO_HALF_CONVERSIONS__",
+            "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+            "-U__CUDA_NO_HALF2_OPERATORS__",
+            "-DCUDA_KERNEL", source_define,
         ],
         verbose=False,
     )
@@ -154,8 +184,9 @@ def main() -> int:
     parser.add_argument("--iterations", type=int, default=64)
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args()
-    if torch.cuda.get_device_capability() != (11, 0):
-        raise SystemExit("SM110 is required")
+    capability = torch.cuda.get_device_capability()
+    if capability != (11, 0) and capability[0] < 12:
+        raise SystemExit(f"SM110 or SM120 is required, got {capability}")
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     native = load_native()
     native_stream = int(torch.cuda.current_stream().cuda_stream)

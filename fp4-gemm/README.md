@@ -57,9 +57,10 @@ paths.
 - `1`: widen `<128,256,128>` schedule, intended for very large `N`.
 - `2`: pingpong schedule for A/B testing shape-specific wins.
 
-The canonical linear API and FP4/SFA quantize/dequantize helpers are available
-on both SM110 and SM120. SM110 additionally provides the GROOT N1.7 production
-epilogues `nvfp4_gemm_bias_bf16`, `nvfp4_gemm_bias_residual_bf16`, and
+The canonical linear API, fused `nvfp4_gemm_bias_bf16`, and FP4/SFA
+quantize/dequantize helpers are available on both SM110 and SM120. SM110
+additionally provides the GROOT N1.7 production epilogues
+`nvfp4_gemm_bias_residual_bf16` and
 `nvfp4_gemm_bias_gelu_nvfp4`. The latter emits packed FP4 plus CUTLASS SFA so
 the following projection can consume it without a BF16 materialization and a
 standalone quantization launch. Stream-K and the older BF16 GELU epilogue keep

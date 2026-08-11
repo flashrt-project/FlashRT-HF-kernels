@@ -5,7 +5,7 @@ version = 1
 backends = ["cuda"]
 
 [general.cuda]
-minver = "13"
+minver = "12.8"
 
 [general.hub]
 repo-id = "flashrt/masked-mha-runtime"
@@ -18,8 +18,8 @@ src = ["torch-ext/torch_binding.cpp"]
 backend = "cuda"
 depends = ["torch"]
 include = ["csrc"]
-cuda-minver = "13"
-cuda-capabilities = ["11.0a"]
+cuda-minver = "12.8"
+cuda-capabilities = ["11.0a", "12.0"]
 cuda-flags = ["-O3", "--use_fast_math"]
 src = [
   "csrc/attention_mha_masked.cu",

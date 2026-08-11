@@ -1,6 +1,6 @@
 # masked-mha-runtime
 
-FlashRT native SM110 masked FP16/BF16 MHA for fixed-shape CUDA Graph runtimes.
+FlashRT native SM110/SM120 masked FP16/BF16 MHA for fixed-shape CUDA Graph runtimes.
 It masks padded logits during softmax, supports fused-QKV token strides, and
 keeps caller-owned logits/output buffers stable across graph replay.
 

@@ -89,6 +89,15 @@ different FlashRT quantization strategy. Correctness acceptance is therefore
 against this package's established FP16 producer contract, where all tested
 packed and mapped scale bytes are exact.
 
+## SM120 public bias increment
+
+On 2026-08-11, RTX 5090 source validation passed `29/29`, including public
+`nvfp4_gemm_bias_bf16` rows at `(64,512,512)`, `(360,14336,3072)`, and
+`(360,3072,14336)`. The public entry was bitwise equal to the established SM120
+Stream-K bias launcher and measured within `1.0002x` on the small row and no
+slower on either model-scale row. Installed-artifact validation is still
+required after the x86 rebuild.
+
 ## Thor Native Parity
 
 The Tensor wrapper was compared against the same native FlashRT launchers on

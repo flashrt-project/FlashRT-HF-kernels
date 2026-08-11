@@ -299,8 +299,8 @@ jobs:
     strategy:
       fail-fast: false
       # Each FA2 derivation instantiates the same large template set. Building
-      # all four inside one HF Job previously exhausted the remote job after
-      # roughly two hours. Serialize independently uploadable variants so a
+      # the complete matrix inside one HF Job previously exhausted the remote
+      # job after roughly two hours. Serialize independently uploadable variants so a
       # failed toolchain target can be retried without discarding the others.
       max-parallel: 1
       matrix:
@@ -309,6 +309,8 @@ jobs:
           - torch211-cxx11-cu130-x86_64-linux
           - torch212-cxx11-cu130-x86_64-linux
           - torch212-cxx11-cu132-x86_64-linux
+          - torch213-cxx11-cu130-x86_64-linux
+          - torch213-cxx11-cu132-x86_64-linux
 
     steps:
       - uses: actions/checkout@v4

@@ -508,17 +508,30 @@ void nvfp4_gemm_bias_bf16(
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard device_guard(a_packed.device());
   auto const* props = current_device_properties(a_packed);
-  TORCH_CHECK(props->major == 11 && props->minor == 0,
-              "nvfp4_gemm_bias_bf16 currently requires SM110; got SM",
-              props->major, props->minor);
-  TORCH_CHECK(flash_rt::hub::sm110_gemm_bias_dispatch != nullptr,
-              "SM110 fused-bias FP4 GEMM source is not present in this build");
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
-  const int rc = flash_rt::hub::sm110_gemm_bias_dispatch(
-      a_packed.data_ptr(), sfa.data_ptr(), b_packed.data_ptr(), sfb.data_ptr(),
-      bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
-      checked_int(shape.n, "N"), checked_int(shape.k, "K"), stream);
-  TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_bf16 failed with rc=", rc);
+  if (props->major == 11 && props->minor == 0) {
+    TORCH_CHECK(flash_rt::hub::sm110_gemm_bias_dispatch != nullptr,
+                "SM110 fused-bias FP4 GEMM source is not present in this build");
+    const int rc = flash_rt::hub::sm110_gemm_bias_dispatch(
+        a_packed.data_ptr(), sfa.data_ptr(), b_packed.data_ptr(),
+        sfb.data_ptr(), bias.data_ptr(), out.data_ptr(),
+        checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_bf16 failed with rc=", rc);
+  } else {
+    TORCH_CHECK(props->major == 12 && props->minor == 0,
+                "nvfp4_gemm_bias_bf16 requires SM110 or SM120; got SM",
+                props->major, props->minor);
+#if defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
+    TORCH_CHECK(false, "SM120 fused-bias FP4 GEMM source is not present in this build");
+#else
+    flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
+        a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(),
+        sfb.data_ptr(), bias.data_ptr(), out.data_ptr(),
+        checked_int(shape.m, "M"), checked_int(shape.n, "N"),
+        checked_int(shape.k, "K"), 1.0f, stream);
+#endif
+  }
 #endif
 }
 

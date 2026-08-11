@@ -1,5 +1,22 @@
 # Results
 
+## NVIDIA RTX 5090 source release candidate
+
+- Device: NVIDIA GeForce RTX 5090, SM120, x86_64
+- Runtime: PyTorch 2.11.0 + CUDA 12.8
+
+The source full gate passed `10/10`. The explicit public entry remained
+bitwise equal to `forward_static`; timings use caller-owned buffers.
+
+| Shape `(Sq,Sk,H,D)` | Static us | Explicit us | Explicit/static | SDPA us | Explicit/SDPA |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `(41,277,32,48)` | 14.435 | 14.421 | 0.999x | 12.585 | 1.146x |
+| `(1,1024,1,16)` | 8.855 | 8.929 | 1.008x | 12.743 | 0.701x |
+
+The first row is a compatibility/distribution result, not a performance win;
+runtime selection should keep SDPA for that profile. The decode row is faster
+than SDPA. Installed-artifact x86 validation remains required after upload.
+
 ## NVIDIA Thor installed artifact
 
 - Device: NVIDIA Thor, SM110, aarch64

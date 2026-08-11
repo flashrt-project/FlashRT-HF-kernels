@@ -2,7 +2,8 @@
 
 Release requires FP16 and BF16 parity against PyTorch SDPA at key lengths
 41, 277, 1024, 1025, and 2048; poisoned padded scratch; CUDA Graph replay;
-source and installed-artifact runs on SM110; and native-vs-package timing.
+source and installed-artifact runs on SM110 and SM120; and
+native-vs-package timing on each published architecture.
 
 The additive `attention_mha_fp16_masked` and
 `attention_mha_bf16_masked` entries must remain bitwise-equal to
@@ -24,3 +25,9 @@ On 2026-08-08, the source and clean installed-artifact gates both passed
 `torch.compile(fullgraph=True)` exactly. For the GROOT row
 `Sq=Sk=41,H=32,D=48`, worst p99 absolute error was `0.003906` and cosine was
 `0.99999213`; sequence lengths 1024, 1025, and 2048 also passed.
+
+On 2026-08-11, the same full source matrix passed `10/10` on RTX 5090 with
+PyTorch `2.11.0+cu128`. Worst GROOT-row p99 absolute error was `0.003906` and
+cosine was `0.99999189`; graph replay remained bitwise deterministic. The
+GROOT `(41,277,32,48)` profile was slower than SDPA and is therefore not a
+default-takeover claim. The x86 artifact must repeat this gate after build.

@@ -25,3 +25,13 @@ FlashRT implementation on the same stream and static buffers.
 
 No hardware support is claimed until an installed artifact has executed its
 full relevant shape matrix on that hardware.
+
+## x86 Hub matrix refresh (2026-08-11)
+
+The existing Kernel Hub `v1` Torch 2.11 CUDA 12.8 x86 artifact was loaded on
+RTX 5090 and passed the complete package test suite (`206/206`). The canonical
+`v1` branch currently contains Torch 2.11/2.12 x86 variants, while the default
+`main` alias contains no build variants. This release refresh adds Torch 2.13
+CUDA 13.0/13.2 x86 targets and must promote `v1` to `main` after all serialized
+FA2 jobs finish. Each newly built artifact must rerun the installed suite; the
+existing `206/206` result does not stand in for unbuilt Torch 2.13 variants.

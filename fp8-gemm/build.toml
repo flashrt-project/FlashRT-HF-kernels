@@ -36,6 +36,15 @@ src = [
     "csrc/gemm_types_sm110.h",
     "csrc/cutlass_sm110_fp8_gemm.cu",
     "csrc/cutlass_sm110_fp8_gemm.cuh",
+]
+
+[kernel.fp8_gemm_cublaslt]
+backend = "cuda"
+cuda-capabilities = ["11.0a", "12.0a"]
+cuda-minver = "12.8"
+depends = ["torch"]
+include = ["csrc"]
+src = [
     "csrc/cublaslt_fp8_bias_sm110.cu",
     "csrc/cublaslt_fp8_bias_sm110.cuh",
 ]

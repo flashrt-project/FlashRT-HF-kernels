@@ -68,7 +68,10 @@ Result: all public rows passed. Headline rows are recorded in
 
 ## Architecture Scope Boundary
 
-On SM120, the public per-tensor path supports `M=1` and `2 <= M <= 64`.
+On SM120, the public per-tensor path uses dedicated kernels for `M=1` and
+`2 <= M <= 64`, then the same-contract cuBLASLt backend for `M > 64`.
+The full gate includes `M=65`, PI0.5 prefill rows `712/768/970`, and all
+three BF16 bias epilogues before an x86 artifact can be published.
 The blockwise path retains its independent unrestricted-M contract.
 
 On SM110, the public per-tensor path uses the production CUTLASS Sq/T1/Wide
@@ -108,6 +111,15 @@ documented BF16 residual contract.
 Source-to-installed-artifact performance parity passed over 17 public
 auto-dispatch shapes: median artifact/source `0.9986`, p95 `1.0195`, and max
 `1.0244`.
+
+## SM120 x86 large-M and bias increment
+
+On 2026-08-11, the RTX 5090 source gate passed `42/42` with zero failures.
+Coverage includes the `M=65` dispatch boundary, model rows `M=105/277/712/768/
+970/1024`, the three BF16 bias epilogues, fullgraph compile, and bitwise CUDA
+Graph replay. PI0.5 prefill rows were exact against the package reference and
+measured `6.22x-7.80x` over the warmed eager reference. Installed-artifact and
+cold-Hub validation remain mandatory after rebuilding the x86 variants.
 Comparisons against the original FlashRT pointer entry are reported separately
 in `benchmarks/RESULTS.md`.
 

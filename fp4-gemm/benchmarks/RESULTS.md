@@ -1,5 +1,22 @@
 # fp4-gemm Benchmark Results
 
+## SM120 public bias dispatch (2026-08-11)
+
+Source release candidate on RTX 5090, PyTorch `2.11.0+cu128`. The public
+`nvfp4_gemm_bias_bf16` entry dispatches to the package's established SM120
+Stream-K bias launcher. Outputs were bitwise equal, and timings use 50 warmup
+iterations, 300 measured iterations, and the median of seven CUDA-event
+rounds.
+
+| Shape `(M,N,K)` | Public us | Native launcher us | Public/native |
+| --- | ---: | ---: | ---: |
+| `(64,512,512)` | 8.190 | 8.189 | 1.000x |
+| `(360,14336,3072)` | 33.242 | 35.439 | 0.938x |
+| `(360,3072,14336)` | 38.463 | 38.791 | 0.992x |
+
+The complete SM120 source gate passed `29/29`; the public bias rows were exact
+against GEMM over independently dequantized inputs.
+
 ## SM110 Bias Epilogue Dispatch (2026-08-07)
 
 Source RC on NVIDIA Thor, Torch `2.11.0+cu130`, CUDA 13.0. Timings are from

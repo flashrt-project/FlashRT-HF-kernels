@@ -23,9 +23,38 @@ python fp8-gemm/tests/test_fp8_gemm.py --backend source --mode full
 ```
 
 Result: 8/8 rows passed. Metrics recorded: max absolute error, mean absolute
-error, p99 absolute error, cosine similarity, dtype, and tolerance. Public v1
-SM120 scope is `M=1` decode and `2 <= M <= 64` small-M rows. SM110 uses a
-separate full-row CUTLASS dispatcher described below.
+error, p99 absolute error, cosine similarity, dtype, and tolerance. The
+original SM120 release covered `M=1` decode and `2 <= M <= 64` small-M rows.
+The August 11 release candidate extends the same API to large-M rows through a
+cuBLASLt backend. SM110 uses a separate full-row CUTLASS dispatcher.
+
+## SM120 large-M and bias release candidate (2026-08-11)
+
+Source release candidate on NVIDIA GeForce RTX 5090, PyTorch `2.11.0+cu128`,
+CUDA 12.8. The full gate passed `42/42`, including 11 bias/compile/graph
+checks. Plain large-M outputs were exact against the contract reference.
+
+| Workload `(M,K,N)` | Package us | Graph us | Eager us | vs eager |
+| --- | ---: | ---: | ---: | ---: |
+| PI0.5 prefill QKV `(712,2048,2560)` | 24.356 | 24.575 | 170.017 | 6.98x |
+| PI0.5 prefill O `(970,2048,2048)` | 26.660 | 26.637 | 165.861 | 6.22x |
+| PI0.5 prefill gate/up `(768,2048,32768)` | 251.980 | 253.969 | 1965.453 | 7.80x |
+| PI0.5 prefill down `(768,16384,2048)` | 137.244 | 137.162 | 955.025 | 6.96x |
+
+The BF16 bias APIs were measured on SigLIP dimensions. Bias-only output was
+exact; tanh-GELU worst p99 absolute error was `0.03125` and worst cosine was
+`0.99999565`.
+
+| Shape `(M,K,N)` | Bias us | Bias+residual us | Bias+GELU us |
+| --- | ---: | ---: | ---: |
+| `(512,1152,3456)` | 16.416 | 18.432 | 20.512 |
+| `(768,1152,4304)` | 24.576 | 24.408 | 30.624 |
+| `(768,4304,1152)` | 34.841 | 34.841 | 38.936 |
+
+The original FlashRT CUDA 13 cuBLASLt bias entry returned `NOT_SUPPORTED` on
+these RTX 5090 rows. The package uses an equivalent row-major contract with a
+different cuBLASLt descriptor mapping that produced valid algorithms; no
+native timing ratio is reported where the reference cannot launch.
 
 ## Headline Rows
 

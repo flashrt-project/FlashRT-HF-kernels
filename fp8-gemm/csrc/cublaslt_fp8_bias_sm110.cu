@@ -73,6 +73,8 @@ int create_entry(const Key& key, Entry* entry) {
       &entry->operation, CUBLAS_COMPUTE_32F, CUDA_R_32F);
   cublasOperation_t transpose = CUBLAS_OP_T;
   cublasOperation_t no_transpose = CUBLAS_OP_N;
+  const bool has_bias =
+      key.epilogue != static_cast<int>(FlashRtFp8BiasEpilogue::kNone);
   cublasLtEpilogue_t epilogue =
       key.epilogue == static_cast<int>(FlashRtFp8BiasEpilogue::kBiasGelu)
           ? CUBLASLT_EPILOGUE_GELU_BIAS
@@ -88,12 +90,12 @@ int create_entry(const Key& key, Entry* entry) {
         entry->operation, CUBLASLT_MATMUL_DESC_TRANSB, &no_transpose,
         sizeof(no_transpose));
   }
-  if (status == CUBLAS_STATUS_SUCCESS) {
+  if (status == CUBLAS_STATUS_SUCCESS && has_bias) {
     status = cublasLtMatmulDescSetAttribute(
         entry->operation, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue,
         sizeof(epilogue));
   }
-  if (status == CUBLAS_STATUS_SUCCESS) {
+  if (status == CUBLAS_STATUS_SUCCESS && has_bias) {
     status = cublasLtMatmulDescSetAttribute(
         entry->operation, CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE, &bias_type,
         sizeof(bias_type));
@@ -143,7 +145,7 @@ int create_entry(const Key& key, Entry* entry) {
 
 }  // namespace
 
-int fp8_linear_bias_sm110_bf16(
+int fp8_linear_cublaslt_bf16(
     const void* input_fp8,
     const void* weight_fp8,
     const void* bias_bf16,
@@ -167,13 +169,34 @@ int fp8_linear_bias_sm110_bf16(
     iterator = cache.emplace(key, entry).first;
   }
   Entry& entry = iterator->second;
-  cublasStatus_t status = cublasLtMatmulDescSetAttribute(
-      entry.operation, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias_bf16,
-      sizeof(bias_bf16));
-  if (status != CUBLAS_STATUS_SUCCESS) return status_code(status);
+  cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
+  if (epilogue != FlashRtFp8BiasEpilogue::kNone) {
+    if (bias_bf16 == nullptr) return -1200;
+    status = cublasLtMatmulDescSetAttribute(
+        entry.operation, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias_bf16,
+        sizeof(bias_bf16));
+    if (status != CUBLAS_STATUS_SUCCESS) return status_code(status);
+  }
   status = cublasLtMatmul(
       handle, entry.operation, &alpha, weight_fp8, entry.weight, input_fp8,
       entry.input, &beta, out_bf16, entry.output, out_bf16, entry.output,
       &entry.algorithm, workspace, kWorkspaceBytes, stream);
   return status_code(status);
+}
+
+int fp8_linear_bias_sm110_bf16(
+    const void* input_fp8,
+    const void* weight_fp8,
+    const void* bias_bf16,
+    void* out_bf16,
+    int M,
+    int N,
+    int K,
+    float alpha,
+    float beta,
+    FlashRtFp8BiasEpilogue epilogue,
+    cudaStream_t stream) {
+  return fp8_linear_cublaslt_bf16(
+      input_fp8, weight_fp8, bias_bf16, out_bf16, M, N, K, alpha, beta,
+      epilogue, stream);
 }

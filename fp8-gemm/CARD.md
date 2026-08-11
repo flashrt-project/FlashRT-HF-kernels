@@ -21,7 +21,7 @@ been swept across PI0.5, GROOT, Cosmos Edge, and LingBot VLA projection shapes.
 On SM110, keep `variant=0` for the tuned public dispatcher. Variants `1`, `2`,
 and `3` force Sq, T1, and Wide respectively for diagnostics.
 
-SM110 also provides BF16 bias, in-place bias+residual, and tanh-GELU+bias
+SM110 and SM120 provide BF16 bias, in-place bias+residual, and tanh-GELU+bias
 epilogues for SigLIP-style projection and MLP shapes. The validated large-M
 plain GEMM band is `M=65..1024`.
 

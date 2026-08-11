@@ -22,5 +22,5 @@ Inputs use `(sequence, heads, head_dim)`. `forward_static` is the CUDA Graph
 hot-path API: allocate `logits` and `out` once and reuse their addresses.
 Rows wider than 1024 keys use a deterministic multi-pass softmax.
 
-This package contains the native masked-MHA execution path validated in
-FlashRT's GROOT N1.7 Thor runtime. It is separate from FlashAttention-4.
+This package contains the native masked-MHA execution path used by FlashRT's
+GROOT runtimes on SM110 and SM120. It is separate from FlashAttention-4.
