@@ -17,6 +17,17 @@ rounds.
 The complete SM120 source gate passed `29/29`; the public bias rows were exact
 against GEMM over independently dequantized inputs.
 
+### Hub post-upload qualification
+
+The cold-cache Kernel Hub v1 artifact for
+`torch211-cxx11-cu128-x86_64-linux` passed the installed full gate `30/30` on
+RTX 5090. This includes the SM120 `nvfp4_gemm_bias_bf16` route, all public
+epilogues, BF16 quantization, CUDA Graph execution, and
+`torch.compile(fullgraph=True)`. The public bias output remained bitwise equal
+to the established package launcher. The `kernels==0.12.3` legacy `main`
+mirror loaded the same API, and its `.so` SHA-256 matched the canonical v1
+artifact exactly.
+
 ## SM110 Bias Epilogue Dispatch (2026-08-07)
 
 Source RC on NVIDIA Thor, Torch `2.11.0+cu130`, CUDA 13.0. Timings are from

@@ -62,7 +62,9 @@ D=64/96/128/256, MHA/GQA, partial tiles and causal BF16 produced:
 - worst cosine similarity: `0.9999961853`
 - package output vs original FlashRT output on benchmark rows: exact
 
-These older rows retain the direct original-FlashRT comparison. The release
-candidate section above is the current artifact qualification. Final Hub
-qualification still requires a fresh-process
-`get_kernel(..., version=1)` sweep after upload.
+These older rows retain the direct original-FlashRT comparison. A fresh-process
+`get_kernel("flashrt/fa2-seqused-runtime", version=1)` load of the canonical
+`torch211-cxx11-cu128-x86_64-linux` artifact passed all `206/206` package
+tests, including the complete logical-head-dimension matrix, split-KV D<=64,
+causal/GQA paths, device `seqused_k`, CUDA Graph replay, rejection contracts,
+and `torch.compile(fullgraph=True)`.

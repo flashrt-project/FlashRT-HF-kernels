@@ -15,7 +15,16 @@ bitwise equal to `forward_static`; timings use caller-owned buffers.
 
 The first row is a compatibility/distribution result, not a performance win;
 runtime selection should keep SDPA for that profile. The decode row is faster
-than SDPA. Installed-artifact x86 validation remains required after upload.
+than SDPA.
+
+The cold-cache Kernel Hub v1
+`torch211-cxx11-cu128-x86_64-linux` artifact passed the installed full gate
+`10/10`. It covered FP16/BF16, fused-QKV token strides, `Sk=1024/1025/2048`,
+seqused valid lengths `456/712/968`, unsupported-shape rejection, and bitwise
+CUDA Graph replay. The explicit/static wrapper ratio was `0.995x` on
+`(41,277,32,48)` and `1.010x` on `(1,1024,1,16)`. A cold
+`kernels==0.12.3` load exposed the same APIs, and canonical/legacy `.so`
+SHA-256 values were identical.
 
 ## NVIDIA Thor installed artifact
 

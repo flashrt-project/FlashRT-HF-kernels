@@ -56,6 +56,25 @@ these RTX 5090 rows. The package uses an equivalent row-major contract with a
 different cuBLASLt descriptor mapping that produced valid algorithms; no
 native timing ratio is reported where the reference cannot launch.
 
+### Hub post-upload qualification
+
+The cold-cache `torch211-cxx11-cu128-x86_64-linux` artifact from Kernel Hub
+passed the shipped public API full gate `42/42`, including 11 bias,
+`torch.compile`, and CUDA Graph checks. The public selector returned
+`cublaslt_fp8_large_m` for the complete `M=65..1024` band; the PI0.5 prefill
+rows below were exact against the contract reference.
+
+| Workload `(M,K,N)` | Hub artifact us | Eager us | vs eager |
+| --- | ---: | ---: | ---: |
+| PI0.5 prefill QKV `(712,2048,2560)` | 24.577 | 170.046 | 6.92x |
+| PI0.5 prefill O `(970,2048,2048)` | 26.659 | 165.708 | 6.22x |
+| PI0.5 prefill gate/up `(768,2048,32768)` | 250.458 | 1963.989 | 7.84x |
+| PI0.5 prefill down `(768,16384,2048)` | 135.247 | 953.868 | 7.05x |
+
+The same cold test through `kernels==0.12.3` selected the legacy model `main`
+mirror and exposed the large-M and bias APIs. Its `.so` SHA-256 was identical
+to the canonical Kernel Hub v1 artifact.
+
 ## Headline Rows
 
 | Shape | Tile | FlashRT us | Torch eager us | Torch compile us | Speedup vs eager | Speedup vs compile | Max abs | P99 abs | Cosine |
@@ -109,10 +128,13 @@ correctness sweep remains the release gate.
 
 - Source correctness: passed.
 - Source benchmark/tile sweep: passed for v1 public scope.
-- Existing SM120 installed artifacts: published.
-- SM110 local installed artifact: correctness, compile, graph, and parity
-  passed.
-- SM110 Hub artifact: pending clean-commit rebuild and upload.
+- SM120 x86 Hub artifacts: published for Torch 2.11/2.12/2.13 across the
+  supported CUDA 12.8/13.0/13.2 variants.
+- SM110 aarch64 Hub artifacts: published for Torch 2.11 and 2.13; local
+  installed-artifact correctness, compile, graph, and native-parity gates
+  passed before upload.
+- Canonical Kernel Hub `v1` and legacy model `main` contain the same eight
+  compiled variants.
 
 ## NVIDIA Thor SM110 Results
 
