@@ -9,6 +9,7 @@ import json
 import math
 import os
 import sys
+import types
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -174,7 +175,29 @@ def _current_arch_list() -> str:
     return "12.0a" if (major, minor) == (12, 0) else f"{major}.{minor}"
 
 
-def load_source_ops() -> SourceOps:
+def load_source_wrapper(namespace: str):
+    """Execute the shipped Python API against a source-test op namespace."""
+    package_name = f"_{namespace}_public_api"
+    ops_module = types.ModuleType(f"{package_name}._ops")
+    ops_module.add_op_namespace_prefix = lambda name: f"{namespace}::{name}"
+    ops_module.ops = getattr(torch.ops, namespace)
+    sys.modules[ops_module.__name__] = ops_module
+
+    init_path = PACKAGE / "torch-ext" / "fp8_gemm" / "__init__.py"
+    spec = importlib.util.spec_from_file_location(
+        package_name,
+        init_path,
+        submodule_search_locations=[str(init_path.parent)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load public API from {init_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[package_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_source_ops():
     from torch.utils.cpp_extension import load
 
     if not REGISTRATION_INCLUDE.is_dir():
@@ -239,7 +262,7 @@ def load_source_ops() -> SourceOps:
         ],
         verbose=False,
     )
-    return SourceOps(namespace)
+    return load_source_wrapper(namespace)
 
 
 def load_installed_ops(artifact: str | None):
