@@ -20,11 +20,14 @@ def load_source_ops(registration_include=None):
             PACKAGE.parent.parent
             / "kernels/kernel-builder/src/pyproject/templates/torch"
         )
-    cutlass = os.environ.get(
-        "CUTLASS_INCLUDE",
-        "/home/heima/suliang/PI/official/FlashRT/third_party/cutlass/include",
-    )
-    os.environ["TORCH_CUDA_ARCH_LIST"] = "12.0a"
+    cutlass = os.environ.get("CUTLASS_INCLUDE")
+    if not cutlass:
+        raise RuntimeError(
+            "set CUTLASS_INCLUDE to a CUTLASS include directory to run the "
+            "source-mode grouped-moe-gemm tests"
+        )
+    major, minor = torch.cuda.get_device_capability()
+    os.environ["TORCH_CUDA_ARCH_LIST"] = f"{major}.{minor}a"
     ns = "grouped_moe_gemm_source_test"
     load(
         name=ns,

@@ -14,6 +14,16 @@ from pathlib import Path
 import torch
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 ROOT = Path(__file__).resolve().parents[2]
 TEST_FILE = ROOT / "fp4-gemm" / "tests" / "test_fp4_gemm.py"
 
@@ -92,31 +102,33 @@ def bench_case(helpers, ops, native, name: str, shape: tuple[int, int, int], war
             iters,
         )
         native_variant = variant
-        if native_variant < 0:
-            native_variant = helpers.select_sm110_variant(shape)
-        native_function = (
-            native.fp4_w4a16_gemm_sm120_bf16out
-            if native_variant == 0
-            else native.fp4_w4a16_gemm_sm120_bf16out_widen
-            if native_variant == 1
-            else native.fp4_w4a16_gemm_sm120_bf16out_pingpong
-        )
-        native_us = measure(
-            lambda: native_function(
-                a_packed.data_ptr(),
-                b_packed.data_ptr(),
-                out.data_ptr(),
-                m,
-                n,
-                k,
-                sfa.data_ptr(),
-                sfb.data_ptr(),
-                1.0,
-                stream,
-            ),
-            warmup,
-            iters,
-        )
+        native_us = float("nan")
+        if native is not None:
+            if native_variant < 0:
+                native_variant = helpers.select_sm110_variant(shape)
+            native_function = (
+                native.fp4_w4a16_gemm_sm120_bf16out
+                if native_variant == 0
+                else native.fp4_w4a16_gemm_sm120_bf16out_widen
+                if native_variant == 1
+                else native.fp4_w4a16_gemm_sm120_bf16out_pingpong
+            )
+            native_us = measure(
+                lambda: native_function(
+                    a_packed.data_ptr(),
+                    b_packed.data_ptr(),
+                    out.data_ptr(),
+                    m,
+                    n,
+                    k,
+                    sfa.data_ptr(),
+                    sfb.data_ptr(),
+                    1.0,
+                    stream,
+                ),
+                warmup,
+                iters,
+            )
         results.append(
             BenchResult(
                 shape=name,
@@ -169,7 +181,7 @@ def bench_bf16_producer(ops, native, k: int, warmup: int, iters: int):
     torch.cuda.synchronize()
     direct_us = measure(direct, warmup, iters)
     compat_us = measure(compat, warmup, iters)
-    native_us = measure(native_direct, warmup, iters)
+    native_us = float("nan") if native is None else measure(native_direct, warmup, iters)
     return {
         "M": 1,
         "K": k,
@@ -195,17 +207,23 @@ def main() -> int:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--json-out", default=None)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
 
     helpers = load_helpers()
     native_root = Path(
         os.environ.get("FLASHRT_NATIVE_ROOT", str(ROOT.parent / "official" / "FlashRT"))
     )
-    sys.path.insert(0, str(native_root))
-    try:
-        import flash_rt.flash_rt_kernels as native
-    finally:
-        sys.path.pop(0)
+    native = None
+    if native_root.is_dir():
+        sys.path.insert(0, str(native_root))
+        try:
+            import flash_rt.flash_rt_kernels as native
+        except Exception:
+            native = None
+        finally:
+            sys.path.pop(0)
     ops = (
         helpers.load_source_ops()
         if args.backend == "source"

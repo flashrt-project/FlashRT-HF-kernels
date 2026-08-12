@@ -55,11 +55,13 @@ def main() -> None:
     )
     parser.add_argument("--microbench-warmup", type=int, default=20)
     parser.add_argument("--microbench-iters", type=int, default=100)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     py = sys.executable
+    mem_args = ["--max-mem-gb", str(args.max_mem_gb)]
     summary = []
 
     if args.suite in {"all", "all-fp8-e2e"}:
@@ -77,6 +79,7 @@ def main() -> None:
                         str(args.warmup),
                         "--iters",
                         str(args.iters),
+                        *mem_args,
                     ],
                     out_dir,
                 )
@@ -97,6 +100,7 @@ def main() -> None:
                         str(args.warmup),
                         "--iters",
                         str(args.iters),
+                        *mem_args,
                     ],
                     out_dir,
                 )
@@ -115,6 +119,7 @@ def main() -> None:
                     str(args.warmup),
                     "--iters",
                     str(args.iters),
+                    *mem_args,
                 ],
                 out_dir,
             )
@@ -133,6 +138,7 @@ def main() -> None:
                     str(args.microbench_warmup),
                     "--iters",
                     str(args.microbench_iters),
+                    *mem_args,
                 ],
                 out_dir,
             )

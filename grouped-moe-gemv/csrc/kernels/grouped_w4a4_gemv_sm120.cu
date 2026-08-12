@@ -325,7 +325,8 @@ int grouped_w4a4_gemv_sm120_bf16(
     int          K,
     long         w_stride,
     long         sfb_stride,
-    cudaStream_t stream) {
+    cudaStream_t stream,
+    bool         force_simt) {
   if (!A_packed || !B_stack || !D || !SFA || !SFB_stack ||
       !alpha_stack || !expert_idx) return 1;
   if (K <= 0 || (K % 16) != 0) return 2;
@@ -333,7 +334,12 @@ int grouped_w4a4_gemv_sm120_bf16(
   if (M <= 0 || top_k <= 0) return 4;
 
   const int pairs = M * top_k;
-  if ((K % 64) != 0 || K > 512 || pairs <= 8) {
+  // The block-scaled mma below is SM120-only: the cute SM120_16x8x64_TN_VS
+  // atom asserts on any arch without CUTE_ARCH_MXF4NVF4_4X_UE4M3_MMA_ENABLED
+  // (including sm_110a/Thor). force_simt makes the caller route every shape
+  // to the portable SIMT reference on such devices.
+  const bool use_simt = force_simt || (K % 64) != 0 || K > 512 || pairs <= 8;
+  if (use_simt) {
     dim3 block(256);
     dim3 grid((N + 7) / 8, M * top_k);
     grouped_simt_kernel<<<grid, block, 0, stream>>>(

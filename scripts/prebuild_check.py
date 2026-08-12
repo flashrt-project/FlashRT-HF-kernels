@@ -9,6 +9,7 @@ quickly without paying the full Nix/build cost.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tomllib
@@ -177,7 +178,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--builder",
-        default="/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker",
+        default=os.environ.get("KERNEL_BUILDER_DOCKER", "kernel-builder-docker"),
         help="kernel-builder-docker command path",
     )
     parser.add_argument(

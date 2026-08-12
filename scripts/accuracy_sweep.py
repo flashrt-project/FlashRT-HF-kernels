@@ -438,8 +438,8 @@ def _load_source_ops(package: str):
         raise RuntimeError(f"missing kernel-builder registration include: {REGISTRATION_INCLUDE}")
     _preload_cublaslt()
     namespace = f"flashrt_accuracy_{spec['module']}"
-    if package in {"flashrt-nvfp4", "flashrt-smallm-gemm", "flashrt-fused-quant"}:
-        os.environ.setdefault("TORCH_CUDA_ARCH_LIST", "12.0")
+    major, minor = _torch().cuda.get_device_capability()
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", f"{major}.{minor}a")
     load(
         name=namespace,
         sources=[str(pkg_dir / item) for item in spec["sources"]],
@@ -1097,8 +1097,30 @@ def sweep_fp8_ffn(args, results: list[Result]) -> None:
         results.append(_result_fp8_quant_distribution(package, "fp8_linear_bias_gelu_quant_bf16", label, got_hidden_fp8, exp_hidden_fp8, p99_abs_limit=0.0, mismatch_rate_limit=1e-4))
 
         got_mlp = ops.fp8_gelu_mlp_bf16(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s)
+        # Fused-vs-staged migration parity is the authoritative MLP contract
+        # (bit-exact, same as the package test): the fused kernel must match
+        # the staged FlashRT ops exactly, independent of the torch-math
+        # reference below.
+        staged_down = ops.fp8_gemm_bf16(got_hidden_fp8, down_w, hid_s, dn_s)
+        staged_mlp = (staged_down.float() + down_b.float()).to(torch.bfloat16)
+        results.append(_result_p99_approx(
+            package, "fp8_gelu_mlp_bf16_vs_staged", label, got_mlp, staged_mlp,
+            p99_abs_limit=0.0, p99_rel_limit=0.0, rel_floor=args.rel_floor,
+        ))
+        # Independent torch-math reference: gate on relative error and an abs
+        # bound scaled to the output magnitude (fp8 rounding-order noise grows
+        # with magnitude; a fixed abs bound mis-calibrates large shapes).
         exp_mlp = _reference_fp8_mlp(x, up_w, up_b, down_w, down_b, x_s, up_s, hid_s, dn_s)
-        results.append(_result_p99_approx(package, "fp8_gelu_mlp_bf16", label, got_mlp, exp_mlp, p99_abs_limit=1.0, p99_rel_limit=0.05, rel_floor=args.rel_floor))
+        exp_p99_mag = float(
+            exp_mlp.float().abs().flatten()
+            .kthvalue(max(1, math.ceil(0.99 * exp_mlp.numel())))
+            .values.item()
+        )
+        results.append(_result_p99_approx(
+            package, "fp8_gelu_mlp_bf16", label, got_mlp, exp_mlp,
+            p99_abs_limit=max(1.0, 0.02 * exp_p99_mag), p99_rel_limit=0.05,
+            rel_floor=args.rel_floor,
+        ))
 
 
 def sweep_vla(args, results: list[Result]) -> None:

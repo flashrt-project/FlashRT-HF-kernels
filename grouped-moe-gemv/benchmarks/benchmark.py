@@ -10,6 +10,17 @@ from pathlib import Path
 
 import torch
 
+
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 PACKAGE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE / "tests"))
 from test_grouped_moe_gemv import load_source_ops, sfb_bytes  # noqa: E402
@@ -154,7 +165,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
     parser.add_argument("--artifact")
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     ops = load_ops(args.backend, args.artifact)
     cases = [
         ("gate_up_decode", 1, 8, 1024, 2048),

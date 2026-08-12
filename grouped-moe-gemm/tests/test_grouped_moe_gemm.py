@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, importlib, sys
+import argparse, importlib, os, sys
 from pathlib import Path
 import torch
 
@@ -46,7 +46,16 @@ def deq(p, sf, alpha=1.0):
     return vals * ue(sf.int()).repeat_interleave(16, 1) * alpha
 
 
-def run(ops):
+def run(ops, force_simt=False):
+    if force_simt:
+        os.environ["FLASHRT_FORCE_SIMT"] = "1"
+    try:
+        _run_cases(ops)
+    finally:
+        os.environ.pop("FLASHRT_FORCE_SIMT", None)
+
+
+def _run_cases(ops):
     torch.manual_seed(19)
     dev = "cuda"
     checks = 0
@@ -135,6 +144,8 @@ if __name__ == "__main__":
     a = p.parse_args()
     if a.backend == "source":
         loaded = load_source_ops(a.registration_include)
+        run(loaded, force_simt=False)
+        run(loaded, force_simt=True)
     else:
         if a.artifact:
             sys.path.insert(0, a.artifact)
@@ -143,4 +154,4 @@ if __name__ == "__main__":
         finally:
             if a.artifact:
                 sys.path.remove(a.artifact)
-    run(loaded)
+        run(loaded)

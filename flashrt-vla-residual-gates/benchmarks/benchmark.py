@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import importlib
 import json
 import math
 import os
@@ -14,6 +15,16 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
+
+
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -167,17 +178,19 @@ def metrics(got_parts, expected_parts):
 def run_one(ops, name: str, rows: tuple[int, int, int], dim: int, args) -> Result:
     v, a, u = make_case(rows, dim)
     ops.joint3_bias_gate_residual_action_nobias_bf16(
-        v[0], v[1], v[2], v[3], v[4],
-        a[0], a[1], a[3], a[4],
-        u[0], u[1], u[2],
+        v[0], v[1], v[2], v[3],
+        a[0], a[1], a[3],
+        u[0], u[1],
+        v[4], a[4], u[2],
     )
     expected = torch_ref(v, a, u)
     p99_abs, cosine = metrics((v[4], a[4], u[2]), expected)
     flashrt_us = time_us(
         lambda: ops.joint3_bias_gate_residual_action_nobias_bf16(
-            v[0], v[1], v[2], v[3], v[4],
-            a[0], a[1], a[3], a[4],
-            u[0], u[1], u[2],
+            v[0], v[1], v[2], v[3],
+            a[0], a[1], a[3],
+            u[0], u[1],
+            v[4], a[4], u[2],
         ),
         args.warmup,
         args.iters,
@@ -226,7 +239,9 @@ def main() -> None:
     parser.add_argument("--p99-abs-limit", type=float, default=0.0)
     parser.add_argument("--output", default=None)
     parser.add_argument("--markdown", default=None)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")

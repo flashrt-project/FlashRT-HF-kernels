@@ -34,15 +34,15 @@ Runtime smoke environment:
 Builder tooling:
 
 - `kernel-builder` 0.16.0-dev0
-- Docker/Nix build wrapper available under
-  `/home/heima/suliang/PI/.hf-kernel-env/bin`
+- Docker/Nix build wrapper available via `KERNEL_BUILDER_DOCKER` or
+  `kernel-builder-docker` on `PATH`
 
 ## Commands
 
 From this package directory:
 
 ```bash
-/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker check-config .
+kernel-builder-docker check-config .
 ```
 
 Host-side source-extension correctness was validated with:

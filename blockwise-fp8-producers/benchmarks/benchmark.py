@@ -16,6 +16,16 @@ sys.path.insert(0, str(ROOT / "blockwise-fp8-producers" / "tests"))
 from test_blockwise_fp8_producers import load_source_ops  # noqa: E402
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 def load_ops(backend: str, artifact: str | None):
     if backend == "source":
         return load_source_ops()
@@ -72,7 +82,9 @@ def main() -> int:
     parser.add_argument("--mode", choices=["headline", "full"], default="headline")
     parser.add_argument("--warmup", type=int, default=30)
     parser.add_argument("--iters", type=int, default=200)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     ops = load_ops(args.backend, args.artifact)
     shapes = [(51, 4096), (277, 9216), (1024, 1152)]
     if args.mode == "full":

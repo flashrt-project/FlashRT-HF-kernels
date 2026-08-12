@@ -32,6 +32,16 @@ CALIB_DATASET = "physical-intelligence/libero"
 SEED = 0
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 def build_policy():
     from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 
@@ -107,7 +117,9 @@ def main() -> None:
     parser.add_argument("--no-inductor-flags", action="store_true")
     parser.add_argument("--safety", type=float, default=1.0)
     parser.add_argument("--single", action="store_true", help="run only the configured rung, not the full ladder")
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")

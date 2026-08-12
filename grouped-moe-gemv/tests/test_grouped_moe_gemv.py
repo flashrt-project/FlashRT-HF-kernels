@@ -68,6 +68,15 @@ def _is_sm110() -> bool:
 def load_source_ops() -> SourceOps:
     from torch.utils.cpp_extension import load
 
+    def _cutlass_include() -> str:
+        env = os.environ.get("CUTLASS_INCLUDE")
+        if not env:
+            raise RuntimeError(
+                "set CUTLASS_INCLUDE to a CUTLASS include directory to run the "
+                "source-mode grouped-moe-gemv tests"
+            )
+        return env
+
     os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _arch_list())
     namespace = "grouped_moe_gemv_source_test"
     if _is_sm110():
@@ -97,10 +106,7 @@ def load_source_ops() -> SourceOps:
         extra_include_paths=[
             str(PACKAGE / "csrc"),
             str(REGISTRATION_INCLUDE),
-            os.environ.get(
-                "CUTLASS_INCLUDE",
-                "/home/heima/suliang/PI/official/FlashRT/third_party/cutlass/include",
-            ),
+            _cutlass_include(),
         ],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
         extra_cuda_cflags=cuda_flags,

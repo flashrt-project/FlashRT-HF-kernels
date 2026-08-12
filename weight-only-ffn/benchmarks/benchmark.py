@@ -15,6 +15,16 @@ import torch
 import torch.nn.functional as F
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 SHAPES = {
     "llm_m1": (1, 4096, 11008, 4096),
     "llm_m2": (2, 4096, 11008, 4096),
@@ -426,7 +436,9 @@ def main() -> int:
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--json-out")
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     module = load_module(args.backend, args.artifact)
     names = ["llm_m1"] if args.mode == "smoke" else list(SHAPES)
     rows = []

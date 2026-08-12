@@ -3,6 +3,7 @@
 #include <torch/all.h>
 #include <torch/library.h>
 
+#include <cstdlib>
 #include <limits>
 
 #if defined(CUDA_KERNEL)

@@ -5,6 +5,15 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 import pi05_decoder_loop_hub as dec
 FP8=448.0
+
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
 class DynDecoder(dec.HubDecoderLoop):
     """Same as base (BF16 QKV/O, FP8 FFN) but FFN scales computed per-forward -> split GeGLU."""
     def _sc(self, a): return torch.clamp(a/FP8, min=1e-12).reshape(1).to(self.w.device, torch.float32)
@@ -51,7 +60,9 @@ parser.add_argument(
 parser.add_argument("--calibration-input", default=str(ROOT / "internal-tests/runtime-demo/pi05-decoder-loop-hub-static-scales.json"))
 parser.add_argument("--warmup", type=int, default=8)
 parser.add_argument("--iters", type=int, default=30)
+parser.add_argument("--max-mem-gb", type=float, default=30.0)
 args = parser.parse_args()
+_apply_mem_cap(args.max_mem_gb)
 B=args.encoder_kv_bundle
 CK=args.checkpoint or os.environ.get("PI05_CHECKPOINT") or str(ROOT.parent / "checkpoints/pi05_libero_pytorch")
 CAL=args.calibration_input

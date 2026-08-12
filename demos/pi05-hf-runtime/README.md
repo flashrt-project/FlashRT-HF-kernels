@@ -36,7 +36,7 @@ Use an environment matching the published Hub artifact. On the local validation
 machine this is the torch 2.11 CUDA 12.8 smoke environment:
 
 ```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
+<workspace>/.flashrt-hub-smoke-torch211/bin/python \
   demos/pi05-hf-runtime/benchmark_runtime.py \
   --shape pi05_decoder \
   --warmup 10 \
@@ -47,7 +47,7 @@ machine this is the torch 2.11 CUDA 12.8 smoke environment:
 Try a larger PI0.5 vision-shaped chain:
 
 ```bash
-/home/heima/suliang/PI/.flashrt-hub-smoke-torch211/bin/python \
+<workspace>/.flashrt-hub-smoke-torch211/bin/python \
   demos/pi05-hf-runtime/benchmark_runtime.py \
   --shape pi05_vision \
   --warmup 5 \

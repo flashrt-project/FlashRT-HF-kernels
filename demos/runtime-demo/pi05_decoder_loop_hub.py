@@ -22,6 +22,7 @@ import argparse
 import importlib
 import json
 import math
+import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -31,6 +32,16 @@ import torch
 import torch.nn.functional as F
 from kernels import get_kernel
 from safetensors import safe_open
+
+
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
 
 
 DEC_L = 18
@@ -927,7 +938,7 @@ def run(args: argparse.Namespace) -> Result:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint", default="/home/heima/suliang/PI/checkpoints/pi05_libero_pytorch")
+    parser.add_argument("--checkpoint", default=os.environ.get("PI05_CHECKPOINT_DIR", ""))
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--steps", type=int, default=10)
     parser.add_argument("--encoder-seq-len", type=int, default=560)
@@ -946,7 +957,9 @@ def main() -> None:
     parser.add_argument("--p99-abs-limit", type=float, default=0.5)
     parser.add_argument("--cosine-limit", type=float, default=0.9)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
     if not 1 <= args.layers <= DEC_L:
         raise ValueError(f"--layers must be in [1, {DEC_L}]")
     if args.steps <= 0:

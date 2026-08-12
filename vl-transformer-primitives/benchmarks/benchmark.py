@@ -22,6 +22,16 @@ from test_vl_transformer_primitives import (  # noqa: E402
 )
 
 
+def _apply_mem_cap(max_mem_gb: float = 30.0) -> None:
+    if not torch.cuda.is_available() or max_mem_gb <= 0:
+        return
+    total = torch.cuda.get_device_properties(0).total_memory
+    cap = int(max_mem_gb * 1024**3)
+    if total <= 0 or cap >= total:
+        return
+    torch.cuda.set_per_process_memory_fraction(cap / total)
+
+
 def bench(fn, warmup: int, iters: int) -> float:
     for _ in range(warmup):
         fn()
@@ -42,7 +52,9 @@ def main() -> int:
     parser.add_argument("--artifact", default=None)
     parser.add_argument("--warmup", type=int, default=50)
     parser.add_argument("--iters", type=int, default=500)
+    parser.add_argument("--max-mem-gb", type=float, default=30.0)
     args = parser.parse_args()
+    _apply_mem_cap(args.max_mem_gb)
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")

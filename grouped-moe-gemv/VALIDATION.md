@@ -36,3 +36,24 @@ this source build; testing only Python symbol presence is not sufficient.
 
 Correctness and low-precision quality are intentionally separate contracts.
 The source-BF16 comparison is not used to hide or relabel implementation error.
+
+## SM110 (Thor) portable SIMT fallback
+
+The block-scaled mma path is SM120-only: the cute `SM120_16x8x64_TN_VS` atom
+asserts at runtime on any arch without `CUTE_ARCH_MXF4NVF4_4X_UE4M3_MMA_ENABLED`
+(`cute/arch/mma_sm120.hpp`). On SM11x devices (and under
+`FLASHRT_FORCE_SIMT=1`) `torch_binding.cpp` routes every W4A4 shape to the
+portable SIMT reference kernel that ships in the same translation unit;
+SM120 keeps the validated mma kernel unchanged.
+
+Thor validation (NVIDIA Thor, SM110, CUDA 13.0, Torch 2.11, HF installed
+artifact):
+
+```bash
+python grouped-moe-gemv/tests/test_grouped_moe_gemv.py \
+  --backend installed --mode full
+```
+
+Result: `passed 22/22`. W4A4 contract cosine across the full grid is
+`>= 0.999998` with the same NVFP4-vs-source-BF16 quality as the SM120 path
+(e.g. `M=7,top_k=8,N=128,K=512` contract cosine `0.9999987`, p99 `0.0025`).

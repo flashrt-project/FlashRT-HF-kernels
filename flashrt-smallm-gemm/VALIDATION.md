@@ -104,8 +104,7 @@ Worst built-artifact case:
 ## Known Gaps
 
 - `build.toml`, `flake.nix`, and `flake.lock` are present.
-- `/home/heima/suliang/PI/.hf-kernel-env/bin/kernel-builder-docker
-  check-config .` passed for this package.
+- `kernel-builder-docker check-config .` passed for this package.
 - `kernel-builder build --variant torch211-cxx11-cu128-x86_64-linux` passed
   for this package.
 - Full `kernel-builder build-and-copy` matrix has not been run for this
