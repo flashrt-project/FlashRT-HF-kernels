@@ -45,11 +45,6 @@ src = [
   "csrc/kernels/w4a16_edge_sm120.cuh",
   "csrc/kernels/fp4_e2m1_compat.cuh",
   "csrc/kernels/sm110_dispatch.cu",
-  "csrc/kernels/nexn2_w4a16_gemv.cuh",
-  "csrc/kernels/nexn2_moe_grouped_w4a16.cuh",
-  "csrc/kernels/grouped_w4a4_gemv_sm120.cuh",
-  "csrc/kernels/quantize_activations_nvfp4.cu",
-  "csrc/kernels/quantize_activations_nvfp4.cuh",
 ]
 cuda-flags = [
   "-DFLASHRT_W4A16_EDGE_UNROLL=2",

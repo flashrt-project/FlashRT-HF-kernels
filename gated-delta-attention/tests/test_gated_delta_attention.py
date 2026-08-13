@@ -470,13 +470,17 @@ def load_source_ops() -> SourceOps:
 def load_installed_ops(artifact: str | None):
     if artifact:
         artifact_path = Path(artifact).resolve()
+        # Support both layouts: <variant>/__init__.py (top-level module) and
+        # <variant>/gated_delta_attention/__init__.py (package subdir).
         init_path = artifact_path / "__init__.py"
         if not init_path.is_file():
-            raise RuntimeError(f"missing top-level artifact entry: {init_path}")
+            init_path = artifact_path / "gated_delta_attention" / "__init__.py"
+        if not init_path.is_file():
+            raise RuntimeError(f"missing artifact entry (top-level or package __init__.py): {artifact_path}")
         spec = importlib.util.spec_from_file_location(
             "gated_delta_attention",
             init_path,
-            submodule_search_locations=[str(artifact_path)],
+            submodule_search_locations=[str(init_path.parent)],
         )
         if spec is None or spec.loader is None:
             raise RuntimeError(f"cannot load artifact entry: {init_path}")
