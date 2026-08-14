@@ -1,5 +1,35 @@
 # sageattention2-blackwell Benchmark Results
 
+## Native V-producer parity update
+
+RTX 5090, source build, 10 warmup and 50 measured iterations. The FP8-V path
+uses the FlashRT native two-stage V producer with caller-owned BF16 transpose
+workspace. The earlier direct strided V producer is retained only as a
+low-level compatibility op and is not used by the public FP8-V wrapper.
+
+| Workload | Sq/Sk | Hq/Hkv | SDPA us | Static FP8V PW us | Static FP8V PT us | PW vs SDPA | PW/PT cosine |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| qwen3 prefill | 1024/1024 | 32/8 | 96.068 | 62.034 | 69.724 | 1.55x | 0.999998/0.999393 |
+| qwen3 prefill | 4096/4096 | 32/8 | 840.373 | 378.717 | 465.802 | 2.22x | 0.999998/0.999360 |
+| video self-attn | 6144/6144 | 32/32 | 3107.278 | 1361.851 | 1673.549 | 2.28x | 0.999997/0.999191 |
+| video self-attn | 24576/24576 | 32/32 | 45856.938 | 18484.358 | 19671.401 | 2.48x | 0.999997/0.999216 |
+| video cross-attn | 6144/1024 | 32/32 | 546.127 | 279.982 | 403.494 | 1.95x | 0.999997/0.999218 |
+| video cross-attn | 24576/1024 | 32/32 | 2015.220 | 1010.883 | 1281.487 | 1.99x | 0.999997/0.999256 |
+
+Same-process direct FlashRT-native comparison used identical inputs and timing:
+
+| Workload | Packaged full us | FlashRT native full us | Ratio | Packaged/native cosine |
+|---|---:|---:|---:|---:|
+| video self-attn 6144 | 1324.109 | 1335.062 | 0.99x | 0.9999878 |
+| video self-attn 24576 | 18461.887 | 18563.553 | 0.997x | 0.9999873 |
+| video cross-attn 6144/1024 | 277.163 | 277.826 | 0.998x | 0.9999903 |
+| video cross-attn 24576/1024 | 971.123 | 977.066 | 0.999x | 0.9999889 |
+
+The direct comparison's core-only output is bitwise identical. Small complete
+path differences come from FP8 boundary rounding between separately compiled
+CUDA artifacts; both paths satisfy the same FP8 numerical contract and SDPA
+correctness gates.
+
 ## Per-thread and Q/K producer release gate
 
 RTX 5090, PyTorch 2.11 + CUDA 12.8, 5 warmup and 20 measured iterations.

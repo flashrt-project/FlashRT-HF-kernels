@@ -182,6 +182,35 @@ void quantize_v_fp8_bf16_d128(torch::Tensor const& v, torch::Tensor& v_fp8_tpp, 
 #endif
 }
 
+void quantize_v_fp8_native_bf16_d128(
+    torch::Tensor const& v, torch::Tensor& v_tpp_bf16,
+    torch::Tensor& v_fp8_tpp, torch::Tensor& v_scale) {
+  check_bhd128(v, "v", torch::kBFloat16);
+  check_dtype(v_tpp_bf16, torch::kBFloat16, "v_tpp_bf16");
+  check_dtype(v_fp8_tpp, torch::kInt8, "v_fp8_tpp");
+  const auto padded = padded_k64(v.size(1));
+  TORCH_CHECK(v_tpp_bf16.sizes() == v_fp8_tpp.sizes(),
+              "v_tpp_bf16 and v_fp8_tpp shapes must match");
+  TORCH_CHECK(v_tpp_bf16.dim() == 4 && v_tpp_bf16.size(0) == v.size(0) &&
+              v_tpp_bf16.size(1) == kHeadDim && v_tpp_bf16.size(2) == v.size(2) &&
+              v_tpp_bf16.size(3) >= padded,
+              "V TPP buffers must have shape (batch, 128, kv_heads, padded_seqlen)");
+  check_scale(v_scale, v_scale_elems(v.size(0), v.size(2)), "v_scale");
+  check_same_device(v, v_tpp_bf16, "v", "v_tpp_bf16");
+  check_same_device(v, v_fp8_tpp, "v", "v_fp8_tpp");
+  check_same_device(v, v_scale, "v", "v_scale");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(v.device());
+  auto stream = at::cuda::getCurrentCUDAStream(v.get_device()).stream();
+  flashrt_hub::sage2::v_bf16_to_fp8_tpp_native_d128(
+      v.data_ptr(), v_tpp_bf16.data_ptr(), v_fp8_tpp.data_ptr(), v_scale.data_ptr(),
+      static_cast<int>(v.size(0)), static_cast<int>(v.size(1)),
+      static_cast<int>(v.size(2)), stream);
+#else
+  TORCH_CHECK(false, "sageattention2-blackwell was not built with CUDA support");
+#endif
+}
+
 void sage2_qk_int8_sv_f16_bf16_d128(
     torch::Tensor const& q_i8,
     torch::Tensor const& k_i8,
@@ -340,6 +369,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("quantize_qk_per_thread_bf16_d128(Tensor q, Tensor k, Tensor! q_i8, Tensor! k_i8, Tensor! q_scale, Tensor! k_scale) -> ()");
   ops.def("quantize_v_fp16_bf16_d128(Tensor v, Tensor! v_half) -> ()");
   ops.def("quantize_v_fp8_bf16_d128(Tensor v, Tensor! v_fp8_tpp, Tensor! v_scale) -> ()");
+  ops.def("quantize_v_fp8_native_bf16_d128(Tensor v, Tensor! v_tpp_bf16, Tensor! v_fp8_tpp, Tensor! v_scale) -> ()");
   ops.def("sage2_qk_int8_sv_f16_bf16_d128(Tensor q_i8, Tensor k_i8, Tensor v_half, Tensor q_scale, Tensor k_scale, float softmax_scale, bool causal, Tensor! out) -> ()");
   ops.def("sage2_qk_int8_sv_f8_bf16_d128(Tensor q_i8, Tensor k_i8, Tensor v_fp8_tpp, Tensor q_scale, Tensor k_scale, Tensor v_scale, float softmax_scale, bool causal, Tensor! out) -> ()");
   ops.def("sage2_qk_int8_pt_sv_f16_bf16_d128(Tensor q_i8, Tensor k_i8, Tensor v_half, Tensor q_scale, Tensor k_scale, float softmax_scale, bool causal, Tensor! out) -> ()");
@@ -355,6 +385,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("quantize_qk_per_thread_bf16_d128", torch::kCUDA, &quantize_qk_per_thread_bf16_d128);
   ops.impl("quantize_v_fp16_bf16_d128", torch::kCUDA, &quantize_v_fp16_bf16_d128);
   ops.impl("quantize_v_fp8_bf16_d128", torch::kCUDA, &quantize_v_fp8_bf16_d128);
+  ops.impl("quantize_v_fp8_native_bf16_d128", torch::kCUDA, &quantize_v_fp8_native_bf16_d128);
   ops.impl("sage2_qk_int8_sv_f16_bf16_d128", torch::kCUDA, &sage2_qk_int8_sv_f16_bf16_d128);
   ops.impl("sage2_qk_int8_sv_f8_bf16_d128", torch::kCUDA, &sage2_qk_int8_sv_f8_bf16_d128);
   ops.impl("sage2_qk_int8_pt_sv_f16_bf16_d128", torch::kCUDA, &sage2_qk_int8_pt_sv_f16_bf16_d128);

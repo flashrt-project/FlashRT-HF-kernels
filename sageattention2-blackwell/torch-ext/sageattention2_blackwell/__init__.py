@@ -47,6 +47,7 @@ class Sage2Workspace:
     k_scale: torch.Tensor
     out: torch.Tensor
     v_half: torch.Tensor | None = None
+    v_tpp_bf16: torch.Tensor | None = None
     v_fp8_tpp: torch.Tensor | None = None
     v_scale: torch.Tensor | None = None
     qk_quant_granularity: str = "per_warp"
@@ -154,6 +155,11 @@ def allocate_workspace(
     if fp8v:
         return Sage2Workspace(
             **common,
+            v_tpp_bf16=torch.empty(
+                (v.shape[0], HEAD_DIM, v.shape[2], padded_k64(v.shape[1])),
+                device=v.device,
+                dtype=torch.bfloat16,
+            ),
             v_fp8_tpp=_empty_v_fp8_tpp(v),
             v_scale=_empty_v_scale(v),
         )
@@ -181,6 +187,8 @@ def _check_workspace(
         raise RuntimeError("workspace Q/K scale buffers are too small")
     if fp8v:
         expected_v = (v.shape[0], HEAD_DIM, v.shape[2], padded_k64(v.shape[1]))
+        if workspace.v_tpp_bf16 is None or tuple(workspace.v_tpp_bf16.shape) != expected_v:
+            raise RuntimeError("workspace BF16 V transpose buffer does not match this call")
         if workspace.v_fp8_tpp is None or tuple(workspace.v_fp8_tpp.shape) != expected_v:
             raise RuntimeError("workspace FP8 V buffer does not match this call")
         if workspace.v_scale is None or workspace.v_scale.numel() < v_scale_elems(v.shape[0], v.shape[2]):
@@ -243,6 +251,22 @@ def _quantize_v_fp8_fake(v: torch.Tensor, v_fp8_tpp: torch.Tensor, v_scale: torc
     expected = (v.shape[0], HEAD_DIM, v.shape[2], padded_k64(v.shape[1]))
     if tuple(v_fp8_tpp.shape) != expected:
         raise RuntimeError("v_fp8_tpp shape must be (batch,128,kv_heads,padded_seqlen)")
+    if v_scale.numel() < v_scale_elems(v.shape[0], v.shape[2]):
+        raise RuntimeError("v_scale is too small")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("quantize_v_fp8_native_bf16_d128"))
+def _quantize_v_fp8_native_fake(
+    v: torch.Tensor,
+    v_tpp_bf16: torch.Tensor,
+    v_fp8_tpp: torch.Tensor,
+    v_scale: torch.Tensor,
+) -> None:
+    _check_bhd128(v, "v")
+    expected = (v.shape[0], HEAD_DIM, v.shape[2], padded_k64(v.shape[1]))
+    if tuple(v_tpp_bf16.shape) != expected or tuple(v_fp8_tpp.shape) != expected:
+        raise RuntimeError("V TPP buffers must have shape (batch,128,kv_heads,padded_seqlen)")
     if v_scale.numel() < v_scale_elems(v.shape[0], v.shape[2]):
         raise RuntimeError("v_scale is too small")
     return None
@@ -362,12 +386,15 @@ def quantize_v_fp8_bf16_d128(
     v: torch.Tensor,
     v_fp8_tpp: Optional[torch.Tensor] = None,
     v_scale: Optional[torch.Tensor] = None,
+    v_tpp_bf16: Optional[torch.Tensor] = None,
 ):
     if v_fp8_tpp is None:
         v_fp8_tpp = _empty_v_fp8_tpp(v)
     if v_scale is None:
         v_scale = _empty_v_scale(v)
-    ops.quantize_v_fp8_bf16_d128(v, v_fp8_tpp, v_scale)
+    if v_tpp_bf16 is None:
+        v_tpp_bf16 = torch.empty_like(v_fp8_tpp, dtype=torch.bfloat16)
+    ops.quantize_v_fp8_native_bf16_d128(v, v_tpp_bf16, v_fp8_tpp, v_scale)
     return v_fp8_tpp, v_scale
 
 
@@ -474,7 +501,7 @@ def sage2_prefill_fp8v_bf16_d128(
         q_i8, q_scale = quantize_q_bf16_d128(q, workspace.q_i8, workspace.q_scale)
         k_i8, k_scale = quantize_k_bf16_d128(k, workspace.k_i8, workspace.k_scale)
     v_fp8_tpp, v_scale = quantize_v_fp8_bf16_d128(
-        v, workspace.v_fp8_tpp, workspace.v_scale
+        v, workspace.v_fp8_tpp, workspace.v_scale, workspace.v_tpp_bf16
     )
     if out is None:
         out = workspace.out

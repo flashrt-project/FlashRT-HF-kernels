@@ -5,6 +5,8 @@ The SageAttention2 CUDA implementation is synchronized against FlashRT PR
 `f57459d1746128e81e5fd9e8d8173034f67a255c`.
 
 The package preserves the native quantization expressions and attention core.
+The FP8-V convenience path also preserves the native two-stage coalesced
+transpose/pad/permutation followed by vectorized per-channel FP8 quantization.
 Permitted package-only differences are:
 
 - Tensor/custom-op bindings and caller-owned workspace APIs;

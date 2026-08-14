@@ -10,7 +10,8 @@ The package exposes Tensor APIs for:
 
 - Q/K BF16 -> int8 per-warp or SageAttention-compatible per-thread quantization.
 - V BF16 -> FP16 contiguous layout.
-- V BF16 -> FP8 transposed/padded Sage layout.
+- V BF16 -> FP8 transposed/padded Sage layout through the same two-stage,
+  coalesced producer used by the FlashRT native runtime.
 - Sage2 attention over already-quantized Q/K and FP16 or FP8 V.
 - Convenience BF16 wrapper APIs that quantize and run attention in one call.
 - Caller-owned `Sage2Workspace` buffers for allocation-free CUDA Graph replay.
@@ -38,7 +39,7 @@ The complete FlashRT runtime and serving pipeline live upstream at
 - `quantize_k_bf16_d128(k, k_i8=None, k_scale=None)`
 - `quantize_qk_bf16_d128(q, k, ..., qk_quant_granularity="per_warp")`
 - `quantize_v_fp16_bf16_d128(v, v_half=None)`
-- `quantize_v_fp8_bf16_d128(v, v_fp8_tpp=None, v_scale=None)`
+- `quantize_v_fp8_bf16_d128(v, v_fp8_tpp=None, v_scale=None, v_tpp_bf16=None)`
 - `sage2_qk_int8_sv_f16_bf16_d128(q_i8, k_i8, v_half, q_scale, k_scale, softmax_scale=None, causal=False, out=None)`
 - `sage2_qk_int8_sv_f8_bf16_d128(q_i8, k_i8, v_fp8_tpp, q_scale, k_scale, v_scale, softmax_scale=None, causal=False, out=None)`
 - `sage2_prefill_f16_bf16_d128(q, k, v, softmax_scale=None, causal=False, out=None)`
@@ -82,6 +83,10 @@ Passing `workspace=` makes the Python wrapper allocation-free. The default
 per-warp path keeps the independently tuned Q and K producers: on the release
 shape grid they are faster than attempted single-launch variants. The optional
 SageAttention per-thread contract uses a dedicated Q/K producer:
+
+The FP8-V workspace includes the BF16 transpose/pad intermediate required by
+the native two-stage V producer. Allocate it before capture; the hot path does
+not allocate or change pointers.
 
 ```python
 workspace = ops.allocate_workspace(

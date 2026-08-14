@@ -92,12 +92,14 @@ class SourceOps:
         self._ops.quantize_v_fp16_bf16_d128(v, v_half)
         return v_half
 
-    def quantize_v_fp8_bf16_d128(self, v, v_fp8_tpp=None, v_scale=None):
+    def quantize_v_fp8_bf16_d128(self, v, v_fp8_tpp=None, v_scale=None, v_tpp_bf16=None):
         if v_fp8_tpp is None:
             v_fp8_tpp = torch.empty((v.shape[0], 128, v.shape[2], self.padded_k64(v.shape[1])), device=v.device, dtype=torch.int8)
         if v_scale is None:
             v_scale = torch.empty((self.v_scale_elems(v.shape[0], v.shape[2]),), device=v.device, dtype=torch.float32)
-        self._ops.quantize_v_fp8_bf16_d128(v, v_fp8_tpp, v_scale)
+        if v_tpp_bf16 is None:
+            v_tpp_bf16 = torch.empty_like(v_fp8_tpp, dtype=torch.bfloat16)
+        self._ops.quantize_v_fp8_native_bf16_d128(v, v_tpp_bf16, v_fp8_tpp, v_scale)
         return v_fp8_tpp, v_scale
 
     def allocate_workspace(self, q, k, v, *, fp8v=True, qk_quant_granularity="per_warp"):
@@ -111,11 +113,13 @@ class SourceOps:
             k_scale=torch.empty((kn,), device=k.device, dtype=torch.float32),
             out=torch.empty_like(q),
             v_half=None,
+            v_tpp_bf16=None,
             v_fp8_tpp=None,
             v_scale=None,
             qk_quant_granularity=qk_quant_granularity,
         )
         if fp8v:
+            common["v_tpp_bf16"] = torch.empty((v.shape[0], 128, v.shape[2], self.padded_k64(v.shape[1])), device=v.device, dtype=torch.bfloat16)
             common["v_fp8_tpp"] = torch.empty((v.shape[0], 128, v.shape[2], self.padded_k64(v.shape[1])), device=v.device, dtype=torch.int8)
             common["v_scale"] = torch.empty((self.v_scale_elems(v.shape[0], v.shape[2]),), device=v.device, dtype=torch.float32)
         else:
@@ -156,7 +160,7 @@ class SourceOps:
         else:
             q_i8, q_scale = self.quantize_q_bf16_d128(q, workspace.q_i8, workspace.q_scale)
             k_i8, k_scale = self.quantize_k_bf16_d128(k, workspace.k_i8, workspace.k_scale)
-        v_fp8_tpp, v_scale = self.quantize_v_fp8_bf16_d128(v, workspace.v_fp8_tpp, workspace.v_scale)
+        v_fp8_tpp, v_scale = self.quantize_v_fp8_bf16_d128(v, workspace.v_fp8_tpp, workspace.v_scale, workspace.v_tpp_bf16)
         out = workspace.out if out is None else out
         return self.sage2_qk_int8_sv_f8_bf16_d128(q_i8, k_i8, v_fp8_tpp, q_scale, k_scale, v_scale, softmax_scale=softmax_scale, causal=causal, out=out, qk_quant_granularity=qk_quant_granularity)
 
@@ -321,6 +325,53 @@ def run_quantization_contract_gate(ops) -> None:
     print("PASS quantization_contract: combined per-warp bitwise; per-thread official grouping/rounding")
 
 
+def run_v_producer_contract_gate(ops) -> None:
+    _, _, v = make_inputs(1, 70, 4, 4)
+    workspace = ops.allocate_workspace(v, v, v, fp8v=True)
+    ops.quantize_v_fp8_bf16_d128(
+        v, workspace.v_fp8_tpp, workspace.v_scale, workspace.v_tpp_bf16
+    )
+    padded = ops.padded_k64(v.shape[1])
+    out_pos = torch.arange(padded, device=v.device)
+    lane = out_pos % 16
+    inverse_lane = torch.where(
+        lane < 2, lane,
+        torch.where(
+            lane < 4, lane + 6,
+            torch.where(
+                lane < 6, lane - 2,
+                torch.where(
+                    lane < 8, lane + 4,
+                    torch.where(
+                        lane < 10, lane - 4,
+                        torch.where(lane < 12, lane + 2, torch.where(lane < 14, lane - 6, lane)),
+                    ),
+                ),
+            ),
+        ),
+    )
+    source_pos = (out_pos // 16) * 16 + inverse_lane
+    expected = torch.zeros_like(workspace.v_tpp_bf16)
+    valid = source_pos < v.shape[1]
+    expected[..., valid] = v[:, source_pos[valid], :, :].permute(0, 3, 2, 1)
+    if not torch.equal(workspace.v_tpp_bf16, expected):
+        raise AssertionError("V transpose/pad/permutation differs from the native contract")
+    expected_scale = (
+        expected.float().abs().amax(dim=-1).clamp_min(1.0e-7) / 448.0
+    ).permute(0, 2, 1).flatten()
+    if not torch.equal(workspace.v_scale, expected_scale):
+        raise AssertionError("V per-channel FP8 scales differ from the native contract")
+    decoded = workspace.v_fp8_tpp.view(torch.float8_e4m3fn).float()
+    reconstructed = decoded * workspace.v_scale.reshape(1, v.shape[2], 128).permute(0, 2, 1).unsqueeze(-1)
+    max_error = float((reconstructed - expected.float()).abs().max().item())
+    max_allowed = float(expected_scale.max().item()) * 16.0 + 1.0e-6
+    if max_error > max_allowed:
+        raise AssertionError(
+            f"V FP8 producer reconstruction error is too large: {max_error} > {max_allowed}"
+        )
+    print(f"PASS v_producer_contract: native layout/scales exact, max reconstruction error={max_error:.6f}")
+
+
 def run_static_workspace_gate(ops, granularity: str = "per_warp") -> None:
     q, k, v = make_inputs(1, 128, 24, 24)
     workspace = ops.allocate_workspace(q, k, v, fp8v=True, qk_quant_granularity=granularity)
@@ -328,7 +379,7 @@ def run_static_workspace_gate(ops, granularity: str = "per_warp") -> None:
         tensor.data_ptr()
         for tensor in (
             workspace.q_i8, workspace.k_i8, workspace.q_scale,
-            workspace.k_scale, workspace.v_fp8_tpp, workspace.v_scale,
+            workspace.k_scale, workspace.v_tpp_bf16, workspace.v_fp8_tpp, workspace.v_scale,
             workspace.out,
         )
     )
@@ -342,7 +393,7 @@ def run_static_workspace_gate(ops, granularity: str = "per_warp") -> None:
         tensor.data_ptr()
         for tensor in (
             workspace.q_i8, workspace.k_i8, workspace.q_scale,
-            workspace.k_scale, workspace.v_fp8_tpp, workspace.v_scale,
+            workspace.k_scale, workspace.v_tpp_bf16, workspace.v_fp8_tpp, workspace.v_scale,
             workspace.out,
         )
     ):
@@ -368,6 +419,7 @@ def main() -> None:
     torch.manual_seed(2026)
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     run_quantization_contract_gate(ops)
+    run_v_producer_contract_gate(ops)
     cases = [
         ("wan_noncausal_s128_f16v", 1, 128, 24, 24, False, False),
         ("qwen_causal_gqa_s128_f16v", 1, 128, 32, 8, True, False),

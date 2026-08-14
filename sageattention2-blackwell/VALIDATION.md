@@ -36,6 +36,7 @@ The release gate also checks:
 
 - combined public Q/K wrapper output against the existing per-warp producer contract;
 - per-thread scales and INT8 values against SageAttention grouping/rounding;
+- exact native V transpose/pad/permutation and per-channel scale contracts;
 - stable pointers and bitwise replay under CUDA Graph for both granularities;
 - explicit rejection of invalid shapes and undersized workspace buffers.
 
@@ -48,3 +49,9 @@ python sageattention2-blackwell/benchmarks/benchmark.py --backend source --mode 
 ```
 
 Results are recorded in `benchmarks/RESULTS.md`.
+
+The native parity gate uses the same inputs, already-quantized buffers,
+caller-owned workspaces, warmup, CUDA events, and process for both paths. On
+RTX 5090 the packaged core is within 1% of the FlashRT raw core with bitwise
+identical core output. The complete FP8-V wrapper is within measurement noise
+of the FlashRT native producer+core path on self- and cross-attention shapes.

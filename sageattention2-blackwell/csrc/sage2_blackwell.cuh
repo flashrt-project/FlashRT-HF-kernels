@@ -51,6 +51,16 @@ void v_bf16_to_fp8_tpp_d128(
     int heads,
     cudaStream_t stream);
 
+void v_bf16_to_fp8_tpp_native_d128(
+    const void* v_bf16,
+    void* v_tpp_bf16,
+    void* v_fp8,
+    void* v_scale,
+    int batch,
+    int seqlen,
+    int heads,
+    cudaStream_t stream);
+
 int sage2_qk_int8_sv_f16_bf16_gqa_d128(
     const void* q_int8,
     const void* k_int8,
