@@ -20,6 +20,7 @@
 #include <cutlass/array.h>
 #include <cutlass/numeric_types.h>
 #include <cutlass/numeric_conversion.h>
+#include <cuda_bf16.h>
 #include "cutlass/pipeline/pipeline.hpp"
 
 #include "cute/tensor.hpp"
@@ -37,6 +38,7 @@ struct CollectiveMainloopFwd {
 
     using Element = typename Ktraits::Element;
     using ElementSF = typename Ktraits::ElementSF;
+    using ElementDS = typename Ktraits::ElementDS;
     // using TMAElement = Element;
     // using TMAElementSF = typename Ktraits::ElementSF;
     using TileShape_MNK = typename Ktraits::TileShape_MNK;
@@ -90,7 +92,7 @@ struct CollectiveMainloopFwd {
 
     using TMA_DS = decltype(make_tma_copy(
         GmemTiledCopy{},
-        make_tensor(make_gmem_ptr(static_cast<float const*>(nullptr)), LayoutDS{}),
+        make_tensor(make_gmem_ptr(static_cast<ElementDS const*>(nullptr)), LayoutDS{}),
         take<0, 2>(SmemLayoutDS{}),
         make_shape(shape<0>(TileShape_MNK{}), shape<1>(TileShape_MNK{})),
         _1{}));
@@ -145,7 +147,7 @@ struct CollectiveMainloopFwd {
 
     static constexpr uint32_t TmaTransactionBytesK = static_cast<uint32_t>(
         cutlass::bits_to_bytes(cosize(take<0,2>(SmemLayoutSFK{})) * cute::sizeof_bits_v<ElementSF>) +
-        cutlass::bits_to_bytes(cosize(take<0,2>(SmemLayoutDS{})) * cute::sizeof_bits_v<float>) +
+        cutlass::bits_to_bytes(cosize(take<0,2>(SmemLayoutDS{})) * cute::sizeof_bits_v<ElementDS>) +
         cutlass::bits_to_bytes(size(take<0,2>(SmemLayoutK{})) * sizeof_bits<Element>::value));
 
     static constexpr uint32_t TmaTransactionBytesV = static_cast<uint32_t>(
@@ -170,7 +172,7 @@ struct CollectiveMainloopFwd {
         ShapeSF const shape_SFK{};
         ElementSF const* ptr_SFVt{nullptr};
         ShapeSF const shape_SFVt{};
-        float const* ptr_ds;
+        ElementDS const* ptr_ds;
         ShapeQKV const shape_ds;
         StrideQKV const stride_ds;
         float const softmax_scale_log2;
@@ -689,13 +691,30 @@ struct CollectiveMainloopFwd {
         //     cute::gemm(tiled_mma_pv, make_zip_tensor(tOrP(_, _, block_id), tOrSFP(_, _, block_id)), make_zip_tensor(tOrVt(_, _, block_id), tOrSFVt(_, _, block_id)), tOrO);
         // };
         auto add_delta_s = [&](auto& acc) {
-            auto tSsDS_stage = recast<float4>(sDS(_, _, smem_pipe_read_k.index()));
             auto acc_float4 = recast<float4>(acc);
             int quad_id = (threadIdx.x % 4) * 2;
             for (int i = 0; i < 4; i++) {
                 auto num = quad_id + i * 8;
-                float4 delta_s_0 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num, _0{}));
-                float4 delta_s_1 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num + 1, _0{}));
+                float4 delta_s_0;
+                float4 delta_s_1;
+                if constexpr (std::is_same_v<ElementDS, float>) {
+                    auto tSsDS_stage = recast<float4>(sDS(_, _, smem_pipe_read_k.index()));
+                    delta_s_0 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num, _0{}));
+                    delta_s_1 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num + 1, _0{}));
+                } else {
+                    const int stage = smem_pipe_read_k.index();
+                    const int col0 = num * 4;
+                    const int col1 = (num + 1) * 4;
+                    auto load_bf16x4 = [&](int col) {
+                        const auto* ptr = reinterpret_cast<const __nv_bfloat162*>(
+                            &sDS(_0{}, col, stage));
+                        const float2 lo = __bfloat1622float2(ptr[0]);
+                        const float2 hi = __bfloat1622float2(ptr[1]);
+                        return make_float4(lo.x, lo.y, hi.x, hi.y);
+                    };
+                    delta_s_0 = load_bf16x4(col0);
+                    delta_s_1 = load_bf16x4(col1);
+                }
                 acc_float4(make_coord(make_coord(_0{}, _0{}), _0{}), _0{}, i) = delta_s_0;
                 acc_float4(make_coord(make_coord(_0{}, _0{}), _1{}), _0{}, i) = delta_s_0;
                 acc_float4(make_coord(make_coord(_0{}, _1{}), _0{}), _0{}, i) = delta_s_1;

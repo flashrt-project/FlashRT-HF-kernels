@@ -36,6 +36,18 @@ class SourceOps:
     def quantize_v_fp4_nhd(self, x, packed, sf):
         self.ops.quantize_v_fp4_nhd(x, packed, sf)
 
+    def fused(self, q, k, v, ws):
+        base, kc, qm, km, db = ws
+        b, length, h, d = q.shape; groups = qm.shape[2]
+        torch.mean(k, dim=1, out=km)
+        self.ops.quantize_q_fp4_centered_nhd(q, qm, base[0], base[3])
+        self.ops.quantize_k_fp4_centered_nhd(k, km, base[1], base[4], kc)
+        self.ops.quantize_v_fp4_nhd(v, base[2], base[5])
+        b, h, g, d = qm.shape
+        lp = kc.shape[2]
+        torch.bmm(qm.view(b*h,g,d), kc.view(b*h,lp,d).transpose(1,2), out=db.view(b*h,g,lp))
+        return self.attention(base, db, q.shape[1], True)[:, :q.shape[1]]
+
     def attention(self, ws, delta_s, unpadded_k, per_block_mean):
         self.ops.blockscaled_fp4_attention_static(
             ws[0], ws[1], ws[2], ws[3], ws[4], ws[5], delta_s,
@@ -114,16 +126,19 @@ def load_source_ops():
 
 
 def preprocess(q, k, v, per_block_mean):
-    # Inputs and outputs are NHD. Hot video shapes are already 128-aligned.
+    # Inputs and outputs are NHD; pad after K centering to preserve the contract.
     b, s, h, d = q.shape
-    if s % 128:
-        raise RuntimeError("test inputs must be 128-aligned")
+    padded = (s + 127) // 128 * 128
     qh = q.transpose(1, 2).contiguous()
     kh = k.transpose(1, 2).contiguous()
     vh = v.transpose(1, 2).contiguous()
     kh = kh - kh.mean(dim=-2, keepdim=True)
+    if padded != s:
+        qh = torch.nn.functional.pad(qh, (0, 0, 0, padded - s))
+        kh = torch.nn.functional.pad(kh, (0, 0, 0, padded - s))
+        vh = torch.nn.functional.pad(vh, (0, 0, 0, padded - s))
     if per_block_mean:
-        qm = qh.reshape(b, h, s // 128, 128, d).mean(dim=-2)
+        qm = qh.reshape(b, h, padded // 128, 128, d).mean(dim=-2)
         qh = qh - qm.repeat_interleave(128, dim=-2)
     else:
         qm = qh.mean(dim=-2, keepdim=True)
@@ -155,6 +170,37 @@ def alloc(q):
         torch.empty((b, h, s), device=q.device, dtype=torch.float32),
         torch.empty((1,), device=q.device, dtype=torch.int32),
     )
+
+
+def alloc_fused(q):
+    b, length, h, d = q.shape
+    lp = (length + 127) // 128 * 128
+    padded = torch.empty((b, lp, h, d), device=q.device, dtype=q.dtype)
+    base = list(alloc(padded))
+    groups = lp // 128
+    return (
+        base,
+        torch.empty((b,h,lp,d),device=q.device,dtype=q.dtype),
+        torch.empty((b,h,groups,d),device=q.device,dtype=q.dtype),
+        torch.empty((b,h,d),device=q.device,dtype=q.dtype),
+        torch.empty((b,h,groups,lp),device=q.device,dtype=q.dtype),
+    )
+
+
+def run_fused_prep_case(ops, s, d):
+    q=torch.randn((1,s,2,d),device="cuda",dtype=torch.bfloat16)
+    k=torch.randn_like(q); v=torch.randn_like(q)
+    ws=alloc_fused(q); got=ops.fused(q,k,v,ws)
+    qn,kn,vn,ds,*_=preprocess(q,k,v,True); legacy=list(alloc(qn))
+    ops.quantize_q_fp4_nhd(qn,legacy[0],legacy[3]); ops.quantize_k_fp4_nhd(kn,legacy[1],legacy[4]); ops.quantize_v_fp4_nhd(vn,legacy[2],legacy[5])
+    ref=ops.attention(legacy,ds,s,True)[:,:s]
+    cos=cosine(got,ref); max_abs=(got.float()-ref.float()).abs().max().item()
+    if cos < 0.99999: raise AssertionError(f"fused prep parity failed: cos={cos} max={max_abs}")
+    graph=torch.cuda.CUDAGraph(); torch.cuda.synchronize()
+    with torch.cuda.graph(graph): captured=ops.fused(q,k,v,ws)
+    graph.replay(); first=captured.clone(); graph.replay()
+    if not torch.equal(first,captured): raise AssertionError("fused prep graph replay is not bitwise")
+    print(f"PASS fused_prep S={s} D={d}: cos={cos:.8f} max={max_abs:.6f}, graph=bitwise")
 
 
 def cosine(a, b):
@@ -212,6 +258,14 @@ def run_invalid_contract_gate(ops):
     else:
         raise AssertionError("invalid delta_s did not raise")
 
+    wrong_dtype = torch.empty((1, 2, 1, 128), device="cuda", dtype=torch.float16)
+    try:
+        ops.attention(ws, wrong_dtype, 128, False)
+    except RuntimeError:
+        print("PASS invalid_delta_dtype: explicit RuntimeError")
+    else:
+        raise AssertionError("invalid delta_s dtype did not raise")
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -230,6 +284,8 @@ def main():
             "layouts": ("NHD",),
             "caller_owned_workspace": True,
             "cuda_graph_safe": True,
+            "fused_prep": True,
+            "delta_dtypes": ("float32", "bfloat16"),
         }
         actual = module.capabilities()
         for key, value in expected.items():
@@ -243,6 +299,10 @@ def main():
         for per_block_mean in (False, True):
             run_case(ops, s, d, per_block_mean)
     run_invalid_contract_gate(ops)
+    run_fused_prep_case(ops, 256, 128)
+    if args.mode == "full":
+        run_fused_prep_case(ops, 384, 64)
+        run_fused_prep_case(ops, 5070, 128)
 
 
 if __name__ == "__main__":

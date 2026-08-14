@@ -129,13 +129,16 @@ struct PackedVec {
   typename TypeConverter<Type>::Type elts[8];
 };
 
-template <uint32_t head_dim, uint32_t BLOCK_SIZE, bool permute, typename T>
+template <uint32_t head_dim, uint32_t BLOCK_SIZE, bool permute, typename T,
+          bool compute_group_mean = false>
 __global__ void scaled_fp4_quant_kernel(
     const T* input, uint8_t* output, uint8_t* output_sf,
     int batch_size, int num_heads, int num_tokens,
     int stride_bz_input, int stride_h_input, int stride_seq_input,
     int stride_bz_output, int stride_h_output, int stride_seq_output,
-    int stride_bz_output_sf, int stride_h_output_sf, int stride_seq_output_sf) {
+    int stride_bz_output_sf, int stride_h_output_sf, int stride_seq_output_sf,
+    const T* center_bf16, int center_groups,
+    T* centered_hnd, int centered_tokens, T* computed_group_mean) {
   static_assert(std::is_same<T, half>::value || std::is_same<T, nv_bfloat16>::value, "Only half and bfloat16 input are supported");
   using PackedVec = PackedVec<T>;
 
@@ -179,6 +182,56 @@ __global__ void scaled_fp4_quant_kernel(
                                           head_id * stride_h_input +   // head dim
                                           load_token_id * stride_seq_input + // seq dim
                                           (threadIdx.x % NUM_THREADS_PER_TOKEN) * CVT_FP4_ELTS_PER_THREAD)[0]; // feature dim
+  }
+
+  if constexpr (compute_group_mean) {
+    __shared__ T group_input[BLOCK_SIZE * head_dim];
+    __shared__ T group_mean[head_dim];
+    const int logical_token = threadIdx.x / NUM_THREADS_PER_TOKEN;
+    const int logical_col = (threadIdx.x % NUM_THREADS_PER_TOKEN) * CVT_FP4_ELTS_PER_THREAD;
+    reinterpret_cast<PackedVec*>(group_input + logical_token * head_dim + logical_col)[0] = in_vec;
+    __syncthreads();
+    if (threadIdx.x < head_dim) {
+      float sum = 0.0f;
+      #pragma unroll 4
+      for (int row = 0; row < BLOCK_SIZE; ++row) {
+        if (token_block_id * BLOCK_SIZE + row < num_tokens) {
+          if constexpr (std::is_same<T, half>::value) {
+            sum += __half2float(reinterpret_cast<half*>(group_input)[row * head_dim + threadIdx.x]);
+          } else {
+            sum += __bfloat162float(reinterpret_cast<nv_bfloat16*>(group_input)[row * head_dim + threadIdx.x]);
+          }
+        }
+      }
+      T rounded;
+      if constexpr (std::is_same<T, half>::value) rounded = __float2half_rn(sum / BLOCK_SIZE);
+      else rounded = __float2bfloat16_rn(sum / BLOCK_SIZE);
+      group_mean[threadIdx.x] = rounded;
+      computed_group_mean[
+          ((batch_id * num_heads + head_id) * gridDim.x + token_block_id) * head_dim + threadIdx.x] = rounded;
+    }
+    __syncthreads();
+    const PackedVec center_vec = reinterpret_cast<PackedVec const*>(group_mean + logical_col)[0];
+    #pragma unroll
+    for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 2; ++i) {
+      in_vec.elts[i] = __hsub2(in_vec.elts[i], center_vec.elts[i]);
+    }
+  }
+
+  const int col = (threadIdx.x % NUM_THREADS_PER_TOKEN) * CVT_FP4_ELTS_PER_THREAD;
+  if (center_bf16 != nullptr && load_token_id < num_tokens) {
+    const int group = center_groups == 1 ? 0 : load_token_id / BLOCK_SIZE;
+    const T* center = center_bf16 +
+        ((batch_id * num_heads + head_id) * center_groups + group) * head_dim + col;
+    const PackedVec center_vec = reinterpret_cast<PackedVec const*>(center)[0];
+    #pragma unroll
+    for (int i = 0; i < CVT_FP4_ELTS_PER_THREAD / 2; ++i) {
+      in_vec.elts[i] = __hsub2(in_vec.elts[i], center_vec.elts[i]);
+    }
+  }
+  if (centered_hnd != nullptr && load_token_id < centered_tokens) {
+    reinterpret_cast<PackedVec*>(centered_hnd +
+        ((batch_id * num_heads + head_id) * centered_tokens + load_token_id) * head_dim + col)[0] = in_vec;
   }
 
   // calculate max of every consecutive 16 elements
@@ -469,7 +522,8 @@ void scaled_fp4_quant(torch::Tensor const& input,
               batch_size, num_heads, num_tokens,
               stride_bz_input, stride_h_input, stride_seq_input,
               stride_bz_output, stride_h_output, stride_seq_output,
-              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf);
+              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf,
+              nullptr, 0, nullptr, 0, nullptr);
     });
   });
 }
@@ -561,8 +615,81 @@ void scaled_fp4_quant_permute(torch::Tensor const& input,
               batch_size, num_heads, num_tokens,
               stride_bz_input, stride_h_input, stride_seq_input,
               stride_bz_output, stride_h_output, stride_seq_output,
-              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf);
+              stride_bz_output_sf, stride_h_output_sf, stride_seq_output_sf,
+              nullptr, 0, nullptr, 0, nullptr);
     });
+  });
+}
+
+void scaled_fp4_quant_centered_q(torch::Tensor const& input,
+                                 torch::Tensor const& center,
+                                 torch::Tensor const& output,
+                                 torch::Tensor const& output_sf) {
+  constexpr int BLOCK_SIZE = 128;
+  CHECK_CUDA(input); CHECK_CUDA(center); CHECK_CUDA(output); CHECK_CUDA(output_sf);
+  CHECK_DTYPE(input, at::ScalarType::BFloat16);
+  CHECK_DTYPE(center, at::ScalarType::BFloat16);
+  CHECK_DTYPE(output, at::ScalarType::Byte);
+  CHECK_DTYPE(output_sf, at::ScalarType::Float8_e4m3fn);
+  CHECK_CONTIGUOUS(input); CHECK_CONTIGUOUS(center);
+  CHECK_CONTIGUOUS(output); CHECK_CONTIGUOUS(output_sf);
+  const int b = input.size(0), tokens = input.size(1), h = input.size(2), d = input.size(3);
+  const int padded = ((tokens + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+  CHECK_SHAPE(center, b, h, padded / BLOCK_SIZE, d);
+  CHECK_SHAPE(output, b, h, padded, d / 2);
+  CHECK_SHAPE(output_sf, b, h, padded, d / 16);
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
+  DISPATCH_HEAD_DIM(d, HEAD_DIM, {
+    dim3 block(BLOCK_SIZE * HEAD_DIM / CVT_FP4_ELTS_PER_THREAD);
+    dim3 grid(padded / BLOCK_SIZE, b, h);
+    scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, false, nv_bfloat16, true>
+        <<<grid, block, 0, stream>>>(
+            reinterpret_cast<const nv_bfloat16*>(input.data_ptr()),
+            reinterpret_cast<uint8_t*>(output.data_ptr()),
+            reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
+            b, h, tokens, input.stride(0), input.stride(2), input.stride(1),
+            output.stride(0), output.stride(1), output.stride(2),
+            output_sf.stride(0), output_sf.stride(1), output_sf.stride(2),
+            nullptr, 0, nullptr, 0,
+            reinterpret_cast<nv_bfloat16*>(center.data_ptr()));
+  });
+}
+
+void scaled_fp4_quant_centered_k(torch::Tensor const& input,
+                                 torch::Tensor const& center,
+                                 torch::Tensor const& output,
+                                 torch::Tensor const& output_sf,
+                                 torch::Tensor& centered_hnd) {
+  constexpr int BLOCK_SIZE = 128;
+  CHECK_CUDA(input); CHECK_CUDA(center); CHECK_CUDA(output); CHECK_CUDA(output_sf);
+  CHECK_CUDA(centered_hnd);
+  CHECK_DTYPE(input, at::ScalarType::BFloat16);
+  CHECK_DTYPE(center, at::ScalarType::BFloat16);
+  CHECK_DTYPE(output, at::ScalarType::Byte);
+  CHECK_DTYPE(output_sf, at::ScalarType::Float8_e4m3fn);
+  CHECK_DTYPE(centered_hnd, at::ScalarType::BFloat16);
+  CHECK_CONTIGUOUS(input); CHECK_CONTIGUOUS(center);
+  CHECK_CONTIGUOUS(output); CHECK_CONTIGUOUS(output_sf); CHECK_CONTIGUOUS(centered_hnd);
+  const int b = input.size(0), tokens = input.size(1), h = input.size(2), d = input.size(3);
+  const int padded = ((tokens + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
+  CHECK_SHAPE(center, b, h, d);
+  CHECK_SHAPE(output, b, h, padded, d / 2);
+  CHECK_SHAPE(output_sf, b, h, padded, d / 16);
+  CHECK_SHAPE(centered_hnd, b, h, padded, d);
+  auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
+  DISPATCH_HEAD_DIM(d, HEAD_DIM, {
+    dim3 block(BLOCK_SIZE * HEAD_DIM / CVT_FP4_ELTS_PER_THREAD);
+    dim3 grid(padded / BLOCK_SIZE, b, h);
+    scaled_fp4_quant_kernel<HEAD_DIM, BLOCK_SIZE, true, nv_bfloat16>
+        <<<grid, block, 0, stream>>>(
+            reinterpret_cast<const nv_bfloat16*>(input.data_ptr()),
+            reinterpret_cast<uint8_t*>(output.data_ptr()),
+            reinterpret_cast<uint8_t*>(output_sf.data_ptr()),
+            b, h, tokens, input.stride(0), input.stride(2), input.stride(1),
+            output.stride(0), output.stride(1), output.stride(2),
+            output_sf.stride(0), output_sf.stride(1), output_sf.stride(2),
+            reinterpret_cast<const nv_bfloat16*>(center.data_ptr()), 1,
+            reinterpret_cast<nv_bfloat16*>(centered_hnd.data_ptr()), padded, nullptr);
   });
 }
 

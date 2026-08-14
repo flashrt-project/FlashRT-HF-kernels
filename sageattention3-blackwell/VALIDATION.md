@@ -9,6 +9,13 @@ The full matrix covers D64 and D128, both `per_block_mean` modes, video lengths
 6144 and 24576, and audio length 2688. Every case also checks caller-owned
 pointer stability and bitwise CUDA Graph replay.
 
+The fused raw-BF16 API is compared directly with the former two-stage contract.
+Acceptance requires cosine >= 0.99999, with aligned cases expected to be
+bitwise equal. The matrix includes an unaligned `S=5070` case to validate
+internal zero padding and output cropping. The RTX 5090 performance gate is
+all-in latency <= 13.0 ms for `B=1,H=32,S=24576,D=128`; allocation is excluded,
+but centering, quantization, correction GEMM and attention are all included.
+
 ```bash
 python sageattention3-blackwell/tests/test_sageattention3_blackwell.py \
   --backend source --mode full

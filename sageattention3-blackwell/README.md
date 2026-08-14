@@ -10,9 +10,10 @@ the higher-fidelity `flashrt/sageattention2-blackwell` default.
 - GPU: SM120a/SM121a Blackwell
 - input layout: contiguous NHD `[batch, sequence, heads, head_dim]`
 - head dimensions: 64 and 128
-- Q/K/V sequence storage must be padded to a multiple of 128
-- Q/K/V must follow SageAttention3 preprocessing: K sequence mean removal,
-  Q block-mean removal, and caller-computed FP32 `delta_s`
+- preferred fused input is raw contiguous BF16 NHD; it accepts arbitrary
+  positive sequence lengths and pads/crops internally
+- the low-level API retains the pre-centered, 128-padded Q/K/V and FP32
+  `delta_s` contract
 - output dtype matches the input activation dtype (BF16 or FP16)
 - all hot-path outputs are caller-owned through `Sage3Workspace`
 - no MQA/GQA in this version
@@ -27,20 +28,31 @@ against their own model-level quality contract.
 from kernels import get_kernel
 
 sage3 = get_kernel("flashrt/sageattention3-blackwell", version=1)
-workspace = sage3.allocate_workspace(q_centered, k_centered, v_padded)
+out_buffer = torch.empty_like(q)
+workspace = sage3.allocate_fused_workspace(q, k, v, out=out_buffer)
 
 # Allocate before CUDA Graph capture.
-sage3.prepare_qkv_fp4_nhd(q_centered, k_centered, v_padded, workspace)
-out = sage3.blockscaled_fp4_attention_static(
-    workspace,
-    delta_s,
-    unpadded_k=original_k_length,
-    per_block_mean=True,
+out = sage3.sage3_prefill_fp4_bf16(
+    q, k, v, out=out_buffer, workspace=workspace, per_block_mean=True,
 )
 ```
 
-`out` is an NHD view over the caller-owned output buffer. The workspace object
-must remain alive through execution and graph replay.
+The fused entry manages K centering, Q block means/centering, FP4 Q/K/V
+quantization and the BF16 correction matrix inside the package. Centering and
+quantization use packaged CUDA operators; K reduction and correction GEMM use
+allocation-free ATen/cuBLAS operations writing into the caller-owned workspace.
+It avoids large caller-side center/pad staging tensors and lets the attention
+core consume the BF16 correction directly. `out` is an NHD view over
+caller-owned storage; the workspace must remain alive through execution and
+graph replay.
+
+The existing `allocate_workspace` / `prepare_qkv_fp4_nhd` /
+`blockscaled_fp4_attention_static` APIs remain available for advanced callers
+that already own preprocessed tensors.
+
+Direct `out=` binding is zero-copy for 128-aligned lengths. For an unaligned
+length, omit `out`; the returned tensor is a cropped view of the padded,
+workspace-owned output.
 
 ## Validation
 
@@ -52,6 +64,8 @@ The package test covers:
 - caller-owned pointer stability and bitwise CUDA Graph replay;
 - explicit rejection of unsupported layouts, dtypes, head dimensions and
   unpadded sequence storage.
+- fused-vs-low-level parity at aligned and non-aligned lengths;
+- the raw-input fused path under bitwise CUDA Graph replay.
 
 The long video acceptance grid is `H=32`, `D=128`,
 `S in {6144, 24576}`. Audio coverage uses `H=32`, `D=64` and padded sequence

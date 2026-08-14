@@ -66,14 +66,15 @@ def main() -> None:
     cases = [(6144, 128), (2688, 64)]
     if args.mode == "full":
         cases = [(6144, 128), (24576, 128), (2688, 64)]
-    print("| S | D | SDPA us | Sage2 static us | Sage3 static us | vs SDPA | vs Sage2 | Sage3 cosine |")
-    print("|---:|---:|---:|---:|---:|---:|---:|---:|")
+    print("| S | D | SDPA us | Sage2 static us | Sage3 core+quant us | Sage3 fused eager us | Sage3 fused graph us | graph vs SDPA | fused/legacy cosine |")
+    print("|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for s, d in cases:
         q = torch.randn((1, s, 32, d), device="cuda", dtype=torch.bfloat16)
         k = torch.randn_like(q)
         v = torch.randn_like(q)
         qn, kn, vn, delta_s, qh, kh, vh = test.preprocess(q, k, v, False)
         ws = list(test.alloc(qn))
+        fused_ws = test.alloc_fused(q)
         out = torch.nn.functional.scaled_dot_product_attention(qh, kh, vh)
         sage2_ws = (
             sage2.allocate_workspace(qn, kn, vn, fp8v=True) if d == 128 else None
@@ -89,22 +90,44 @@ def main() -> None:
             ops.quantize_v_fp4_nhd(vn, ws[2], ws[5])
             return ops.attention(ws, delta_s, s, False)
 
+        def run_sage3_fused():
+            return ops.fused(q, k, v, fused_ws)
+
         def run_sage2():
             return sage2.sage2_prefill_fp8v_bf16_d128(
                 qn, kn, vn, out=sage2_out, workspace=sage2_ws
             )
 
         got = run_sage3()
+        fused_got = run_sage3_fused()
+        qnb, knb, vnb, dsb, *_ = test.preprocess(q, k, v, True)
+        legacy_block_ws = list(test.alloc(qnb))
+        ops.quantize_q_fp4_nhd(qnb, legacy_block_ws[0], legacy_block_ws[3])
+        ops.quantize_k_fp4_nhd(knb, legacy_block_ws[1], legacy_block_ws[4])
+        ops.quantize_v_fp4_nhd(vnb, legacy_block_ws[2], legacy_block_ws[5])
+        legacy_block = ops.attention(legacy_block_ws, dsb, s, True)[:, :s]
+
+        graph = torch.cuda.CUDAGraph()
+        torch.cuda.synchronize()
+        with torch.cuda.graph(graph):
+            graph_output = run_sage3_fused()
+
+        def replay_sage3_fused():
+            graph.replay()
+            return graph_output
+
         sdpa_us = time_cuda(run_sdpa, args.warmup, args.iters)
         sage2_us = (
             time_cuda(run_sage2, args.warmup, args.iters) if sage2_ws else float("nan")
         )
         sage_us = time_cuda(run_sage3, args.warmup, args.iters)
-        cos = test.cosine(got, out.transpose(1, 2))
+        fused_us = time_cuda(run_sage3_fused, args.warmup, args.iters)
+        fused_graph_us = time_cuda(replay_sage3_fused, args.warmup, args.iters)
         print(
             f"| {s} | {d} | {sdpa_us:.3f} | {sage2_us:.3f} | {sage_us:.3f} | "
-            f"{sdpa_us / sage_us:.2f}x | "
-            f"{sage2_us / sage_us:.2f}x | {cos:.8f} |"
+            f"{fused_us:.3f} | {fused_graph_us:.3f} | "
+            f"{sdpa_us / fused_graph_us:.2f}x | "
+            f"{test.cosine(fused_got, legacy_block):.8f} |"
         )
 
 

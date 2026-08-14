@@ -58,7 +58,7 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
             {params.seqlen_k, params.d, params.h_k, params.b},  // shape_SFK
             static_cast<ElementSF const*>(params.sfv_ptr),
             {params.d, params.seqlen_k, params.h_k, params.b},  // shape_SFVt
-            static_cast<float const*>(params.delta_s_ptr),
+            static_cast<typename Kernel_traits::ElementDS const*>(params.delta_s_ptr),
             {params.seqlen_s, params.seqlen_k, params.h_k, params.b},
             {params.ds_row_stride, _1{}, params.ds_head_stride, params.ds_batch_stride},
             params.scale_softmax_log2
@@ -96,13 +96,13 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 }
 
 
-template<typename T, int Headdim, typename O = cutlass::bfloat16_t>
+template<typename T, int Headdim, typename O = cutlass::bfloat16_t, typename DS = float>
 void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream) {
     BOOL_SWITCH(params.is_causal, Is_causal, [&] {
         BOOL_SWITCH(params.per_block_mean, per_block, [&] {
             if constexpr (Headdim == 64 || Headdim == 128) {
                 run_flash_fwd<
-                    Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O>,
+                    Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O, DS>,
                     Is_causal
                 >(params, stream);
             } else {

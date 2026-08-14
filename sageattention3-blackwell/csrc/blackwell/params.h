@@ -158,6 +158,7 @@ struct Flash_fwd_params : public Qkv_params {
     uint64_t * rng_state;
 
     bool is_bf16;
+    bool delta_is_bf16;
     bool is_e4m3;
     bool is_causal;
     bool per_block_mean;

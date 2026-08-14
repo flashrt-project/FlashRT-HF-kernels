@@ -70,6 +70,7 @@ void set_params_fprop(Flash_fwd_params &params,
     params.k_ptr = k.data_ptr();
     params.v_ptr = v.data_ptr();
     params.delta_s_ptr = delta_s.data_ptr();
+    params.delta_is_bf16 = delta_s.scalar_type() == at::ScalarType::BFloat16;
     params.sfq_ptr = sfq.data_ptr();
     params.sfk_ptr = sfk.data_ptr();
     params.sfv_ptr = sfv.data_ptr();
@@ -182,19 +183,23 @@ void set_params_fprop(Flash_fwd_params &params,
     #endif
 }
 
-template<bool IsBF16>
+template<bool IsBF16, typename DS>
 void run_mha_fwd_dispatch_dtype(Flash_fwd_params &params, cudaStream_t stream) {
     using OType = std::conditional_t<IsBF16, cutlass::bfloat16_t, cutlass::half_t>;
     if (params.d == 64) {
-        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType>(params, stream);
+        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType, DS>(params, stream);
     } else if (params.d == 128) {
-        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType>(params, stream);
+        run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType, DS>(params, stream);
     }
 }
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream, bool force_split_kernel = false) {
     BOOL_SWITCH(params.is_bf16, IsBF16, ([&] {
-        run_mha_fwd_dispatch_dtype<IsBF16>(params, stream);
+        if (params.delta_is_bf16) {
+            run_mha_fwd_dispatch_dtype<IsBF16, cutlass::bfloat16_t>(params, stream);
+        } else {
+            run_mha_fwd_dispatch_dtype<IsBF16, float>(params, stream);
+        }
     }));
 }
 
@@ -226,6 +231,12 @@ void mha_fwd_static(const at::Tensor &q,         // batch_size x num_heads x seq
     TORCH_CHECK(k.dtype() == q_dtype, "query and key must have the same dtype");
     TORCH_CHECK(v.dtype() == q_dtype, "query and value must have the same dtype");
     CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
+
+    TORCH_CHECK(
+        delta_s.scalar_type() == at::ScalarType::Float ||
+            delta_s.scalar_type() == at::ScalarType::BFloat16,
+        "delta_s dtype must be float32 or bfloat16");
+    CHECK_DEVICE(delta_s);
 
     TORCH_CHECK(sfq_dtype == torch::kFloat8_e4m3fn, "q dtype must be uint8");
     TORCH_CHECK(sfk.dtype() == sfq_dtype, "query and key must have the same dtype");

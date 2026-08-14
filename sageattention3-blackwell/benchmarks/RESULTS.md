@@ -18,6 +18,26 @@
 
 These are source-gate numbers, not Hub artifact claims.
 
+## Fused-prep source acceptance
+
+- API: `sage3_prefill_fp4_bf16` with a preallocated `Sage3FusedWorkspace`
+- Timing includes K/Q centering, internal padding, Q/K/V FP4 quantization,
+  correction GEMM and FP4 attention
+- Timing excludes only one-time workspace allocation
+- Correctness reference: legacy Torch prep plus the existing packaged Sage3
+  low-level path
+
+| S | D | PyTorch SDPA us | Sage3 core+quant us | Sage3 fused eager us | Sage3 fused graph us | graph vs SDPA | fused/legacy cosine |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6144 | 128 | pending | pending | pending | pending | pending | pending |
+| 24576 | 128 | pending | pending | pending | pending | pending | pending |
+| 2688 | 64 | pending | pending | pending | pending | pending | pending |
+
+The 13.0 ms acceptance gate applies to the static CUDA Graph replay path. Eager
+API latency remains a separate reported number. Final public acceptance uses
+the median installed-artifact run after a cold Hub load, not the best source
+sample.
+
 ## Cold-loaded Hub artifact gate
 
 - Artifact: `flashrt/sageattention3-blackwell@v1`

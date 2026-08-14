@@ -27,6 +27,8 @@ def capabilities() -> dict[str, object]:
         "accuracy_profile": ACCURACY_PROFILE,
         "caller_owned_workspace": True,
         "cuda_graph_safe": True,
+        "fused_prep": True,
+        "delta_dtypes": ("float32", "bfloat16"),
     }
 
 
@@ -48,6 +50,16 @@ class Sage3Workspace:
     semaphore: torch.Tensor
 
 
+@dataclass(frozen=True)
+class Sage3FusedWorkspace:
+    attention: Sage3Workspace
+    k_centered: torch.Tensor
+    q_groupmean: torch.Tensor
+    k_mean: torch.Tensor
+    delta_bf16: torch.Tensor
+    original_length: int
+
+
 def _check_nhd(x: torch.Tensor, name: str) -> None:
     if x.dim() != 4 or x.shape[-1] not in SUPPORTED_HEAD_DIMS:
         raise RuntimeError(f"{name} must have contiguous NHD shape [B,L,H,64|128]")
@@ -57,7 +69,13 @@ def _check_nhd(x: torch.Tensor, name: str) -> None:
         raise RuntimeError(f"{name} must be FP16 or BF16")
 
 
-def allocate_workspace(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Sage3Workspace:
+def allocate_workspace(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+) -> Sage3Workspace:
     """Allocate all quantized inputs and attention outputs before capture."""
     _check_nhd(q, "q")
     _check_nhd(k, "k")
@@ -68,7 +86,14 @@ def allocate_workspace(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Sag
     lk = _padded128(k.shape[1])
     if lq % TOKEN_ALIGNMENT or k.shape[1] % TOKEN_ALIGNMENT:
         raise RuntimeError("preprocessed Sage3 Q/K/V lengths must be padded to 128")
-    out_nhd = torch.empty((b, lq, h, d), device=q.device, dtype=q.dtype)
+    expected_out = (b, lq, h, d)
+    if out is None:
+        out_nhd = torch.empty(expected_out, device=q.device, dtype=q.dtype)
+    else:
+        if (out.shape != expected_out or out.device != q.device or
+                out.dtype != q.dtype or not out.is_contiguous()):
+            raise RuntimeError("out must be contiguous NHD matching Q")
+        out_nhd = out
     return Sage3Workspace(
         q_packed=torch.empty((b, h, lq, d // 2), device=q.device, dtype=torch.uint8),
         k_packed=torch.empty((b, h, lk, d // 2), device=q.device, dtype=torch.uint8),
@@ -80,6 +105,41 @@ def allocate_workspace(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> Sag
         out_hnd=out_nhd.transpose(1, 2),
         softmax_lse=torch.empty((b, h, lq), device=q.device, dtype=torch.float32),
         semaphore=torch.empty((1,), device=q.device, dtype=torch.int32),
+    )
+
+
+def allocate_fused_workspace(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+) -> Sage3FusedWorkspace:
+    """Allocate the complete raw-BF16 Sage3 path before CUDA Graph capture."""
+    _check_nhd(q, "q")
+    _check_nhd(k, "k")
+    _check_nhd(v, "v")
+    if q.dtype != torch.bfloat16 or k.dtype != torch.bfloat16 or v.dtype != torch.bfloat16:
+        raise RuntimeError("sage3_prefill_fp4_bf16 requires BF16 inputs")
+    if q.shape != k.shape or q.shape != v.shape:
+        raise RuntimeError("fused Sage3 currently requires self-attention Q/K/V shapes")
+    b, length, h, d = q.shape
+    padded = _padded128(length)
+    if out is not None and padded != length:
+        raise RuntimeError("out binding requires a 128-aligned sequence length")
+    base_input = torch.empty((b, padded, h, d), device=q.device, dtype=q.dtype)
+    padded_out = out if padded == length else None
+    attention = allocate_workspace(
+        base_input, base_input, base_input, out=padded_out,
+    )
+    groups = padded // TOKEN_ALIGNMENT
+    return Sage3FusedWorkspace(
+        attention=attention,
+        k_centered=torch.empty((b, h, padded, d), device=q.device, dtype=q.dtype),
+        q_groupmean=torch.empty((b, h, groups, d), device=q.device, dtype=q.dtype),
+        k_mean=torch.empty((b, h, d), device=q.device, dtype=q.dtype),
+        delta_bf16=torch.empty((b, h, groups, padded), device=q.device, dtype=q.dtype),
+        original_length=length,
     )
 
 
@@ -95,6 +155,16 @@ def _k_fake(x, packed, sf):
 
 @torch.library.register_fake(add_op_namespace_prefix("quantize_v_fp4_nhd"))
 def _v_fake(x, packed, sf):
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("quantize_q_fp4_centered_nhd"))
+def _qc_fake(x, mean, packed, sf):
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("quantize_k_fp4_centered_nhd"))
+def _kc_fake(x, mean, packed, sf, centered_hnd):
     return None
 
 
@@ -139,14 +209,71 @@ def blockscaled_fp4_attention_static(
     return workspace.out_nhd
 
 
+def sage3_prefill_fp4_bf16(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    softmax_scale: float | None = None,
+    causal: bool = False,
+    per_block_mean: bool = True,
+    out: torch.Tensor | None = None,
+    workspace: Sage3FusedWorkspace | None = None,
+) -> torch.Tensor:
+    """Run fused Sage3 prep, FP4 attention, and crop from raw BF16 NHD inputs."""
+    _check_nhd(q, "q")
+    _check_nhd(k, "k")
+    _check_nhd(v, "v")
+    if q.dtype != torch.bfloat16 or k.dtype != torch.bfloat16 or v.dtype != torch.bfloat16:
+        raise RuntimeError("sage3_prefill_fp4_bf16 requires BF16 inputs")
+    if q.shape != k.shape or q.shape != v.shape:
+        raise RuntimeError("fused Sage3 currently requires self-attention Q/K/V shapes")
+    if not per_block_mean:
+        raise RuntimeError("fused Sage3 currently requires per_block_mean=True")
+    workspace = (
+        allocate_fused_workspace(q, k, v, out=out)
+        if workspace is None else workspace
+    )
+    if workspace.original_length != q.shape[1]:
+        raise RuntimeError("workspace sequence length does not match this call")
+    if workspace.attention.out_nhd.device != q.device:
+        raise RuntimeError("workspace and inputs must be on the same device")
+    if out is not None and out.data_ptr() != workspace.attention.out_nhd.data_ptr():
+        raise RuntimeError("out must be bound when allocate_fused_workspace is called")
+    b, length, h, d = q.shape
+    groups = workspace.q_groupmean.shape[2]
+    torch.mean(k, dim=1, out=workspace.k_mean)
+    base = workspace.attention
+    ops.quantize_q_fp4_centered_nhd(q, workspace.q_groupmean, base.q_packed, base.q_scale)
+    ops.quantize_k_fp4_centered_nhd(
+        k, workspace.k_mean, base.k_packed, base.k_scale, workspace.k_centered,
+    )
+    ops.quantize_v_fp4_nhd(v, base.v_packed, base.v_scale)
+    b, h, groups, d = workspace.q_groupmean.shape
+    padded = workspace.k_centered.shape[2]
+    torch.bmm(
+        workspace.q_groupmean.view(b * h, groups, d),
+        workspace.k_centered.view(b * h, padded, d).transpose(1, 2),
+        out=workspace.delta_bf16.view(b * h, groups, padded),
+    )
+    result = blockscaled_fp4_attention_static(
+        base, workspace.delta_bf16, unpadded_k=q.shape[1],
+        softmax_scale=softmax_scale, causal=causal, per_block_mean=True,
+    )[:, : q.shape[1]]
+    return result
+
+
 __all__ = [
     "ACCURACY_PROFILE",
     "SUPPORTED_HEAD_DIMS",
     "SUPPORTED_LAYOUTS",
     "TOKEN_ALIGNMENT",
     "Sage3Workspace",
+    "Sage3FusedWorkspace",
     "capabilities",
     "allocate_workspace",
+    "allocate_fused_workspace",
     "prepare_qkv_fp4_nhd",
     "blockscaled_fp4_attention_static",
+    "sage3_prefill_fp4_bf16",
 ]
