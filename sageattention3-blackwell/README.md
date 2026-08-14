@@ -23,6 +23,20 @@ the higher-fidelity `flashrt/sageattention2-blackwell` default.
 `ACCURACY_PROFILE = "speed-first"`; callers should gate this implementation
 against their own model-level quality contract.
 
+## Quantization variants
+
+The published v1 implementation is the Sage3 NVFP4/E2M1 path. It quantizes
+Q/K/V into the layouts consumed by the block-scaled FP4 attention kernel and
+is available through `sage3_prefill_fp4_bf16`.
+
+An INT4RHT path is specified but is **not implemented or exported in v1**. The
+candidate uses symmetric INT4 Q/K with per-16-element scales, applies a shared
+Hadamard-128 rotation after RoPE and centering, and reuses SageAttention2's FP8
+P/V path. The reserved API name is `sage3_prefill_int4rht_bf16`. It will only
+become a public capability after passing reference cosine >= 0.9999,
+model-capture cosine >= 0.997, and an all-in latency lower than SageAttention2
+FP8V. Do not treat that reserved name as a callable v1 symbol.
+
 ## Usage
 
 ```python
