@@ -14,6 +14,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "adaptive-layernorm-producers" / "tests"))
 from test_adaptive_layernorm_producers import (  # noqa: E402
+    _nvfp4_out,
     load_source_ops,
     make_case,
     quant_fp8,
@@ -169,6 +170,45 @@ def run_case(ops, name: str, rows: int, dim: int, eps: float, iters: int) -> dic
     }
 
 
+def run_ptok_table(ops, name: str, rows: int, dim: int, eps: float, iters: int):
+    chunks = 6
+    x = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+    temb = torch.randn(
+        (rows, chunks, dim), device="cuda", dtype=torch.bfloat16
+    )
+    table = torch.randn((chunks, dim), device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    packed, sf = _nvfp4_out(x)
+
+    def fused_bf16():
+        return ops.ada_layer_norm_ptok_table_bf16(
+            x, temb, table, 0, 1, eps, out=out
+        )
+
+    def fused_nvfp4():
+        return ops.ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+            x, temb, table, 0, 1, eps, packed=packed, sf_swizzled=sf
+        )
+
+    def eager_bf16():
+        xf = x.float()
+        mean = xf.mean(dim=-1, keepdim=True)
+        var = (xf - mean).square().mean(dim=-1, keepdim=True)
+        norm = (xf - mean) * torch.rsqrt(var + eps)
+        shift = temb[:, 0].float() + table[0]
+        scale = temb[:, 1].float() + table[1]
+        return (norm * (1.0 + scale) + shift).to(torch.bfloat16)
+
+    return {
+        "shape": name,
+        "rows": rows,
+        "dim": dim,
+        "bf16_us": time_cuda(fused_bf16, iters=iters),
+        "eager_us": time_cuda(eager_bf16, iters=iters),
+        "nvfp4_us": time_cuda(fused_nvfp4, iters=iters),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -190,6 +230,13 @@ def main() -> None:
         ("wan_video_4k", 4096, 3072),
     ]
     rows = [run_case(ops, name, r, d, 1e-5, args.iters) for name, r, d in shapes]
+    table_rows = [
+        run_ptok_table(ops, name, r, d, 1e-5, args.iters)
+        for name, r, d in [
+            ("video_short", 64, 3072),
+            ("video_long", 2520, 3072),
+        ]
+    ]
     modulation_rows = []
     for name, batch, sequence, dim in [
         ("groot_dit", 1, 51, 1536),
@@ -209,6 +256,19 @@ def main() -> None:
             f"| {row['shape']} | {row['rows']} | {row['dim']} | "
             f"{row['ada_fp8_us']:.3f} | {row['ada_eager_us']:.3f} | {row['ada_speedup']:.2f}x | "
             f"{row['no_affine_fp8_us']:.3f} | {row['no_affine_eager_us']:.3f} | {row['no_affine_speedup']:.2f}x |"
+        )
+        lines.append(line)
+        print(line)
+    lines.extend([
+        "",
+        "| Per-token table shape | BF16 fused us | BF16 eager us | Speedup | NVFP4 fused us |",
+        "|---|---:|---:|---:|---:|",
+    ])
+    for row in table_rows:
+        line = (
+            f"| {row['shape']} M{row['rows']} D{row['dim']} | "
+            f"{row['bf16_us']:.3f} | {row['eager_us']:.3f} | "
+            f"{row['eager_us'] / row['bf16_us']:.2f}x | {row['nvfp4_us']:.3f} |"
         )
         lines.append(line)
         print(line)

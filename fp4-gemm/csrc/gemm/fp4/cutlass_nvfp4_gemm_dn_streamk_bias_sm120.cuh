@@ -24,7 +24,7 @@ namespace gemm {
 // StreamKScheduler to recover SM utilization at the motus Wan FFN
 // GEMM_dn shape (M=360, N=3072, K=14336): 1.277× over default
 // PersistentScheduler standalone.
-void fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
+int fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
     const void*  A_packed,
     const void*  B_packed,
     const void*  SFA,
@@ -39,7 +39,7 @@ void fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
 //
 // Same StreamK schedule as the bias variant, but with a pure linear-combine
 // epilogue. This matches Motus down-only sites whose down bias is skipped.
-void fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
+int fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
     const void*  A_packed,
     const void*  B_packed,
     const void*  SFA,

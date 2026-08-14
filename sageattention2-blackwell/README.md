@@ -13,6 +13,7 @@ The package exposes Tensor APIs for:
 - V BF16 -> FP8 transposed/padded Sage layout.
 - Sage2 attention over already-quantized Q/K and FP16 or FP8 V.
 - Convenience BF16 wrapper APIs that quantize and run attention in one call.
+- Caller-owned `Sage2Workspace` buffers for allocation-free CUDA Graph replay.
 - Non-causal Wan/video self-attention and causal Qwen-style prefill.
 - GQA shapes where `q_heads % kv_heads == 0`, including Qwen3-style `32/8`.
 
@@ -30,6 +31,7 @@ The complete FlashRT runtime and serving pipeline live upstream at
 - `q_scale_elems(batch, seqlen_q, q_heads)`
 - `k_scale_elems(batch, seqlen_k, kv_heads)`
 - `v_scale_elems(batch, kv_heads)`
+- `allocate_workspace(q, k, v, fp8v=True)`
 - `quantize_q_bf16_d128(q, q_i8=None, q_scale=None)`
 - `quantize_k_bf16_d128(k, k_i8=None, k_scale=None)`
 - `quantize_v_fp16_bf16_d128(v, v_half=None)`
@@ -63,6 +65,19 @@ v = torch.randn((1, 4096, 8, 128), device="cuda", dtype=torch.bfloat16)
 
 out = ops.sage2_prefill_f16_bf16_d128(q, k, v, causal=True)
 ```
+
+CUDA Graph/static-buffer usage:
+
+```python
+workspace = ops.allocate_workspace(q, k, v, fp8v=True)
+out = ops.sage2_prefill_fp8v_bf16_d128(
+    q, k, v, causal=False, workspace=workspace
+)
+```
+
+Passing `workspace=` makes the Python wrapper allocation-free. The Q, K and V
+preparation kernels are still distinct CUDA launches in v1; launch fusion is a
+separate performance variant and is not implied by this API.
 
 Static-buffer/core usage:
 

@@ -35,6 +35,11 @@ class SourceOps:
         self.ops.sigmoid_mul_bf16(gate, x, out)
         return out
 
+    def per_head_sigmoid_gate_bf16(self, x, gate, out=None):
+        out = torch.empty_like(x) if out is None else out
+        self.ops.per_head_sigmoid_gate_bf16(x, gate, out)
+        return out
+
     def embedding_lookup_bf16(self, token_ids, embed):
         out = torch.empty((token_ids.shape[0], embed.shape[1]), device=embed.device, dtype=torch.bfloat16)
         self.ops.embedding_lookup_bf16(token_ids, embed, out)
@@ -312,6 +317,21 @@ def run(ops, mode: str) -> int:
     up = (torch.randn_like(gate.float()) * 0.2).to(torch.bfloat16)
     assert_close("silu_mul", ops.silu_mul_bf16(gate, up), (torch.nn.functional.silu(gate.float()).to(torch.bfloat16).float() * up.float()).to(torch.bfloat16))
     assert_close("sigmoid_mul", ops.sigmoid_mul_bf16(gate, up), (torch.sigmoid(gate.float()).to(torch.bfloat16).float() * up.float()).to(torch.bfloat16))
+    attn = torch.randn((1, 128, 32, 128), device="cuda", dtype=torch.bfloat16)
+    head_gate = torch.randn((1, 128, 32), device="cuda", dtype=torch.bfloat16)
+    gate_factor = (2.0 * torch.sigmoid(head_gate.float())).to(torch.bfloat16)
+    expected_attn = (attn.float() * gate_factor[..., None].float()).to(torch.bfloat16)
+    static_out = torch.empty_like(attn)
+    got_attn = ops.per_head_sigmoid_gate_bf16(attn, head_gate, out=static_out)
+    assert_close("per_head_sigmoid_gate", got_attn, expected_attn)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        captured = ops.per_head_sigmoid_gate_bf16(attn, head_gate, out=static_out)
+    graph.replay()
+    first = captured.clone()
+    graph.replay()
+    if captured.data_ptr() != static_out.data_ptr() or not torch.equal(captured, first):
+        raise AssertionError("per_head_sigmoid_gate CUDA Graph replay failed")
     count += 2
 
     token_ids = torch.tensor([0, 3, 7, 11], device="cuda", dtype=torch.int64)

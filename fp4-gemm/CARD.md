@@ -6,6 +6,7 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 ## Functions
 
 - `sfa_size_bytes`
+- `capabilities`
 - `quantize_fp4_sfa_fp16`
 - `quantize_fp4_sfa_bf16`
 - `quantize_fp4_sfa_mse_fp16`
@@ -62,6 +63,9 @@ a, sfa = ops.quantize_fp4_sfa_bf16(x)
 - Blackwell `sm_110a` with CUDA 13+ and `sm_120a` with CUDA 12.8+.
 - Inputs are packed FP4 E2M1 plus CUTLASS Sm1xx SFA/SFB scale buffers.
 - Output is BF16.
+- Read `capabilities()` instead of duplicating scale-factor layout or alignment
+  constants in a runtime integration. Unsupported calls raise; output is never
+  silently left undefined.
 - `variant=-1` is the architecture-aware production auto-dispatch;
   `variant=0/1/2` expose diagnostic default, widen, and pingpong schedules.
 - The canonical BF16-output GEMM, fused bias GEMM, and FP4 pack/unpack helpers

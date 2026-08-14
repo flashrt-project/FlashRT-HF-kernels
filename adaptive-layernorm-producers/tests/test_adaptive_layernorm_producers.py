@@ -53,6 +53,15 @@ class SourceOps:
         )
         return out
 
+    def ada_layer_norm_ptok_table_bf16(
+        self, x, temb, table, shift_idx, scale_idx, eps=1e-5, out=None
+    ):
+        out = torch.empty_like(x) if out is None else out
+        self._ops.ada_layer_norm_ptok_table_bf16(
+            x, temb, table, int(shift_idx), int(scale_idx), float(eps), out
+        )
+        return out
+
     def ada_layer_norm_quant_fp8_modfp8_bf16(
         self, x, scale_fp8, shift_fp8, scale_deq, shift_deq, act_scale, eps=1e-5, out=None
     ):
@@ -70,6 +79,17 @@ class SourceOps:
     def ada_layer_norm_quant_nvfp4_swizzled_bf16(self, x, scale, shift, eps=1e-5, packed=None, sf_swizzled=None):
         packed, sf_swizzled = _nvfp4_out(x, packed, sf_swizzled)
         self._ops.ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift, float(eps), packed, sf_swizzled)
+        return packed, sf_swizzled
+
+    def ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+        self, x, temb, table, shift_idx, scale_idx, eps=1e-5,
+        packed=None, sf_swizzled=None
+    ):
+        packed, sf_swizzled = _nvfp4_out(x, packed, sf_swizzled)
+        self._ops.ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+            x, temb, table, int(shift_idx), int(scale_idx), float(eps),
+            packed, sf_swizzled
+        )
         return packed, sf_swizzled
 
     def ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16(
@@ -448,6 +468,15 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float, reference_ops=No
     )
     assert_fp8_contract(f"{label}/ada_fp8_ptok_table", got_tab, quant_fp8(mod_tab, act_scale))
 
+    got_tab_bf16 = ops.ada_layer_norm_ptok_table_bf16(
+        x, temb_pt, table_pt, s_idx, c_idx, eps
+    )
+    torch.testing.assert_close(
+        got_tab_bf16, mod_tab, rtol=0.0, atol=0.015625,
+        msg=lambda msg: f"{label}/ada_bf16_ptok_table: {msg}",
+    )
+    print(f"PASS {label}/ada_bf16_ptok_table: BF16 contract")
+
     scale_mod = scale_fp8.float() * scale_deq
     shift_mod = shift_fp8.float() * shift_deq
     mod_fp8 = ref_adaln_float_mod(x, scale_mod, shift_mod, eps)
@@ -483,6 +512,20 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float, reference_ops=No
             )
         assert_exact(f"{label}/nvfp4_packed", got_packed, exp_packed)
         assert_exact(f"{label}/nvfp4_sf", got_sf, exp_sf)
+
+        packed.zero_()
+        sf.zero_()
+        got_tab_packed, got_tab_sf = (
+            ops.ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+                x, temb_pt, table_pt, s_idx, c_idx, eps,
+                packed=packed, sf_swizzled=sf,
+            )
+        )
+        exp_tab_packed, exp_tab_sf = ref_nvfp4(mod_tab)
+        assert_exact(
+            f"{label}/nvfp4_ptok_table_packed", got_tab_packed, exp_tab_packed
+        )
+        assert_exact(f"{label}/nvfp4_ptok_table_sf", got_tab_sf, exp_tab_sf)
 
         if torch.cuda.get_device_capability(0) == (11, 0):
             packed.zero_()
@@ -520,6 +563,50 @@ def run_shape(ops, label: str, rows: int, dim: int, eps: float, reference_ops=No
         assert_exact(f"{label}/nvfp4_modfp8_sf", got_sf2, exp_sf2)
 
 
+def run_ptok_table_graph_gate(ops, eps: float) -> None:
+    rows, dim, n_chunks = 64, 3072, 6
+    x = torch.randn((rows, dim), device="cuda", dtype=torch.bfloat16)
+    temb = torch.randn(
+        (rows, n_chunks, dim), device="cuda", dtype=torch.bfloat16
+    )
+    table = torch.randn((n_chunks, dim), device="cuda", dtype=torch.float32)
+    out = torch.empty_like(x)
+    packed, sf = _nvfp4_out(x)
+    pointers = (out.data_ptr(), packed.data_ptr(), sf.data_ptr())
+
+    ops.ada_layer_norm_ptok_table_bf16(
+        x, temb, table, 0, 1, eps, out=out
+    )
+    ops.ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+        x, temb, table, 0, 1, eps, packed=packed, sf_swizzled=sf
+    )
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        captured_bf16 = ops.ada_layer_norm_ptok_table_bf16(
+            x, temb, table, 0, 1, eps, out=out
+        )
+        captured_packed, captured_sf = (
+            ops.ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+                x, temb, table, 0, 1, eps,
+                packed=packed, sf_swizzled=sf,
+            )
+        )
+    graph.replay()
+    torch.cuda.synchronize()
+    first = (captured_bf16.clone(), captured_packed.clone(), captured_sf.clone())
+    graph.replay()
+    torch.cuda.synchronize()
+    for got, expected in zip(
+        (captured_bf16, captured_packed, captured_sf), first, strict=True
+    ):
+        if not torch.equal(got, expected):
+            raise AssertionError("per-token table CUDA Graph replay changed output")
+    if pointers != (out.data_ptr(), packed.data_ptr(), sf.data_ptr()):
+        raise AssertionError("per-token table CUDA Graph changed output pointers")
+    print("PASS ptok_table_cuda_graph: stable pointers and bitwise replay")
+
+
 def run(args) -> None:
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
@@ -539,6 +626,7 @@ def run(args) -> None:
         shapes = {"wan_video_short": shapes["wan_video_short"]}
     for label, (rows, dim) in shapes.items():
         run_shape(ops, label, rows, dim, args.eps, reference_ops)
+    run_ptok_table_graph_gate(ops, args.eps)
 
     modulation_shapes = {
         "boundary": (1, 1, 48),

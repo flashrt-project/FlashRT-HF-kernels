@@ -10,6 +10,7 @@ import importlib
 import math
 import os
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import torch
@@ -76,6 +77,24 @@ class SourceOps:
         self._ops.quantize_v_fp8_bf16_d128(v, v_fp8_tpp, v_scale)
         return v_fp8_tpp, v_scale
 
+    def allocate_workspace(self, q, k, v, *, fp8v=True):
+        common = dict(
+            q_i8=torch.empty_like(q, dtype=torch.int8),
+            k_i8=torch.empty_like(k, dtype=torch.int8),
+            q_scale=torch.empty((self.q_scale_elems(q.shape[0], q.shape[1], q.shape[2]),), device=q.device, dtype=torch.float32),
+            k_scale=torch.empty((self.k_scale_elems(k.shape[0], k.shape[1], k.shape[2]),), device=k.device, dtype=torch.float32),
+            out=torch.empty_like(q),
+            v_half=None,
+            v_fp8_tpp=None,
+            v_scale=None,
+        )
+        if fp8v:
+            common["v_fp8_tpp"] = torch.empty((v.shape[0], 128, v.shape[2], self.padded_k64(v.shape[1])), device=v.device, dtype=torch.int8)
+            common["v_scale"] = torch.empty((self.v_scale_elems(v.shape[0], v.shape[2]),), device=v.device, dtype=torch.float32)
+        else:
+            common["v_half"] = torch.empty_like(v, dtype=torch.float16)
+        return SimpleNamespace(**common)
+
     def sage2_qk_int8_sv_f16_bf16_d128(self, q_i8, k_i8, v_half, q_scale, k_scale, *, softmax_scale=None, causal=False, out=None):
         out = torch.empty_like(q_i8, dtype=torch.bfloat16) if out is None else out
         if softmax_scale is None:
@@ -90,16 +109,20 @@ class SourceOps:
         self._ops.sage2_qk_int8_sv_f8_bf16_d128(q_i8, k_i8, v_fp8_tpp, q_scale, k_scale, v_scale, float(softmax_scale), bool(causal), out)
         return out
 
-    def sage2_prefill_f16_bf16_d128(self, q, k, v, *, softmax_scale=None, causal=False, out=None):
-        q_i8, q_scale = self.quantize_q_bf16_d128(q)
-        k_i8, k_scale = self.quantize_k_bf16_d128(k)
-        v_half = self.quantize_v_fp16_bf16_d128(v)
+    def sage2_prefill_f16_bf16_d128(self, q, k, v, *, softmax_scale=None, causal=False, out=None, workspace=None):
+        workspace = self.allocate_workspace(q, k, v, fp8v=False) if workspace is None else workspace
+        q_i8, q_scale = self.quantize_q_bf16_d128(q, workspace.q_i8, workspace.q_scale)
+        k_i8, k_scale = self.quantize_k_bf16_d128(k, workspace.k_i8, workspace.k_scale)
+        v_half = self.quantize_v_fp16_bf16_d128(v, workspace.v_half)
+        out = workspace.out if out is None else out
         return self.sage2_qk_int8_sv_f16_bf16_d128(q_i8, k_i8, v_half, q_scale, k_scale, softmax_scale=softmax_scale, causal=causal, out=out)
 
-    def sage2_prefill_fp8v_bf16_d128(self, q, k, v, *, softmax_scale=None, causal=False, out=None):
-        q_i8, q_scale = self.quantize_q_bf16_d128(q)
-        k_i8, k_scale = self.quantize_k_bf16_d128(k)
-        v_fp8_tpp, v_scale = self.quantize_v_fp8_bf16_d128(v)
+    def sage2_prefill_fp8v_bf16_d128(self, q, k, v, *, softmax_scale=None, causal=False, out=None, workspace=None):
+        workspace = self.allocate_workspace(q, k, v, fp8v=True) if workspace is None else workspace
+        q_i8, q_scale = self.quantize_q_bf16_d128(q, workspace.q_i8, workspace.q_scale)
+        k_i8, k_scale = self.quantize_k_bf16_d128(k, workspace.k_i8, workspace.k_scale)
+        v_fp8_tpp, v_scale = self.quantize_v_fp8_bf16_d128(v, workspace.v_fp8_tpp, workspace.v_scale)
+        out = workspace.out if out is None else out
         return self.sage2_qk_int8_sv_f8_bf16_d128(q_i8, k_i8, v_fp8_tpp, q_scale, k_scale, v_scale, softmax_scale=softmax_scale, causal=causal, out=out)
 
 
@@ -212,6 +235,37 @@ def run_case(ops, name: str, batch: int, seqlen: int, q_heads: int, kv_heads: in
     )
 
 
+def run_static_workspace_gate(ops) -> None:
+    q, k, v = make_inputs(1, 128, 24, 24)
+    workspace = ops.allocate_workspace(q, k, v, fp8v=True)
+    pointers = tuple(
+        tensor.data_ptr()
+        for tensor in (
+            workspace.q_i8, workspace.k_i8, workspace.q_scale,
+            workspace.k_scale, workspace.v_fp8_tpp, workspace.v_scale,
+            workspace.out,
+        )
+    )
+    eager = ops.sage2_prefill_fp8v_bf16_d128(q, k, v, workspace=workspace).clone()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        captured = ops.sage2_prefill_fp8v_bf16_d128(q, k, v, workspace=workspace)
+    graph.replay()
+    torch.cuda.synchronize()
+    if pointers != tuple(
+        tensor.data_ptr()
+        for tensor in (
+            workspace.q_i8, workspace.k_i8, workspace.q_scale,
+            workspace.k_scale, workspace.v_fp8_tpp, workspace.v_scale,
+            workspace.out,
+        )
+    ):
+        raise AssertionError("workspace pointers changed across graph replay")
+    if captured.data_ptr() != workspace.out.data_ptr() or not torch.equal(eager, captured):
+        raise AssertionError("workspace CUDA Graph replay is not deterministic")
+    print("PASS static_workspace_cuda_graph: stable pointers and bitwise replay")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -245,6 +299,7 @@ def main() -> None:
         )
     for case in cases:
         run_case(ops, *case)
+    run_static_workspace_gate(ops)
 
 
 if __name__ == "__main__":

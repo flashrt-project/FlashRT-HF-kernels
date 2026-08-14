@@ -156,6 +156,9 @@ demos:
   paged K/V cache for Qwen3.6-style BF16-query decode/verify shapes.
 - `sageattention2-blackwell/benchmarks`: SageAttention2-style Blackwell
   prefill self-attention for Wan non-causal and Qwen causal GQA shapes.
+- `sageattention3-blackwell/benchmarks`: optional speed-first FP4 Blackwell
+  self-attention for long video/audio sequences, compared with both SDPA and
+  the higher-fidelity SageAttention2 tier.
 - `adaptive-layernorm-producers/benchmarks`: AdaLayerNorm/no-affine LayerNorm
   producer fusion to FP8/NVFP4 activations for DiT/Wan/video blocks.
 - `int8-transformer-primitives/benchmarks`: model-neutral INT8 producer,
@@ -320,6 +323,8 @@ Second-batch VLA/runtime packages target the model-demo hot path:
   video/world-model/VAE-style blocks.
 - `sageattention2-blackwell`: SageAttention2-style Blackwell prefill
   attention for Wan/video self-attention and Qwen causal GQA prefill.
+- `sageattention3-blackwell`: speed-first SageAttention3 FP4 self-attention
+  with static caller-owned workspaces for long Blackwell video/audio shapes.
 - `fa2-seqused-runtime`: allocation-free FlashAttention-2 forward runtime with
   device K/V lengths, static split-KV scratch, and CUDA Graph replay support.
 - `speculative-draft-primitives`: model-neutral BF16 logits argmax and
@@ -390,6 +395,7 @@ as distillation, cache reuse, or fewer denoising steps rather than replace them.
 | `fp4-gemm` | Native FP4 package | NVFP4 A4W4 GEMM with BF16 output for continuous low-bit Blackwell islands. |
 | `weight-only-ffn` | Native weight-only package | BF16-activation W4A16/W8A16 linear and complete small-M FFN regions with performance-qualified auto dispatch. |
 | `sageattention2-blackwell` | Attention package | SageAttention2-style prefill attention for Wan non-causal and Qwen causal GQA shapes on Blackwell. |
+| `sageattention3-blackwell` | Attention package | Optional speed-first FP4 self-attention for long video/audio sequences on SM120a, with explicit model-level quality gating. |
 | `fa2-seqused-runtime` | Attention runtime package | Forward-only FA2 static-buffer API with device `seqused_k`, split-KV scratch, and CUDA Graph support. |
 | `speculative-draft-primitives` | Transformers package | BF16 logits argmax and accepted-prefix kernels for drafter/verify speculative decoding loops. |
 | `int8-transformer-primitives` | Transformers package | INT8 rowwise quantization, RMSNorm-to-INT8 producers, rowwise INT8 linear, and SiLU-gated INT8 epilogue primitives. |

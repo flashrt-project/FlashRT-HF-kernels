@@ -288,7 +288,7 @@ cutlass::Status run_gemm_residual(
 
 }  // namespace
 
-void fp4_w4a16_gemm_residual_sm120_bf16out(
+int fp4_w4a16_gemm_residual_sm120_bf16out(
     const void* A_packed, const void* B_packed,
     const void* C_residual, void* D_bf16,
     int M, int N, int K,
@@ -297,13 +297,10 @@ void fp4_w4a16_gemm_residual_sm120_bf16out(
 {
   cutlass::Status status = run_gemm_residual(
       A_packed, B_packed, C_residual, D_bf16, M, N, K, SFA, SFB, alpha, stream);
-  if (status != cutlass::Status::kSuccess) {
-    std::fprintf(stderr, "[fp4_w4a16_gemm_residual_sm120_bf16out] run FAIL "
-        "M=%d N=%d K=%d (status=%d)\n", M, N, K, static_cast<int>(status));
-  }
+  return static_cast<int>(status);
 }
 
-void fp4_w4a16_gemm_sm120_bf16out(
+int fp4_w4a16_gemm_sm120_bf16out(
     const void*  A_packed,
     const void*  B_packed,
     void*        D_bf16,
@@ -315,12 +312,7 @@ void fp4_w4a16_gemm_sm120_bf16out(
 {
   cutlass::Status status = run_gemm(
       A_packed, B_packed, D_bf16, M, N, K, SFA, SFB, alpha, stream);
-  if (status != cutlass::Status::kSuccess) {
-    std::fprintf(stderr,
-        "[fp4_w4a16_gemm_sm120_bf16out] run FAIL "
-        "M=%d N=%d K=%d (status=%d); D output undefined\n",
-        M, N, K, static_cast<int>(status));
-  }
+  return static_cast<int>(status);
 }
 
 // ============================================================
@@ -493,7 +485,7 @@ cutlass::Status run_gemm_widen(
 
 }  // namespace widen
 
-void fp4_w4a16_gemm_sm120_bf16out_widen(
+int fp4_w4a16_gemm_sm120_bf16out_widen(
     const void*  A_packed,
     const void*  B_packed,
     void*        D_bf16,
@@ -505,12 +497,7 @@ void fp4_w4a16_gemm_sm120_bf16out_widen(
 {
   cutlass::Status status = widen::run_gemm_widen(
       A_packed, B_packed, D_bf16, M, N, K, SFA, SFB, alpha, stream);
-  if (status != cutlass::Status::kSuccess) {
-    std::fprintf(stderr,
-        "[fp4_w4a16_gemm_sm120_bf16out_widen] run FAIL "
-        "M=%d N=%d K=%d (status=%d); D output undefined\n",
-        M, N, K, static_cast<int>(status));
-  }
+  return static_cast<int>(status);
 }
 
 // ============================================================
@@ -666,7 +653,7 @@ cutlass::Status run_gemm_pingpong(
 
 }  // namespace pingpong
 
-void fp4_w4a16_gemm_sm120_bf16out_pingpong(
+int fp4_w4a16_gemm_sm120_bf16out_pingpong(
     const void*  A_packed,
     const void*  B_packed,
     void*        D_bf16,
@@ -678,12 +665,7 @@ void fp4_w4a16_gemm_sm120_bf16out_pingpong(
 {
   cutlass::Status status = pingpong::run_gemm_pingpong(
       A_packed, B_packed, D_bf16, M, N, K, SFA, SFB, alpha, stream);
-  if (status != cutlass::Status::kSuccess) {
-    std::fprintf(stderr,
-        "[fp4_w4a16_gemm_sm120_bf16out_pingpong] run FAIL "
-        "M=%d N=%d K=%d (status=%d); D output undefined\n",
-        M, N, K, static_cast<int>(status));
-  }
+  return static_cast<int>(status);
 }
 
 }  // namespace gemm

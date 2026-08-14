@@ -144,6 +144,7 @@ __global__ void ada_layer_norm_ptok_table_fp8_kernel(
     const __nv_bfloat16* __restrict__ temb,   // [M, n_chunks, D]
     const float*         __restrict__ table,  // [n_chunks, D]
     __nv_fp8_e4m3*       __restrict__ out,
+    __nv_bfloat16*       __restrict__ out_bf16,
     const float*          __restrict__ act_scale_ptr,
     int dim, int n_chunks, int shift_idx, int scale_idx, float eps)
 {
@@ -158,7 +159,8 @@ __global__ void ada_layer_norm_ptok_table_fp8_kernel(
       table + (long long)scale_idx * dim);
   const float2* tsh2 = reinterpret_cast<const float2*>(
       table + (long long)shift_idx * dim);
-  __nv_fp8_e4m3* out_row = out + (long long)row * dim;
+  __nv_fp8_e4m3* out_row = out ? out + (long long)row * dim : nullptr;
+  __nv_bfloat16* out_bf16_row = out_bf16 ? out_bf16 + (long long)row * dim : nullptr;
   const int dim2 = dim >> 1;
 
   extern __shared__ float shared[];
@@ -207,7 +209,7 @@ __global__ void ada_layer_norm_ptok_table_fp8_kernel(
   __syncthreads();
   const float inv_std = rsqrtf(shared[0] / static_cast<float>(dim) + eps);
 
-  const float inv_a = 1.0f / *act_scale_ptr;
+  const float inv_a = act_scale_ptr ? 1.0f / *act_scale_ptr : 0.0f;
   for (int i = threadIdx.x; i < dim2; i += blockDim.x) {
     __nv_bfloat162 xv = x2[i], sv = sc2[i], hv = sh2[i];
     const float2 ts = tsc2[i], th = tsh2[i];
@@ -221,10 +223,15 @@ __global__ void ada_layer_norm_ptok_table_fp8_kernel(
         __float2bfloat16(n0 * (1.0f + s0) + h0));
     const float v1 = __bfloat162float(
         __float2bfloat16(n1 * (1.0f + s1) + h1));
-    float q0 = fminf(fmaxf(v0 * inv_a, -kFp8MaxPtok), kFp8MaxPtok);
-    float q1 = fminf(fmaxf(v1 * inv_a, -kFp8MaxPtok), kFp8MaxPtok);
-    out_row[2 * i]     = __nv_fp8_e4m3(q0);
-    out_row[2 * i + 1] = __nv_fp8_e4m3(q1);
+    if (out_bf16_row) {
+      reinterpret_cast<__nv_bfloat162*>(out_bf16_row)[i] =
+          __floats2bfloat162_rn(v0, v1);
+    } else {
+      float q0 = fminf(fmaxf(v0 * inv_a, -kFp8MaxPtok), kFp8MaxPtok);
+      float q1 = fminf(fmaxf(v1 * inv_a, -kFp8MaxPtok), kFp8MaxPtok);
+      out_row[2 * i]     = __nv_fp8_e4m3(q0);
+      out_row[2 * i + 1] = __nv_fp8_e4m3(q1);
+    }
   }
 }
 
@@ -246,8 +253,23 @@ void ada_layer_norm_ptok_table_fp8(
       reinterpret_cast<const __nv_bfloat16*>(temb_bf16),
       table_f32,
       reinterpret_cast<__nv_fp8_e4m3*>(out_fp8),
+      nullptr,
       act_scale,
       dim, n_chunks, shift_idx, scale_idx, eps);
+}
+
+void ada_layer_norm_ptok_table_bf16(
+    const void* x_bf16, const void* temb_bf16, const float* table_f32,
+    void* out_bf16, int seq_len, int dim, int n_chunks, int shift_idx,
+    int scale_idx, float eps, cudaStream_t stream)
+{
+  if (seq_len <= 0 || dim <= 0) return;
+  ada_layer_norm_ptok_table_fp8_kernel<<<seq_len, 256,
+                                         256 * sizeof(float), stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(x_bf16),
+      reinterpret_cast<const __nv_bfloat16*>(temb_bf16), table_f32, nullptr,
+      reinterpret_cast<__nv_bfloat16*>(out_bf16), nullptr, dim, n_chunks,
+      shift_idx, scale_idx, eps);
 }
 
 }  // namespace quantize

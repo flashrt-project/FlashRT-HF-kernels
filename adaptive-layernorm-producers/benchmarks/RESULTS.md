@@ -18,6 +18,19 @@ Local source-build benchmark:
 | wan_video_2k | 2520 | 3072 | 12.330 | 263.276 | 21.35x | 10.267 | 218.926 | 21.32x |
 | wan_video_4k | 4096 | 3072 | 18.465 | 463.733 | 25.11x | 16.412 | 394.908 | 24.06x |
 
+## Per-token table producer update
+
+Source release gate on the same RTX 5090 runtime, 50 measured iterations.
+The BF16 baseline materializes `table + per-token timestep`, LayerNorm, and
+modulation in PyTorch eager. NVFP4 reports latency only because its packed/SF
+byte contract is gated directly rather than compared with an unlike PyTorch
+floating-point chain.
+
+| Shape | BF16 fused us | BF16 eager us | Speedup | NVFP4 fused us |
+|---|---:|---:|---:|---:|
+| video short `M64 D3072` | 4.194 | 58.801 | 14.02x | 6.240 |
+| video long `M2520 D3072` | 14.930 | 279.320 | 18.71x | 32.820 |
+
 ## Six-way modulation producer
 
 The new `adaln_modulation6_bf16` path was measured against its raw CUDA

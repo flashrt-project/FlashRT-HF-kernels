@@ -27,6 +27,8 @@ The full FlashRT model runtime and serving pipeline live upstream at
 - `ada_layer_norm_quant_fp8_bf16(x, scale, shift, act_scale, eps=1e-5, out=None)`
 - `ada_layer_norm_quant_fp8_ptok_bf16(x, scale, shift, act_scale, eps=1e-5, out=None)`
 - `ada_layer_norm_quant_fp8_ptok_table_bf16(x, temb, table, act_scale, shift_idx, scale_idx, eps=1e-5, out=None)`
+- `ada_layer_norm_ptok_table_bf16(x, temb, table, shift_idx, scale_idx, eps=1e-5, out=None)`
+- `ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(x, temb, table, shift_idx, scale_idx, eps=1e-5, packed=None, sf_swizzled=None)`
 - `ada_layer_norm_quant_fp8_modfp8_bf16(x, scale_fp8, shift_fp8, scale_deq, shift_deq, act_scale, eps=1e-5, out=None)`
 - `awq_ada_layer_norm_quant_fp8_bf16(x, scale, shift, inv_s, act_scale, eps=1e-5, out=None)`
 - `ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift, eps=1e-5, packed=None, sf_swizzled=None)`
@@ -93,6 +95,20 @@ temb = torch.zeros((rows, chunks, dim), device="cuda", dtype=torch.bfloat16)
 table = torch.zeros((chunks, dim), device="cuda", dtype=torch.float32)
 x_fp8 = ops.ada_layer_norm_quant_fp8_ptok_table_bf16(
     x, temb, table, act_scale, shift_idx=0, scale_idx=1
+)
+
+# Preserve BF16 for a non-quantized consumer, or emit W4A4 wire tensors.
+static_bf16 = torch.empty_like(x)
+static_fp4 = torch.empty((rows, dim // 2), device="cuda", dtype=torch.uint8)
+static_sfa = torch.empty(
+    (ops.swizzled_sf_size(rows, dim),), device="cuda", dtype=torch.uint8
+)
+x_bf16 = ops.ada_layer_norm_ptok_table_bf16(
+    x, temb, table, shift_idx=0, scale_idx=1, out=static_bf16
+)
+x_fp4, x_sfa = ops.ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+    x, temb, table, shift_idx=0, scale_idx=1,
+    packed=static_fp4, sf_swizzled=static_sfa,
 )
 ```
 

@@ -36,6 +36,7 @@ on:
       - "gated-delta-attention/**"
       - "adaptive-layernorm-producers/**"
       - "sageattention2-blackwell/**"
+      - "sageattention3-blackwell/**"
       - "speculative-draft-primitives/**"
       - "int8-transformer-primitives/**"
       - "transformer-layout-primitives/**"
@@ -98,6 +99,7 @@ on:
           - gated-delta-attention
           - adaptive-layernorm-producers
           - sageattention2-blackwell
+          - sageattention3-blackwell
           - speculative-draft-primitives
           - int8-transformer-primitives
           - transformer-layout-primitives
@@ -174,6 +176,7 @@ jobs:
           - gated-delta-attention
           - adaptive-layernorm-producers
           - sageattention2-blackwell
+          - sageattention3-blackwell
           - speculative-draft-primitives
           - int8-transformer-primitives
           - transformer-layout-primitives

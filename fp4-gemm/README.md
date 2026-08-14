@@ -10,6 +10,7 @@ paths.
 ## Available Functions
 
 - `sfa_size_bytes(rows, dim)`
+- `capabilities()`
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_mse_fp16(x, packed=None, sfa=None, is_sfb=False)`
@@ -49,6 +50,14 @@ paths.
 - `K` must be divisible by 16.
 - Targets: Blackwell `sm_110a` (Jetson AGX Thor, CUDA 13+) and `sm_120a`
   (RTX Blackwell, CUDA 12.8+).
+
+`capabilities()` is the artifact-owned source of truth for layouts, scale
+factor tiling and alignment. In particular, its scale buffer formula is
+`ceil(rows/128) * ceil((cols/16)/4) * 128 * 64` bytes. The public Tensor API
+accepts arbitrary positive `M`; individual raw CUTLASS tiles may internally
+use an `M=128` tile and must not be treated as the public shape contract.
+Unsupported shapes and CUTLASS `can_implement`/initialize/run failures raise a
+PyTorch exception. They never print and continue with undefined output.
 
 `variant` selects the CUTLASS schedule:
 

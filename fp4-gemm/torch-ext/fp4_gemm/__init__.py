@@ -7,6 +7,28 @@ import torch
 from ._ops import add_op_namespace_prefix, ops
 
 
+NVFP4_BLOCK_SIZE = 16
+NVFP4_SCALE_TILE_ROWS = 128
+NVFP4_SCALE_TILE_BLOCKS = 4
+SUPPORTED_LAYOUTS = ("row-major-packed-e2m1", "cutlass-sm1xx-blockscaled")
+SUPPORTED_CUDA_CAPABILITIES = ("11.0a", "12.0a")
+
+
+def capabilities() -> dict[str, object]:
+    """Return the public Tensor API contract used by runtime dispatchers."""
+    return {
+        "quantization": "W4A4 NVFP4 E2M1",
+        "block_size": NVFP4_BLOCK_SIZE,
+        "scale_layout": "pad128(rows) x pad4(dim/16), 512 bytes per tile",
+        "scale_size": "ceil(rows/128) * ceil((dim/16)/4) * 512 bytes",
+        "layouts": SUPPORTED_LAYOUTS,
+        "cuda_capabilities": SUPPORTED_CUDA_CAPABILITIES,
+        "public_m_alignment": 1,
+        "raw_sm120_tile_m": 128,
+        "errors": "exceptions",
+    }
+
+
 def sfa_size_bytes(rows: int, dim: int) -> int:
     if rows <= 0 or dim <= 0 or dim % 16 != 0:
         raise ValueError("rows must be positive and dim must be positive/divisible by 16")
@@ -714,6 +736,12 @@ def nvfp4_gemm_streamk_bias_bf16(
 
 
 __all__ = [
+    "NVFP4_BLOCK_SIZE",
+    "NVFP4_SCALE_TILE_ROWS",
+    "NVFP4_SCALE_TILE_BLOCKS",
+    "SUPPORTED_CUDA_CAPABILITIES",
+    "SUPPORTED_LAYOUTS",
+    "capabilities",
     "aligned_fp4_dim",
     "cutlass_fp4_gemm_geglu_il_hw_v10",
     "dequantize_fp4_sfa_fp16",

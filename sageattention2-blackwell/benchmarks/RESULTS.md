@@ -1,5 +1,21 @@
 # sageattention2-blackwell Benchmark Results
 
+## PR #172 static-workspace source gate
+
+RTX 5090, PyTorch 2.11.0+cu128, 5 warmup and 20 measured iterations. The
+static F16V/FP8V paths use caller-owned workspaces; allocation is outside
+timing. This source gate supplements, rather than replaces, the published
+artifact table below.
+
+| Workload | Sq/Sk | Hq/Hkv | Mask | SDPA us | Core us | Static F16V us | Static FP8V us | FP8V vs SDPA | Core cosine | p99 abs |
+|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| qwen3 prefill | 1024/1024 | 32/8 | causal | 96.790 | 67.766 | 84.123 | 73.882 | 1.31x | 0.999998 | 0.000244 |
+| qwen3 prefill | 4096/4096 | 32/8 | causal | 840.448 | 504.120 | 558.125 | 423.051 | 1.99x | 0.999998 | 0.000122 |
+| video self-attn | 6144/6144 | 32/32 | none | 3094.739 | 1836.022 | 2017.475 | 1691.712 | 1.83x | 0.999997 | 0.000031 |
+| video self-attn | 24576/24576 | 32/32 | none | 45859.775 | 27515.961 | 28280.414 | 19638.545 | 2.34x | 0.999997 | 0.000015 |
+| video cross-attn | 6144/1024 | 32/32 | none | 553.312 | 317.989 | 390.594 | 329.637 | 1.68x | 0.999997 | 0.000122 |
+| video cross-attn | 24576/1024 | 32/32 | none | 2019.397 | 1155.619 | 1390.835 | 1046.165 | 1.93x | 0.999997 | 0.000122 |
+
 Published-artifact benchmark:
 
 - GPU: NVIDIA GeForce RTX 5090

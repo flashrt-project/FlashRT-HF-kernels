@@ -168,7 +168,7 @@ void* get_ws(int M, int N, int K, size_t need) {
 
 }  // namespace
 
-void fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
+int fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
     const void* A_packed, const void* B_packed,
     const void* SFA,      const void* SFB,
     void*       D_bf16,
@@ -218,24 +218,20 @@ void fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
     std::fprintf(stderr,
         "[fp4_w4a16_gemm_dn_streamk_bf16out_sm120] can_implement FAIL "
         "M=%d N=%d K=%d status=%d\n", M, N, K, int(status));
-    return;
+    return int(status);
   }
   status = gemm.initialize(args, ws_ptr, stream);
   if (status != cutlass::Status::kSuccess) {
     std::fprintf(stderr,
         "[fp4_w4a16_gemm_dn_streamk_bf16out_sm120] initialize FAIL "
         "M=%d N=%d K=%d status=%d\n", M, N, K, int(status));
-    return;
+    return int(status);
   }
   status = gemm.run(stream);
-  if (status != cutlass::Status::kSuccess) {
-    std::fprintf(stderr,
-        "[fp4_w4a16_gemm_dn_streamk_bf16out_sm120] run FAIL status=%d\n",
-        int(status));
-  }
+  return int(status);
 }
 
-void fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
+int fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
     const void* A_packed, const void* B_packed,
     const void* SFA,      const void* SFB,
     const void* bias_bf16,
@@ -286,21 +282,17 @@ void fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
     std::fprintf(stderr,
         "[fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120] can_implement FAIL "
         "M=%d N=%d K=%d status=%d\n", M, N, K, int(status));
-    return;
+    return int(status);
   }
   status = gemm.initialize(args, ws_ptr, stream);
   if (status != cutlass::Status::kSuccess) {
     std::fprintf(stderr,
         "[fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120] initialize FAIL "
         "M=%d N=%d K=%d status=%d\n", M, N, K, int(status));
-    return;
+    return int(status);
   }
   status = gemm.run(stream);
-  if (status != cutlass::Status::kSuccess) {
-    std::fprintf(stderr,
-        "[fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120] run FAIL status=%d\n",
-        int(status));
-  }
+  return int(status);
 }
 
 }  // namespace gemm

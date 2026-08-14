@@ -26,6 +26,18 @@ Source-extension benchmark on RTX 5090, PyTorch 2.9.1+cu128.
 The wrapper is 3.19x faster than eager, 3.82x faster than compile, and within
 0.1% of the raw FlashRT native entry.
 
+## NHD per-head sigmoid gate
+
+RTX 5090 source gate, 10 warmup and 50 measured iterations. The reference
+uses the exact BF16 contract: `2*sigmoid(gate)` rounded to BF16, followed by
+BF16 activation multiplication. Outputs are bit-exact.
+
+| Shape | Kernel us | Eager us | Speedup |
+|---|---:|---:|---:|
+| `S6144 H32 D128` | 55.428 | 309.930 | 5.59x |
+| `S24576 H32 D128` | 276.568 | 1334.435 | 4.82x |
+| `S2688 H32 D64` | 8.263 | 42.948 | 5.20x |
+
 ## NVIDIA Thor installed artifact
 
 - Device: NVIDIA Thor, SM110, aarch64

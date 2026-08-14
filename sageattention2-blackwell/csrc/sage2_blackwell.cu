@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
@@ -36,8 +37,9 @@ inline int div_up_int(int x, int y) {
 }
 
 __device__ __forceinline__ int8_t f32_to_i8_sat(float x) {
-  x = fminf(127.0f, fmaxf(-127.0f, nearbyintf(x)));
-  return static_cast<int8_t>(x);
+  int v = __float2int_rn(x);
+  v = max(-127, min(127, v));
+  return static_cast<int8_t>(v);
 }
 
 template <int BlockTokens>
@@ -191,10 +193,10 @@ __global__ void v_bf16_to_fp8_tpp_d128_kernel(
       }
       vals[i] = x;
     }
-    uint32_t fp8_pack[2];
-    floatx4_to_e4m3x4(fp8_pack, vals, vals + 2);
-    floatx4_to_e4m3x4(fp8_pack + 1, vals + 4, vals + 6);
-    *reinterpret_cast<uint2*>(out_base + t0) = *reinterpret_cast<uint2*>(fp8_pack);
+    __nv_fp8x4_e4m3 lo(make_float4(vals[0], vals[1], vals[2], vals[3]));
+    __nv_fp8x4_e4m3 hi(make_float4(vals[4], vals[5], vals[6], vals[7]));
+    reinterpret_cast<__nv_fp8x4_e4m3*>(out_base + t0)[0] = lo;
+    reinterpret_cast<__nv_fp8x4_e4m3*>(out_base + t0)[1] = hi;
   }
 }
 

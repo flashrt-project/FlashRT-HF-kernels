@@ -46,6 +46,7 @@ Published v1 packages:
 | `flashrt/weight-only-ffn` | Native Blackwell W4A16/W8A16 linear and complete FFN regions. | Decode uses BF16 activations at `M=1..4` and static weight-only quantization avoids activation-quantization overhead. |
 | `flashrt/fp8-kv-attention` | BF16-query XQA over FP8 E4M3 paged K/V cache. | You already write transformer K/V cache in FP8 and need direct decode/verify attention without re-quantizing BF16 K/V. |
 | `flashrt/sageattention2-blackwell` | SageAttention2-style Blackwell prefill attention over int8-Q/K and FP16/FP8 V. | You need long-context prefill self-attention for Wan/video non-causal blocks or Qwen causal GQA blocks. |
+| `flashrt/sageattention3-blackwell` | Speed-first FP4 Blackwell self-attention with preallocated workspaces. | You have long video/audio self-attention, accept the documented lower-cosine tier, and will run a model-level quality gate. |
 | `flashrt/fa2-seqused-runtime` | Forward-only FA2 with static outputs/scratch and device-resident valid K/V lengths. | You need one CUDA Graph to replay changing K/V lengths without a host scalar read or allocation in the attention hot path. |
 | `flashrt/fp8-prefill-attention-blackwell` | Native FP8 causal GQA attention for `[S,32,128]` Q and `[S,8,128]` K/V. | Your Blackwell prefill path already produces raw FP8 E4M3 Q/K/V and S is a tuned multiple of 128 from 256 upward. |
 | `flashrt/grouped-moe-gemm` | Native grouped NVFP4 W4A4 M16/M64 prefill GEMM. | Expert tokens are sorted and padded into 16- or 64-row tiles with CUTLASS-compatible swizzled scales. |

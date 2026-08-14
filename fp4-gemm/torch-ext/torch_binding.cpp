@@ -239,22 +239,25 @@ void fp4_w4a16_linear_bf16(
 #if defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM120 FP4 GEMM source is not present in this build");
 #else
+    int rc = 0;
     if (variant == 1) {
-      flash_rt::gemm::fp4_w4a16_gemm_sm120_bf16out_widen(
+      rc = flash_rt::gemm::fp4_w4a16_gemm_sm120_bf16out_widen(
           a_packed.data_ptr(), b_packed.data_ptr(), out.data_ptr(),
           checked_int(shape.m, "M"), checked_int(shape.n, "N"), checked_int(shape.k, "K"),
           sfa.data_ptr(), sfb.data_ptr(), static_cast<float>(alpha), stream);
     } else if (variant == 2) {
-      flash_rt::gemm::fp4_w4a16_gemm_sm120_bf16out_pingpong(
+      rc = flash_rt::gemm::fp4_w4a16_gemm_sm120_bf16out_pingpong(
           a_packed.data_ptr(), b_packed.data_ptr(), out.data_ptr(),
           checked_int(shape.m, "M"), checked_int(shape.n, "N"), checked_int(shape.k, "K"),
           sfa.data_ptr(), sfb.data_ptr(), static_cast<float>(alpha), stream);
     } else {
-      flash_rt::gemm::fp4_w4a16_gemm_sm120_bf16out(
+      rc = flash_rt::gemm::fp4_w4a16_gemm_sm120_bf16out(
           a_packed.data_ptr(), b_packed.data_ptr(), out.data_ptr(),
           checked_int(shape.m, "M"), checked_int(shape.n, "N"), checked_int(shape.k, "K"),
           sfa.data_ptr(), sfb.data_ptr(), static_cast<float>(alpha), stream);
     }
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_bf16 failed CUTLASS validation/runtime with rc=", rc,
+                " for M=", shape.m, " N=", shape.n, " K=", shape.k);
 #endif
   }
 #endif
@@ -525,11 +528,13 @@ void nvfp4_gemm_bias_bf16(
 #if defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
     TORCH_CHECK(false, "SM120 fused-bias FP4 GEMM source is not present in this build");
 #else
-    flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
+    const int rc = flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
         a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(),
         sfb.data_ptr(), bias.data_ptr(), out.data_ptr(),
         checked_int(shape.m, "M"), checked_int(shape.n, "N"),
         checked_int(shape.k, "K"), 1.0f, stream);
+    TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_bf16 failed CUTLASS validation/runtime with rc=", rc,
+                " for M=", shape.m, " N=", shape.n, " K=", shape.k);
 #endif
   }
 #endif
@@ -594,11 +599,13 @@ void nvfp4_gemm_residual_bf16(
   require_sm120(a_packed, "nvfp4_gemm_residual_bf16");
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_residual_sm120_bf16out(
+  const int rc = flash_rt::gemm::fp4_w4a16_gemm_residual_sm120_bf16out(
       a_packed.data_ptr(), b_packed.data_ptr(), residual.data_ptr(),
       out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
       checked_int(shape.k, "K"), sfa.data_ptr(), sfb.data_ptr(),
       static_cast<float>(alpha), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_residual_bf16 failed CUTLASS validation/runtime with rc=", rc,
+              " for M=", shape.m, " N=", shape.n, " K=", shape.k);
 #endif
 #endif
 }
@@ -625,11 +632,13 @@ void nvfp4_gemm_bias_gelu_bf16(
   require_sm120(a_packed, "nvfp4_gemm_bias_gelu_bf16");
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_bf16out_sm120(
+  const int rc = flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_bf16out_sm120(
       a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
       bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
       checked_int(shape.n, "N"), checked_int(shape.k, "K"),
       static_cast<float>(alpha), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_gelu_bf16 failed CUTLASS validation/runtime with rc=", rc,
+              " for M=", shape.m, " N=", shape.n, " K=", shape.k);
 #endif
 #endif
 }
@@ -675,11 +684,13 @@ void nvfp4_gemm_bias_gelu_nvfp4(
   }
   require_sm120(a_packed, "nvfp4_gemm_bias_gelu_nvfp4");
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_fp4out_sm120(
+  const int rc = flash_rt::gemm::fp4_w4a16_gemm_bias_gelu_fp4out_sm120(
       a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
       bias.data_ptr(), out_packed.data_ptr(), out_sfa.data_ptr(),
       checked_int(shape.m, "M"), checked_int(shape.n, "N"),
       checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_bias_gelu_nvfp4 failed CUTLASS validation/runtime with rc=", rc,
+              " for M=", shape.m, " N=", shape.n, " K=", shape.k);
 #endif
 #endif
 }
@@ -701,10 +712,12 @@ void nvfp4_gemm_streamk_bf16(
   require_sm120(a_packed, "nvfp4_gemm_streamk_bf16");
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
+  const int rc = flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bf16out_sm120(
       a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
       out.data_ptr(), checked_int(shape.m, "M"), checked_int(shape.n, "N"),
       checked_int(shape.k, "K"), static_cast<float>(alpha), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_streamk_bf16 failed CUTLASS validation/runtime with rc=", rc,
+              " for M=", shape.m, " N=", shape.n, " K=", shape.k);
 #endif
 #endif
 }
@@ -731,11 +744,13 @@ void nvfp4_gemm_streamk_bias_bf16(
   require_sm120(a_packed, "nvfp4_gemm_streamk_bias_bf16");
   auto stream = at::cuda::getCurrentCUDAStream(a_packed.get_device()).stream();
 #if !defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
-  flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
+  const int rc = flash_rt::gemm::fp4_w4a16_gemm_dn_streamk_bias_bf16out_sm120(
       a_packed.data_ptr(), b_packed.data_ptr(), sfa.data_ptr(), sfb.data_ptr(),
       bias.data_ptr(), out.data_ptr(), checked_int(shape.m, "M"),
       checked_int(shape.n, "N"), checked_int(shape.k, "K"),
       static_cast<float>(alpha), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_gemm_streamk_bias_bf16 failed CUTLASS validation/runtime with rc=", rc,
+              " for M=", shape.m, " N=", shape.n, " K=", shape.k);
 #endif
 #endif
 }

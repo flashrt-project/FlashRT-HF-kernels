@@ -24,7 +24,7 @@ namespace gemm {
 //   alpha    : float32           = sf_global_a * sf_global_b
 //
 // Stream-safe; per-shape workspace cached internally.
-void fp4_w4a16_gemm_bias_gelu_fp4out_sm120(
+int fp4_w4a16_gemm_bias_gelu_fp4out_sm120(
     const void*  A_packed,
     const void*  B_packed,
     const void*  SFA,

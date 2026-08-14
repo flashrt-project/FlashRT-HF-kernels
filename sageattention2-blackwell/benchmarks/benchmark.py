@@ -49,14 +49,17 @@ def sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, causal: bool) -> tor
     return F.scaled_dot_product_attention(q_t, k.transpose(1, 2), v.transpose(1, 2), is_causal=causal).transpose(1, 2)
 
 
-def run_case(ops, name: str, seqlen: int, q_heads: int, kv_heads: int, causal: bool, iters: int, warmup: int):
-    q, k, v = make_inputs(1, seqlen, q_heads, kv_heads)
+def run_case(ops, name: str, seqlen_q: int, seqlen_k: int, q_heads: int, kv_heads: int, causal: bool, iters: int, warmup: int):
+    q, _, _ = make_inputs(1, seqlen_q, q_heads, kv_heads)
+    _, k, v = make_inputs(1, seqlen_k, q_heads, kv_heads)
     out = torch.empty_like(q, dtype=torch.bfloat16)
     ref = reference(q, k, v, causal)
 
     q_i8, q_scale = ops.quantize_q_bf16_d128(q)
     k_i8, k_scale = ops.quantize_k_bf16_d128(k)
     v_half = ops.quantize_v_fp16_bf16_d128(v)
+    workspace_f16 = ops.allocate_workspace(q, k, v, fp8v=False)
+    workspace_fp8 = ops.allocate_workspace(q, k, v, fp8v=True)
     torch.cuda.synchronize()
 
     def run_sdpa():
@@ -68,7 +71,14 @@ def run_case(ops, name: str, seqlen: int, q_heads: int, kv_heads: int, causal: b
         )
 
     def run_bf16():
-        return ops.sage2_prefill_f16_bf16_d128(q, k, v, causal=causal, out=out)
+        return ops.sage2_prefill_f16_bf16_d128(
+            q, k, v, causal=causal, out=out, workspace=workspace_f16
+        )
+
+    def run_fp8v():
+        return ops.sage2_prefill_fp8v_bf16_d128(
+            q, k, v, causal=causal, out=out, workspace=workspace_fp8
+        )
 
     got = run_core()
     torch.cuda.synchronize()
@@ -76,17 +86,21 @@ def run_case(ops, name: str, seqlen: int, q_heads: int, kv_heads: int, causal: b
     sdpa_us = time_cuda(run_sdpa, iters, warmup)
     core_us = time_cuda(run_core, iters, warmup)
     bf16_us = time_cuda(run_bf16, iters, warmup)
+    fp8v_us = time_cuda(run_fp8v, iters, warmup)
     return {
         "name": name,
-        "seqlen": seqlen,
+        "seqlen_q": seqlen_q,
+        "seqlen_k": seqlen_k,
         "q_heads": q_heads,
         "kv_heads": kv_heads,
         "causal": causal,
         "sdpa_us": sdpa_us,
         "core_us": core_us,
         "bf16_us": bf16_us,
+        "fp8v_us": fp8v_us,
         "core_speedup": sdpa_us / core_us,
         "bf16_speedup": sdpa_us / bf16_us,
+        "fp8v_speedup": sdpa_us / fp8v_us,
         **s,
     }
 
@@ -109,30 +123,29 @@ def main() -> None:
     torch.manual_seed(2026)
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
     cases = [
-        ("qwen3_prefill", 1024, 32, 8, True),
-        ("wan_self_attn", 1024, 24, 24, False),
+        ("qwen3_prefill", 1024, 1024, 32, 8, True),
+        ("video_self_attn", 6144, 6144, 32, 32, False),
     ]
     if args.mode == "full":
         cases = [
-            ("qwen3_prefill", 1024, 32, 8, True),
-            ("qwen3_prefill", 2048, 32, 8, True),
-            ("qwen3_prefill", 4096, 32, 8, True),
-            ("qwen3_prefill", 8192, 32, 8, True),
-            ("wan_self_attn", 1024, 24, 24, False),
-            ("wan_self_attn", 2520, 24, 24, False),
-            ("wan_self_attn", 4096, 24, 24, False),
-            ("wan_self_attn", 5070, 24, 24, False),
+            ("qwen3_prefill", 1024, 1024, 32, 8, True),
+            ("qwen3_prefill", 4096, 4096, 32, 8, True),
+            ("video_self_attn", 6144, 6144, 32, 32, False),
+            ("video_self_attn", 24576, 24576, 32, 32, False),
+            ("video_cross_attn", 6144, 1024, 32, 32, False),
+            ("video_cross_attn", 24576, 1024, 32, 32, False),
         ]
     rows = [run_case(ops, *case, args.iters, args.warmup) for case in cases]
     lines = [
-        "| Workload | S | Hq/Hkv | Mask | SDPA us | Sage core us | Core speedup | BF16 wrapper us | Wrapper speedup | Cos | p99 abs |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Workload | Sq/Sk | Hq/Hkv | Mask | SDPA us | Sage core us | Core speedup | Static F16V us | Speedup | Static FP8V us | Speedup | Cos | p99 abs |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         line = (
-            f"| {row['name']} | {row['seqlen']} | {row['q_heads']}/{row['kv_heads']} | "
+            f"| {row['name']} | {row['seqlen_q']}/{row['seqlen_k']} | {row['q_heads']}/{row['kv_heads']} | "
             f"{'causal' if row['causal'] else 'none'} | {row['sdpa_us']:.3f} | {row['core_us']:.3f} | "
             f"{row['core_speedup']:.2f}x | {row['bf16_us']:.3f} | {row['bf16_speedup']:.2f}x | "
+            f"{row['fp8v_us']:.3f} | {row['fp8v_speedup']:.2f}x | "
             f"{row['cos']:.6f} | {row['p99_abs']:.6f} |"
         )
         print(line)

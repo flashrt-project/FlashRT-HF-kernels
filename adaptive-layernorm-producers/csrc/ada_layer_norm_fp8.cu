@@ -315,17 +315,29 @@ __global__ void ada_layer_norm_nvfp4_swizzled_kernel(
     const __nv_bfloat16* __restrict__ x,
     const __nv_bfloat16* __restrict__ scale,
     const __nv_bfloat16* __restrict__ shift,
+    const __nv_bfloat16* __restrict__ temb,
+    const float* __restrict__ table,
     uint8_t* __restrict__ packed,
     uint8_t* __restrict__ sf_swizzled,
-    int dim, int num_blocks, int n_col_blocks, float eps)
+    int dim, int num_blocks, int n_col_blocks, int n_chunks,
+    int shift_idx, int scale_idx, float eps)
 {
   const int row = blockIdx.x;
   const __nv_bfloat162* x2 =
       reinterpret_cast<const __nv_bfloat162*>(x + (long long)row * dim);
-  const __nv_bfloat162* sc2 =
+  const bool table_mode = temb != nullptr;
+  const __nv_bfloat162* sc2 = table_mode ? nullptr :
       reinterpret_cast<const __nv_bfloat162*>(scale);
-  const __nv_bfloat162* sh2 =
+  const __nv_bfloat162* sh2 = table_mode ? nullptr :
       reinterpret_cast<const __nv_bfloat162*>(shift);
+  const __nv_bfloat162* tsc2 = table_mode ? reinterpret_cast<const __nv_bfloat162*>(
+      temb + ((long long)row * n_chunks + scale_idx) * dim) : nullptr;
+  const __nv_bfloat162* tsh2 = table_mode ? reinterpret_cast<const __nv_bfloat162*>(
+      temb + ((long long)row * n_chunks + shift_idx) * dim) : nullptr;
+  const float2* bsc2 = table_mode ? reinterpret_cast<const float2*>(
+      table + (long long)scale_idx * dim) : nullptr;
+  const float2* bsh2 = table_mode ? reinterpret_cast<const float2*>(
+      table + (long long)shift_idx * dim) : nullptr;
   uint8_t* row_packed = packed + (long long)row * dim / 2;
   const int dim2 = dim >> 1;
 
@@ -382,14 +394,27 @@ __global__ void ada_layer_norm_nvfp4_swizzled_kernel(
   __syncthreads();
 
   for (int i2 = threadIdx.x; i2 < dim2; i2 += blockDim.x) {
-    __nv_bfloat162 xv = x2[i2], sv = sc2[i2], hv = sh2[i2];
+    __nv_bfloat162 xv = x2[i2];
     const int i = i2 << 1;
+    float s0, s1, h0, h1;
+    if (table_mode) {
+      const __nv_bfloat162 sv = tsc2[i2], hv = tsh2[i2];
+      const float2 bs = bsc2[i2], bh = bsh2[i2];
+      s0 = __bfloat162float(sv.x) + bs.x;
+      s1 = __bfloat162float(sv.y) + bs.y;
+      h0 = __bfloat162float(hv.x) + bh.x;
+      h1 = __bfloat162float(hv.y) + bh.y;
+    } else {
+      const __nv_bfloat162 sv = sc2[i2], hv = sh2[i2];
+      s0 = __bfloat162float(sv.x); s1 = __bfloat162float(sv.y);
+      h0 = __bfloat162float(hv.x); h1 = __bfloat162float(hv.y);
+    }
     const float n0 = (__bfloat162float(xv.x) - mean) * inv_std;
     const float n1 = (__bfloat162float(xv.y) - mean) * inv_std;
     const float v0 = __bfloat162float(__float2bfloat16(
-        n0 * (1.0f + __bfloat162float(sv.x)) + __bfloat162float(hv.x)));
+        n0 * (1.0f + s0) + h0));
     const float v1 = __bfloat162float(__float2bfloat16(
-        n1 * (1.0f + __bfloat162float(sv.y)) + __bfloat162float(hv.y)));
+        n1 * (1.0f + s1) + h1));
     atomicMax((int*)&blk_scale[i >> 4], __float_as_int(fabsf(v0)));
     atomicMax((int*)&blk_scale[(i + 1) >> 4], __float_as_int(fabsf(v1)));
   }
@@ -412,13 +437,26 @@ __global__ void ada_layer_norm_nvfp4_swizzled_kernel(
   for (int p = threadIdx.x; p < dim / 2; p += blockDim.x) {
     const int i = p << 1;
     const int i2 = p;
-    __nv_bfloat162 xv = x2[i2], sv = sc2[i2], hv = sh2[i2];
+    __nv_bfloat162 xv = x2[i2];
+    float s0, s1, h0, h1;
+    if (table_mode) {
+      const __nv_bfloat162 sv = tsc2[i2], hv = tsh2[i2];
+      const float2 bs = bsc2[i2], bh = bsh2[i2];
+      s0 = __bfloat162float(sv.x) + bs.x;
+      s1 = __bfloat162float(sv.y) + bs.y;
+      h0 = __bfloat162float(hv.x) + bh.x;
+      h1 = __bfloat162float(hv.y) + bh.y;
+    } else {
+      const __nv_bfloat162 sv = sc2[i2], hv = sh2[i2];
+      s0 = __bfloat162float(sv.x); s1 = __bfloat162float(sv.y);
+      h0 = __bfloat162float(hv.x); h1 = __bfloat162float(hv.y);
+    }
     const float n0 = (__bfloat162float(xv.x) - mean) * inv_std;
     const float n1 = (__bfloat162float(xv.y) - mean) * inv_std;
     const float m0 = __bfloat162float(__float2bfloat16(
-        n0 * (1.0f + __bfloat162float(sv.x)) + __bfloat162float(hv.x)));
+        n0 * (1.0f + s0) + h0));
     const float m1 = __bfloat162float(__float2bfloat16(
-        n1 * (1.0f + __bfloat162float(sv.y)) + __bfloat162float(hv.y)));
+        n1 * (1.0f + s1) + h1));
     const int b0 = i >> 4;
     const int b1 = (i + 1) >> 4;
     const float inv0 = blk_scale[b0] > 0.0f ? 1.0f / blk_scale[b0] : 0.0f;
@@ -632,9 +670,28 @@ void ada_layer_norm_nvfp4_swizzled(
       reinterpret_cast<const __nv_bfloat16*>(x_bf16),
       reinterpret_cast<const __nv_bfloat16*>(scale_bf16),
       reinterpret_cast<const __nv_bfloat16*>(shift_bf16),
+      nullptr, nullptr,
       reinterpret_cast<uint8_t*>(packed_u8),
       reinterpret_cast<uint8_t*>(sf_swizzled_u8),
-      dim, num_blocks, n_col_blocks, eps);
+      dim, num_blocks, n_col_blocks, 0, 0, 0, eps);
+}
+
+void ada_layer_norm_ptok_table_nvfp4_swizzled(
+    const void* x_bf16, const void* temb_bf16, const float* table_f32,
+    void* packed_u8, void* sf_swizzled_u8, int seq_len, int dim,
+    int n_chunks, int shift_idx, int scale_idx, float eps,
+    cudaStream_t stream)
+{
+  if (seq_len <= 0 || dim <= 0) return;
+  const int num_blocks = (dim + 15) / 16;
+  const int n_col_blocks = (num_blocks + 3) / 4;
+  const int smem = (256 + num_blocks) * sizeof(float);
+  ada_layer_norm_nvfp4_swizzled_kernel<<<seq_len, 256, smem, stream>>>(
+      reinterpret_cast<const __nv_bfloat16*>(x_bf16), nullptr, nullptr,
+      reinterpret_cast<const __nv_bfloat16*>(temb_bf16), table_f32,
+      reinterpret_cast<uint8_t*>(packed_u8),
+      reinterpret_cast<uint8_t*>(sf_swizzled_u8), dim, num_blocks,
+      n_col_blocks, n_chunks, shift_idx, scale_idx, eps);
 }
 
 void ada_layer_norm_nvfp4_swizzled_modfp8(

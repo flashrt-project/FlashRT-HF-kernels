@@ -31,4 +31,13 @@ void sigmoid_mul_qwen36_bf16(
     int n,
     cudaStream_t stream);
 
+void per_head_sigmoid_gate_bf16(
+    const __nv_bfloat16* x,
+    const __nv_bfloat16* gate,
+    __nv_bfloat16* out,
+    int rows,
+    int heads,
+    int head_dim,
+    cudaStream_t stream);
+
 }  // namespace flash_rt::kernels

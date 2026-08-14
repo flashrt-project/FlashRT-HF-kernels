@@ -11,6 +11,8 @@ production before FP8 or NVFP4 GEMM consumers.
 - `ada_layer_norm_quant_fp8_bf16`
 - `ada_layer_norm_quant_fp8_ptok_bf16`
 - `ada_layer_norm_quant_fp8_ptok_table_bf16`
+- `ada_layer_norm_ptok_table_bf16`
+- `ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16`
 - `ada_layer_norm_quant_fp8_modfp8_bf16`
 - `awq_ada_layer_norm_quant_fp8_bf16`
 - `ada_layer_norm_quant_nvfp4_swizzled_bf16`

@@ -56,7 +56,7 @@ namespace gemm {
 //
 // Stream-safe; per-shape arguments + workspace cached internally
 // (mirrors the FP8 sm_120 kernel).
-void fp4_w4a16_gemm_sm120_bf16out(
+int fp4_w4a16_gemm_sm120_bf16out(
     const void*  A_packed,    // (M, K/2)        u8
     const void*  B_packed,    // (N, K/2)        u8
     void*        D_bf16,      // (M, N)          bf16
@@ -69,7 +69,7 @@ void fp4_w4a16_gemm_sm120_bf16out(
 // Residual variant: D = alpha*(A*B) + C, C a per-element bf16 (M,N) addend.
 // Folds the post-GEMM residual add (o_proj/down) into the epilogue so the
 // following rms_norm reads one tensor (D) not two. Default tile (same as above).
-void fp4_w4a16_gemm_residual_sm120_bf16out(
+int fp4_w4a16_gemm_residual_sm120_bf16out(
     const void*  A_packed,
     const void*  B_packed,
     const void*  C_residual,  // (M, N) bf16 row-major
@@ -85,7 +85,7 @@ void fp4_w4a16_gemm_residual_sm120_bf16out(
 // tile uses fewer waves and hits ~88%/66% peak BW vs ~64%/56% for
 // the default <128,128,256> tile. For small/medium N (<= 6144) the
 // default kernel is faster — caller dispatches by shape.
-void fp4_w4a16_gemm_sm120_bf16out_widen(
+int fp4_w4a16_gemm_sm120_bf16out_widen(
     const void*  A_packed,
     const void*  B_packed,
     void*        D_bf16,
@@ -98,7 +98,7 @@ void fp4_w4a16_gemm_sm120_bf16out_widen(
 // Same tile shape as the default kernel, but with
 // KernelTmaWarpSpecializedPingpong. Kept as an explicit opt-in variant so
 // callers can A/B schedule effects per shape without perturbing the default.
-void fp4_w4a16_gemm_sm120_bf16out_pingpong(
+int fp4_w4a16_gemm_sm120_bf16out_pingpong(
     const void*  A_packed,
     const void*  B_packed,
     void*        D_bf16,

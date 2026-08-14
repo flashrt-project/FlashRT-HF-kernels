@@ -36,6 +36,16 @@ _same_shape_fake("silu_mul_bf16")
 _same_shape_fake("sigmoid_mul_bf16")
 
 
+@torch.library.register_fake(add_op_namespace_prefix("per_head_sigmoid_gate_bf16"))
+def _per_head_sigmoid_gate_fake(x, gate, out) -> None:
+    if x.dim() != 4 or gate.shape != x.shape[:3] or out.shape != x.shape:
+        raise RuntimeError(
+            "expected x/out (batch,sequence,heads,head_dim) and "
+            "gate (batch,sequence,heads)"
+        )
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("embedding_lookup_bf16"))
 def _embedding_lookup_fake(token_ids: torch.Tensor, embed: torch.Tensor, out: torch.Tensor) -> None:
     if token_ids.dim() != 1 or embed.dim() != 2 or out.shape != (token_ids.shape[0], embed.shape[1]):
@@ -233,6 +243,19 @@ def sigmoid_mul_bf16(gate, x, *, out: Optional[torch.Tensor] = None):
     if out is None:
         out = torch.empty_like(gate)
     ops.sigmoid_mul_bf16(gate, x, out)
+    return out
+
+
+def per_head_sigmoid_gate_bf16(
+    x: torch.Tensor,
+    gate: torch.Tensor,
+    *,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Apply ``x * (2 * sigmoid(gate))`` with a gate per NHD head."""
+    if out is None:
+        out = torch.empty_like(x)
+    ops.per_head_sigmoid_gate_bf16(x, gate, out)
     return out
 
 
@@ -491,6 +514,7 @@ __all__ = [
     "partial_rope_qk_bf16",
     "rms_norm_gated_silu_bf16",
     "sigmoid_mul_bf16",
+    "per_head_sigmoid_gate_bf16",
     "silu_mul_bf16",
     "spec_accept_greedy_bf16",
     "relu2_quantize_fp8_static_bf16",

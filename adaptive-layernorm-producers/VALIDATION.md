@@ -32,6 +32,8 @@ Covered operators:
 | `ada_layer_norm_quant_fp8_bf16` | FP8 reference contract |
 | `ada_layer_norm_quant_fp8_ptok_bf16` | per-token FP8 reference contract |
 | `ada_layer_norm_quant_fp8_ptok_table_bf16` | fused table-add/chunk-select FP8 reference contract |
+| `ada_layer_norm_ptok_table_bf16` | fused table-add/chunk-select BF16 reference contract plus graph replay |
+| `ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16` | exact packed E2M1/SFA bytes plus graph replay |
 | `ada_layer_norm_quant_fp8_modfp8_bf16` | FP8 reference contract |
 | `awq_ada_layer_norm_quant_fp8_bf16` | FP8 reference contract |
 | `layer_norm_no_affine_quant_fp8_static_bf16` | FP8 reference contract |

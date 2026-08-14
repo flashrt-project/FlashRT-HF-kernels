@@ -1,0 +1,34 @@
+[general]
+name = "sageattention3-blackwell"
+license = "Apache-2.0"
+version = 1
+backends = ["cuda"]
+
+[general.cuda]
+minver = "12.8"
+
+[general.hub]
+repo-id = "flashrt/sageattention3-blackwell"
+
+[torch]
+include = ["csrc"]
+src = ["torch-ext/torch_binding.cpp"]
+
+[kernel.sageattention3_blackwell]
+backend = "cuda"
+depends = ["torch", "cutlass_4_4"]
+include = ["csrc", "csrc/blackwell", "csrc/quantization"]
+cuda-minver = "12.8"
+cuda-capabilities = ["12.0a"]
+src = [
+  "csrc/blackwell/api.cu",
+  "csrc/quantization/fp4_quantization_4d.cu",
+]
+cuda-flags = [
+  "-O3", "-std=c++17", "--expt-relaxed-constexpr",
+  "--expt-extended-lambda", "--use_fast_math", "-DNDEBUG",
+  "-DQBLKSIZE=128", "-DKBLKSIZE=128", "-DCTA256", "-DDQINRMEM",
+  "-U__CUDA_NO_HALF_OPERATORS__", "-U__CUDA_NO_HALF_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT16_OPERATORS__", "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",
+  "-U__CUDA_NO_BFLOAT162_OPERATORS__", "-U__CUDA_NO_BFLOAT162_CONVERSIONS__",
+]

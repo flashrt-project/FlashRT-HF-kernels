@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Optional
 
 import torch
@@ -11,6 +12,40 @@ from ._ops import add_op_namespace_prefix, ops
 
 
 HEAD_DIM = 128
+SUPPORTED_HEAD_DIMS = (HEAD_DIM,)
+SUPPORTED_LAYOUTS = ("NHD",)
+Q_QUANTIZATION = "int8-per-32-token-warp"
+K_QUANTIZATION = "int8-per-64-token-block"
+V_QUANTIZATION = ("fp16", "fp8-per-channel")
+
+
+def capabilities() -> dict[str, object]:
+    """Return the runtime contract without requiring callers to duplicate it."""
+    return {
+        "head_dims": SUPPORTED_HEAD_DIMS,
+        "layouts": SUPPORTED_LAYOUTS,
+        "q_quantization": Q_QUANTIZATION,
+        "k_quantization": K_QUANTIZATION,
+        "v_quantization": V_QUANTIZATION,
+        "causal": True,
+        "gqa": True,
+        "caller_owned_workspace": True,
+        "cuda_graph_safe": True,
+    }
+
+
+@dataclass(frozen=True)
+class Sage2Workspace:
+    """Caller-owned buffers for allocation-free Sage2 execution."""
+
+    q_i8: torch.Tensor
+    k_i8: torch.Tensor
+    q_scale: torch.Tensor
+    k_scale: torch.Tensor
+    out: torch.Tensor
+    v_half: torch.Tensor | None = None
+    v_fp8_tpp: torch.Tensor | None = None
+    v_scale: torch.Tensor | None = None
 
 
 def padded_k64(seqlen_k: int) -> int:
@@ -69,6 +104,63 @@ def _empty_v_scale(v: torch.Tensor) -> torch.Tensor:
 
 def _empty_v_fp8_tpp(v: torch.Tensor) -> torch.Tensor:
     return torch.empty((v.shape[0], HEAD_DIM, v.shape[2], padded_k64(v.shape[1])), device=v.device, dtype=torch.int8)
+
+
+def allocate_workspace(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    fp8v: bool = True,
+) -> Sage2Workspace:
+    """Allocate all intermediate/output buffers before CUDA Graph capture."""
+    _check_bhd128(q, "q")
+    _check_bhd128(k, "k")
+    _check_bhd128(v, "v")
+    if k.shape != v.shape:
+        raise RuntimeError("k and v must have identical shapes")
+    if q.device != k.device or q.device != v.device:
+        raise RuntimeError("q, k and v must be on the same device")
+    common = dict(
+        q_i8=_empty_i8_like(q),
+        k_i8=_empty_i8_like(k),
+        q_scale=_empty_q_scale(q),
+        k_scale=_empty_k_scale(k),
+        out=torch.empty_like(q),
+    )
+    if fp8v:
+        return Sage2Workspace(
+            **common,
+            v_fp8_tpp=_empty_v_fp8_tpp(v),
+            v_scale=_empty_v_scale(v),
+        )
+    return Sage2Workspace(**common, v_half=torch.empty_like(v, dtype=torch.float16))
+
+
+def _check_workspace(
+    workspace: Sage2Workspace,
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    *,
+    fp8v: bool,
+) -> None:
+    if workspace.q_i8.shape != q.shape or workspace.k_i8.shape != k.shape:
+        raise RuntimeError("workspace Q/K shapes do not match this call")
+    if workspace.out.shape != q.shape or workspace.out.dtype != torch.bfloat16:
+        raise RuntimeError("workspace output must be BF16 and match q")
+    expected_qs = q_scale_elems(q.shape[0], q.shape[1], q.shape[2])
+    expected_ks = k_scale_elems(k.shape[0], k.shape[1], k.shape[2])
+    if workspace.q_scale.numel() < expected_qs or workspace.k_scale.numel() < expected_ks:
+        raise RuntimeError("workspace Q/K scale buffers are too small")
+    if fp8v:
+        expected_v = (v.shape[0], HEAD_DIM, v.shape[2], padded_k64(v.shape[1]))
+        if workspace.v_fp8_tpp is None or tuple(workspace.v_fp8_tpp.shape) != expected_v:
+            raise RuntimeError("workspace FP8 V buffer does not match this call")
+        if workspace.v_scale is None or workspace.v_scale.numel() < v_scale_elems(v.shape[0], v.shape[2]):
+            raise RuntimeError("workspace V scale buffer is too small")
+    elif workspace.v_half is None or workspace.v_half.shape != v.shape:
+        raise RuntimeError("workspace FP16 V buffer does not match this call")
 
 
 @torch.library.register_fake(add_op_namespace_prefix("quantize_q_bf16_d128"))
@@ -235,10 +327,16 @@ def sage2_prefill_f16_bf16_d128(
     softmax_scale: float | None = None,
     causal: bool = False,
     out: Optional[torch.Tensor] = None,
+    workspace: Sage2Workspace | None = None,
 ) -> torch.Tensor:
-    q_i8, q_scale = quantize_q_bf16_d128(q)
-    k_i8, k_scale = quantize_k_bf16_d128(k)
-    v_half = quantize_v_fp16_bf16_d128(v)
+    if workspace is None:
+        workspace = allocate_workspace(q, k, v, fp8v=False)
+    _check_workspace(workspace, q, k, v, fp8v=False)
+    q_i8, q_scale = quantize_q_bf16_d128(q, workspace.q_i8, workspace.q_scale)
+    k_i8, k_scale = quantize_k_bf16_d128(k, workspace.k_i8, workspace.k_scale)
+    v_half = quantize_v_fp16_bf16_d128(v, workspace.v_half)
+    if out is None:
+        out = workspace.out
     return sage2_qk_int8_sv_f16_bf16_d128(
         q_i8, k_i8, v_half, q_scale, k_scale, softmax_scale=softmax_scale, causal=causal, out=out
     )
@@ -252,10 +350,18 @@ def sage2_prefill_fp8v_bf16_d128(
     softmax_scale: float | None = None,
     causal: bool = False,
     out: Optional[torch.Tensor] = None,
+    workspace: Sage2Workspace | None = None,
 ) -> torch.Tensor:
-    q_i8, q_scale = quantize_q_bf16_d128(q)
-    k_i8, k_scale = quantize_k_bf16_d128(k)
-    v_fp8_tpp, v_scale = quantize_v_fp8_bf16_d128(v)
+    if workspace is None:
+        workspace = allocate_workspace(q, k, v, fp8v=True)
+    _check_workspace(workspace, q, k, v, fp8v=True)
+    q_i8, q_scale = quantize_q_bf16_d128(q, workspace.q_i8, workspace.q_scale)
+    k_i8, k_scale = quantize_k_bf16_d128(k, workspace.k_i8, workspace.k_scale)
+    v_fp8_tpp, v_scale = quantize_v_fp8_bf16_d128(
+        v, workspace.v_fp8_tpp, workspace.v_scale
+    )
+    if out is None:
+        out = workspace.out
     return sage2_qk_int8_sv_f8_bf16_d128(
         q_i8, k_i8, v_fp8_tpp, q_scale, k_scale, v_scale,
         softmax_scale=softmax_scale, causal=causal, out=out
@@ -264,6 +370,14 @@ def sage2_prefill_fp8v_bf16_d128(
 
 __all__ = [
     "HEAD_DIM",
+    "SUPPORTED_HEAD_DIMS",
+    "SUPPORTED_LAYOUTS",
+    "Q_QUANTIZATION",
+    "K_QUANTIZATION",
+    "V_QUANTIZATION",
+    "Sage2Workspace",
+    "capabilities",
+    "allocate_workspace",
     "padded_k64",
     "q_scale_elems",
     "k_scale_elems",

@@ -139,6 +139,8 @@ void sigmoid_mul_bf16(torch::Tensor const& gate, torch::Tensor const& x, torch::
   check_bf16(x, "x");
   check_bf16(out, "out");
   TORCH_CHECK(gate.sizes() == x.sizes() && out.sizes() == gate.sizes(), "shape mismatch");
+  same_device(gate, x, "gate", "x");
+  same_device(gate, out, "gate", "out");
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard guard(gate.device());
   auto stream = at::cuda::getCurrentCUDAStream(gate.get_device()).stream();
@@ -147,6 +149,34 @@ void sigmoid_mul_bf16(torch::Tensor const& gate, torch::Tensor const& x, torch::
       static_cast<const __nv_bfloat16*>(x.data_ptr()),
       static_cast<__nv_bfloat16*>(out.data_ptr()),
       checked_int(gate.numel(), "numel"), stream);
+#else
+  TORCH_CHECK(false, "transformer-fused-ops was not built with CUDA support");
+#endif
+}
+
+void per_head_sigmoid_gate_bf16(torch::Tensor const& x,
+                                torch::Tensor const& gate,
+                                torch::Tensor& out) {
+  check_bf16(x, "x");
+  check_bf16(gate, "gate");
+  check_bf16(out, "out");
+  TORCH_CHECK(x.dim() == 4, "x must have shape (batch, sequence, heads, head_dim)");
+  TORCH_CHECK(gate.sizes() == torch::IntArrayRef({x.size(0), x.size(1), x.size(2)}),
+              "gate must have shape (batch, sequence, heads)");
+  TORCH_CHECK(out.sizes() == x.sizes(), "out must have the same shape as x");
+  TORCH_CHECK((x.size(3) % 2) == 0, "head_dim must be even");
+  same_device(x, gate, "x", "gate");
+  same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  flash_rt::kernels::per_head_sigmoid_gate_bf16(
+      static_cast<const __nv_bfloat16*>(x.data_ptr()),
+      static_cast<const __nv_bfloat16*>(gate.data_ptr()),
+      static_cast<__nv_bfloat16*>(out.data_ptr()),
+      checked_int(x.size(0) * x.size(1), "rows"),
+      checked_int(x.size(2), "heads"), checked_int(x.size(3), "head_dim"),
+      stream);
 #else
   TORCH_CHECK(false, "transformer-fused-ops was not built with CUDA support");
 #endif
@@ -652,6 +682,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("rms_norm_gated_silu_bf16(Tensor x, Tensor gate, Tensor weight, float eps, Tensor! out) -> ()");
   ops.def("silu_mul_bf16(Tensor gate, Tensor up, Tensor! out) -> ()");
   ops.def("sigmoid_mul_bf16(Tensor gate, Tensor x, Tensor! out) -> ()");
+  ops.def("per_head_sigmoid_gate_bf16(Tensor x, Tensor gate, Tensor! out) -> ()");
   ops.def("embedding_lookup_bf16(Tensor token_ids, Tensor embed, Tensor! out) -> ()");
   ops.def("partial_rope_qk_bf16(Tensor q_in, Tensor k_in, Tensor cos, Tensor sin, Tensor! q_out, Tensor! k_out, int rope_dim) -> ()");
   ops.def("argmax_bf16(Tensor logits, Tensor! argmax_out) -> ()");
@@ -683,6 +714,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("rms_norm_gated_silu_bf16", torch::kCUDA, &rms_norm_gated_silu_bf16);
   ops.impl("silu_mul_bf16", torch::kCUDA, &silu_mul_bf16);
   ops.impl("sigmoid_mul_bf16", torch::kCUDA, &sigmoid_mul_bf16);
+  ops.impl("per_head_sigmoid_gate_bf16", torch::kCUDA,
+           &per_head_sigmoid_gate_bf16);
   ops.impl("embedding_lookup_bf16", torch::kCUDA, &embedding_lookup_bf16);
   ops.impl("partial_rope_qk_bf16", torch::kCUDA, &partial_rope_qk_bf16);
   ops.impl("argmax_bf16", torch::kCUDA, &argmax_bf16);

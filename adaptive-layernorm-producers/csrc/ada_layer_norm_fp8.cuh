@@ -64,6 +64,15 @@ void ada_layer_norm_nvfp4_swizzled(
     int seq_len, int dim, float eps,
     cudaStream_t stream);
 
+void ada_layer_norm_ptok_table_nvfp4_swizzled(
+    const void* x_bf16,
+    const void* temb_bf16,
+    const float* table_f32,
+    void* packed_u8,
+    void* sf_swizzled_u8,
+    int seq_len, int dim, int n_chunks, int shift_idx, int scale_idx,
+    float eps, cudaStream_t stream);
+
 void ada_layer_norm_nvfp4_swizzled_modfp8(
     const void* x_bf16,
     const void* scale_fp8,
@@ -95,6 +104,14 @@ void ada_layer_norm_ptok_table_fp8(
     const float* table_f32,
     void*        out_fp8,
     const float* act_scale,
+    int seq_len, int dim, int n_chunks, int shift_idx, int scale_idx,
+    float eps, cudaStream_t stream);
+
+void ada_layer_norm_ptok_table_bf16(
+    const void* x_bf16,
+    const void* temb_bf16,
+    const float* table_f32,
+    void* out_bf16,
     int seq_len, int dim, int n_chunks, int shift_idx, int scale_idx,
     float eps, cudaStream_t stream);
 

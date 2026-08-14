@@ -105,6 +105,26 @@ def _ada_layer_norm_quant_fp8_ptok_table_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("ada_layer_norm_ptok_table_bf16"))
+def _ada_layer_norm_ptok_table_bf16_fake(
+    x: torch.Tensor,
+    temb: torch.Tensor,
+    table: torch.Tensor,
+    shift_idx: int,
+    scale_idx: int,
+    eps: float,
+    out: torch.Tensor,
+) -> None:
+    _check_x(x)
+    if temb.dim() != 3 or temb.shape[0] != x.shape[0] or temb.shape[2] != x.shape[1]:
+        raise RuntimeError("temb must have shape (seq_len, n_chunks, dim)")
+    if table.shape != (temb.shape[1], x.shape[1]):
+        raise RuntimeError("table must have shape (n_chunks, dim)")
+    if out.shape != x.shape:
+        raise RuntimeError("out must have the same shape as x")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("ada_layer_norm_quant_fp8_modfp8_bf16"))
 def _ada_layer_norm_quant_fp8_modfp8_bf16_fake(
     x: torch.Tensor,
@@ -154,6 +174,32 @@ def _ada_layer_norm_quant_nvfp4_swizzled_bf16_fake(
     sf_swizzled: torch.Tensor,
 ) -> None:
     _check_mod(x, scale, shift)
+    rows, dim = x.shape
+    if packed.shape != (rows, dim // 2):
+        raise RuntimeError("packed must have shape (rows, dim // 2)")
+    if sf_swizzled.numel() < swizzled_sf_size(rows, dim):
+        raise RuntimeError("sf_swizzled is too small")
+    return None
+
+
+@torch.library.register_fake(
+    add_op_namespace_prefix("ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16")
+)
+def _ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16_fake(
+    x: torch.Tensor,
+    temb: torch.Tensor,
+    table: torch.Tensor,
+    shift_idx: int,
+    scale_idx: int,
+    eps: float,
+    packed: torch.Tensor,
+    sf_swizzled: torch.Tensor,
+) -> None:
+    _check_x(x)
+    if temb.dim() != 3 or temb.shape[0] != x.shape[0] or temb.shape[2] != x.shape[1]:
+        raise RuntimeError("temb must have shape (seq_len, n_chunks, dim)")
+    if table.shape != (temb.shape[1], x.shape[1]):
+        raise RuntimeError("table must have shape (n_chunks, dim)")
     rows, dim = x.shape
     if packed.shape != (rows, dim // 2):
         raise RuntimeError("packed must have shape (rows, dim // 2)")
@@ -282,6 +328,25 @@ def ada_layer_norm_quant_fp8_ptok_table_bf16(
     return out
 
 
+def ada_layer_norm_ptok_table_bf16(
+    x: torch.Tensor,
+    temb: torch.Tensor,
+    table: torch.Tensor,
+    shift_idx: int,
+    scale_idx: int,
+    eps: float = 1e-5,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Fuse table add, chunk selection and AdaLN into a BF16 output."""
+
+    if out is None:
+        out = torch.empty_like(x)
+    ops.ada_layer_norm_ptok_table_bf16(
+        x, temb, table, int(shift_idx), int(scale_idx), float(eps), out
+    )
+    return out
+
+
 def ada_layer_norm_quant_fp8_modfp8_bf16(
     x: torch.Tensor,
     scale_fp8: torch.Tensor,
@@ -332,6 +397,27 @@ def ada_layer_norm_quant_nvfp4_swizzled_bf16(
     if packed is None or sf_swizzled is None:
         packed, sf_swizzled = _alloc_nvfp4(x)
     ops.ada_layer_norm_quant_nvfp4_swizzled_bf16(x, scale, shift, float(eps), packed, sf_swizzled)
+    return packed, sf_swizzled
+
+
+def ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+    x: torch.Tensor,
+    temb: torch.Tensor,
+    table: torch.Tensor,
+    shift_idx: int,
+    scale_idx: int,
+    eps: float = 1e-5,
+    packed: torch.Tensor | None = None,
+    sf_swizzled: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fuse per-token table AdaLN into NVFP4 and CUTLASS scale factors."""
+
+    if packed is None or sf_swizzled is None:
+        packed, sf_swizzled = _alloc_nvfp4(x)
+    ops.ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16(
+        x, temb, table, int(shift_idx), int(scale_idx), float(eps),
+        packed, sf_swizzled
+    )
     return packed, sf_swizzled
 
 
@@ -444,9 +530,11 @@ __all__ = [
     "ada_layer_norm_quant_fp8_bf16",
     "ada_layer_norm_quant_fp8_ptok_bf16",
     "ada_layer_norm_quant_fp8_ptok_table_bf16",
+    "ada_layer_norm_ptok_table_bf16",
     "ada_layer_norm_quant_fp8_modfp8_bf16",
     "awq_ada_layer_norm_quant_fp8_bf16",
     "ada_layer_norm_quant_nvfp4_swizzled_bf16",
+    "ada_layer_norm_quant_nvfp4_swizzled_ptok_table_bf16",
     "ada_layer_norm_quant_nvfp4_swizzled_modfp8_bf16",
     "layer_norm_no_affine_quant_fp8_static_bf16",
     "layer_norm_no_affine_quant_nvfp4_swizzled_bf16",
