@@ -40,6 +40,21 @@ The release gate also checks:
 - stable pointers and bitwise replay under CUDA Graph for both granularities;
 - explicit rejection of invalid shapes and undersized workspace buffers.
 
+## Published artifact gate
+
+Cold-cache validation loaded `flashrt/sageattention2-blackwell@v1` commit
+`ca36bd86` and selected `torch211-cxx11-cu128-x86_64-linux`. The installed
+full matrix passed with the same metrics as the source gate. A
+`torch.compile(..., fullgraph=True)` call over the static FP8-V wrapper also
+passed and was bitwise equal to eager execution.
+
+All six published variants were statically checked for both the Python
+workspace surface and compiled `quantize_v_fp8_native_bf16_d128` symbol:
+
+- Torch 2.11: CUDA 12.8 and 13.0;
+- Torch 2.12: CUDA 13.0 and 13.2;
+- Torch 2.13: CUDA 13.0 and 13.2.
+
 ## Benchmark
 
 Command:
