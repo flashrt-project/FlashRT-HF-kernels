@@ -22,6 +22,21 @@ cuda-minver = "12.8"
 cuda-capabilities = ["12.0a"]
 src = [
   "csrc/blackwell/api.cu",
+  "csrc/blackwell/block_info.h",
+  "csrc/blackwell/blockscaled_layout.h",
+  "csrc/blackwell/cute_extension.h",
+  "csrc/blackwell/epilogue_tma_ws.h",
+  "csrc/blackwell/kernel_traits.h",
+  "csrc/blackwell/kernel_ws.h",
+  "csrc/blackwell/launch.h",
+  "csrc/blackwell/mainloop_tma_ws.h",
+  "csrc/blackwell/named_barrier.h",
+  "csrc/blackwell/params.h",
+  "csrc/blackwell/softmax_fused.h",
+  "csrc/blackwell/static_switch.h",
+  "csrc/blackwell/tile_scheduler.h",
+  "csrc/blackwell/utils.h",
+  "csrc/quantization/cuda_utils.h",
   "csrc/quantization/fp4_quantization_4d.cu",
 ]
 cuda-flags = [
