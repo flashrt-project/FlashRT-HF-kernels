@@ -68,7 +68,8 @@ Results are recorded in `benchmarks/RESULTS.md`.
 The native parity gate uses the same inputs, already-quantized buffers,
 caller-owned workspaces, warmup, CUDA events, and process for both paths. On
 RTX 5090 the packaged core is within 1% of the FlashRT raw core. The native
-FP8-V producer gate requires exact transpose/pad bytes, exact scale values, and
-exact FP8 bytes. The complete output must be bitwise identical to the FlashRT
-native producer+core path. These gates pass at self-attention sequence lengths
-6144 and 24576 and cross-attention shapes 6144/1024 and 24576/1024.
+producer gate requires exact Q/K INT8 bytes, exact V transpose/pad and FP8
+bytes, and exact Q/K/V scale values. The complete output must be bitwise
+identical to the independent FlashRT native producer+core path. These gates
+pass at self-attention sequence lengths 6144 and 24576 and cross-attention
+shapes 6144/1024 and 24576/1024.

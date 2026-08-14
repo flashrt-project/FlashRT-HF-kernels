@@ -105,7 +105,7 @@ __global__ void quant_int8_bf16_nhd_d128_kernel(
     scale[((long long)b * heads + h) * gridDim.x + block_id] = smem[0] * (1.0f / 127.0f);
   }
   if (pos < seqlen) {
-    const float inv_s = 127.0f / smem[0];
+    const float inv_s = __fdividef(127.0f, smem[0]);
     int8_t* dst =
         out + (((long long)b * seqlen + pos) * heads + h) * kHeadDim + d_pack * kPack;
     char4 lo = make_char4(
@@ -295,7 +295,7 @@ __global__ void v_bf16_to_fp8_tpp_d128_kernel(
   if (tid == 0) {
     scale[((long long)b * heads + h) * kHeadDim + d] = s;
   }
-  const float inv_s = 448.0f / fmaxf(amax, 1.0e-7f);
+  const float inv_s = __fdividef(448.0f, fmaxf(amax, 1.0e-7f));
   int8_t* out_base = out + (((long long)b * kHeadDim + d) * heads + h) * padded;
 
   for (int t0 = tid * kPack; t0 < padded; t0 += blockDim.x * kPack) {
