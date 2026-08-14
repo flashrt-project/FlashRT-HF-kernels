@@ -60,6 +60,7 @@ class SourceOps:
 
 class InstalledOps(SourceOps):
     def __init__(self, module):
+        self.module = module
         self.ops = module.ops
 
 
@@ -243,8 +244,8 @@ def run_case(ops, s, d, per_block_mean):
     print(f"PASS S={s} D={d} block_mean={per_block_mean}: cos={cos:.8f}, graph=bitwise")
 
 
-def run_invalid_contract_gate(ops):
-    q = torch.randn((1, 128, 2, 128), device="cuda", dtype=torch.bfloat16)
+def run_invalid_contract_gate(ops, d=128):
+    q = torch.randn((1, 128, 2, d), device="cuda", dtype=torch.bfloat16)
     qn, kn, vn, _delta_s, *_ = preprocess(q, q, q, False)
     ws = list(alloc(qn))
     ops.quantize_q_fp4_nhd(qn, ws[0], ws[3])
@@ -280,29 +281,45 @@ def main():
     else:
         module = load_installed_module(args.artifact)
         expected = {
-            "head_dims": (64, 128),
             "layouts": ("NHD",),
             "caller_owned_workspace": True,
             "cuda_graph_safe": True,
             "fused_prep": True,
             "delta_dtypes": ("float32", "bfloat16"),
+            "d128_min_cuda": "13.0",
         }
         actual = module.capabilities()
         for key, value in expected.items():
             if actual.get(key) != value:
                 raise AssertionError(f"capability {key}: {actual.get(key)!r} != {value!r}")
+        supported_head_dims = tuple(actual["head_dims"])
         ops = InstalledOps(module)
-    cases = [(128, 64), (128, 128)]
+    if args.backend == "source":
+        supported_head_dims = (64, 128)
+    cases = [(128, d) for d in supported_head_dims]
     if args.mode == "full":
-        cases += [(6144, 128), (24576, 128), (2688, 64)]
+        cases += [(2688, 64)]
+        if 128 in supported_head_dims:
+            cases += [(6144, 128), (24576, 128)]
     for s, d in cases:
         for per_block_mean in (False, True):
             run_case(ops, s, d, per_block_mean)
-    run_invalid_contract_gate(ops)
-    run_fused_prep_case(ops, 256, 128)
+    run_invalid_contract_gate(ops, supported_head_dims[-1])
+    run_fused_prep_case(ops, 256, supported_head_dims[-1])
     if args.mode == "full":
         run_fused_prep_case(ops, 384, 64)
-        run_fused_prep_case(ops, 5070, 128)
+        if 128 in supported_head_dims:
+            run_fused_prep_case(ops, 5070, 128)
+    if args.backend == "installed" and 128 not in supported_head_dims:
+        q = torch.randn((1, 128, 2, 128), device="cuda", dtype=torch.bfloat16)
+        try:
+            module.allocate_fused_workspace(q, q, q)
+        except RuntimeError as exc:
+            if "CUDA" not in str(exc) or "64" not in str(exc):
+                raise AssertionError(f"unexpected D128 rejection: {exc}") from exc
+            print("PASS D128: CUDA 12.8 artifact rejects unsupported performance tier")
+        else:
+            raise AssertionError("CUDA 12.8 artifact did not reject D128")
 
 
 if __name__ == "__main__":

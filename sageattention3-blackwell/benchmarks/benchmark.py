@@ -63,9 +63,15 @@ def main() -> None:
             trust_remote_code=True,
         )
 
+    supported_head_dims = (
+        tuple(ops.module.capabilities()["head_dims"])
+        if args.backend == "installed" else (64, 128)
+    )
+
     cases = [(6144, 128), (2688, 64)]
     if args.mode == "full":
         cases = [(6144, 128), (24576, 128), (2688, 64)]
+    cases = [(s, d) for s, d in cases if d in supported_head_dims]
     print("| S | D | SDPA us | Sage2 static us | Sage3 core+quant us | Sage3 fused eager us | Sage3 fused graph us | graph vs SDPA | fused/legacy cosine |")
     print("|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
     for s, d in cases:

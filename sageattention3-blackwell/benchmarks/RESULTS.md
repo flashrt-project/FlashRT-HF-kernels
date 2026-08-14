@@ -1,63 +1,50 @@
 # SageAttention3 Blackwell Benchmark Results
 
-## RTX 5090 source release gate
+## Cold-loaded CUDA 13 artifact
 
+- Package: `flashrt/sageattention3-blackwell@v1`
 - GPU: NVIDIA GeForce RTX 5090, SM120a
-- Runtime: PyTorch 2.11.0 + CUDA 12.8
-- Layout: contiguous NHD, B=1, H=32
-- Sage2 and Sage3 include quantization and attention with preallocated buffers
-- Allocation and Sage3 centering/delta preparation are outside timing
-- PyTorch SDPA consumes the same centered BF16 tensors
-- Timing: 3 warmup, 5 measured iterations; CUDA events
+- Variant: `torch211-cxx11-cu130-x86_64-linux`
+- Layout: contiguous NHD, `B=1`, `H=32`
+- Timing: 10 warmup and 30 measured iterations with CUDA events
+- All Sage3 buffers are allocated before timing and CUDA Graph capture
+- Fused timing includes centering, padding, Q/K/V FP4 quantization, correction
+  GEMM and FP4 attention
+- SDPA and SageAttention2 use the same input tensors and output contract
 
-| S | D | SDPA us | Sage2 static us | Sage3 static us | vs SDPA | vs Sage2 | Sage3 cosine |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 6144 | 128 | 3064.224 | 1665.734 | 767.616 | 3.99x | 2.17x | 0.98160940 |
-| 24576 | 128 | 45837.778 | 19367.699 | 11393.433 | 4.02x | 1.70x | 0.98185158 |
-| 2688 | 64 | 293.350 | N/A | 125.766 | 2.33x | N/A | 0.98138434 |
+| S | D | SDPA us | Sage2 us | Sage3 core+quant us | Sage3 fused eager us | Sage3 fused graph us | Graph vs SDPA | Fused/legacy cosine |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 6144 | 128 | 3100.482 | 1352.993 | 800.612 | 1019.613 | 995.471 | 3.11x | 1.00000000 |
+| 24576 | 128 | 45867.896 | 18757.026 | 11516.395 | 13086.833 | 13110.972 | 3.50x | 1.00000000 |
+| 2688 | 64 | 264.132 | N/A | 114.843 | 147.665 | 139.151 | 1.90x | 1.00000000 |
 
-These are source-gate numbers, not Hub artifact claims.
+The installed artifact passed the full correctness matrix for D64/D128, both
+block-mean modes, aligned and unaligned sequence lengths, explicit invalid
+contracts, caller-owned pointer stability and bitwise CUDA Graph replay.
 
-## Fused-prep source acceptance
+The strict long-video all-in target is `<= 13.000 ms`. The measured
+`13.111 ms` is a **0.111 ms miss** and is not recorded as a pass. Profiling at
+`S=24576,D=128` attributes about 1.28 ms to K reduction, Q/K/V quantization and
+the BF16 correction GEMM; the attention core is about 11.6 ms.
 
-- API: `sage3_prefill_fp4_bf16` with a preallocated `Sage3FusedWorkspace`
-- Timing includes K/Q centering, internal padding, Q/K/V FP4 quantization,
-  correction GEMM and FP4 attention
-- Timing excludes only one-time workspace allocation
-- Correctness reference: legacy Torch prep plus the existing packaged Sage3
-  low-level path
+## CUDA 12.8 compiler boundary
 
-| S | D | PyTorch SDPA us | Sage3 core+quant us | Sage3 fused eager us | Sage3 fused graph us | graph vs SDPA | fused/legacy cosine |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 6144 | 128 | pending | pending | pending | pending | pending | pending |
-| 24576 | 128 | pending | pending | pending | pending | pending | pending |
-| 2688 | 64 | pending | pending | pending | pending | pending | pending |
+The cold-loaded `torch211-cxx11-cu128-x86_64-linux` diagnostic build produced
+the following D128 numbers before the unsupported path was removed:
 
-The 13.0 ms acceptance gate applies to the static CUDA Graph replay path. Eager
-API latency remains a separate reported number. Final public acceptance uses
-the median installed-artifact run after a cold Hub load, not the best source
-sample.
+| S | D | SDPA us | Sage3 fused graph us | Graph vs SDPA | Decision |
+|---:|---:|---:|---:|---:|---|
+| 6144 | 128 | 3095.070 | 6334.589 | 0.49x | reject |
+| 24576 | 128 | 45866.099 | 99722.393 | 0.46x | reject |
 
-## Cold-loaded Hub artifact gate
+CUDA 12.8 generates roughly 896-1024 bytes of local stack per thread for the
+upstream D128 template. Block-N and stage-count experiments did not remove the
+spill, and exact upstream compiler flags reproduced it. The package therefore
+advertises D64 only in CUDA 12.8 artifacts and fails fast for D128. CUDA 13.0+
+artifacts advertise and run D64/D128. This is an artifact capability boundary,
+not a correctness waiver.
 
-- Artifact: `flashrt/sageattention3-blackwell@v1`
-- Variant: `torch211-cxx11-cu128-x86_64-linux`
-- Comparison Sage2: independently loaded from
-  `flashrt/sageattention2-blackwell@v1`
-- GPU: NVIDIA GeForce RTX 5090
-- Runtime: PyTorch 2.11.0 + CUDA 12.8
-- Timing: 10 warmup and 30 measured iterations; caller-owned workspaces
-- Allocation and Sage3 centering/delta preparation are outside timing
-
-| S | D | SDPA us | Hub Sage2 us | Hub Sage3 us | vs SDPA | vs Sage2 | Sage3 cosine |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| 6144 | 128 | 3080.484 | 1695.228 | 838.791 | 3.67x | 2.02x | 0.98156697 |
-| 24576 | 128 | 45865.987 | 19940.633 | 12155.592 | 3.77x | 1.64x | 0.98142821 |
-| 2688 | 64 | 277.037 | N/A | 115.639 | 2.40x | N/A | 0.98154640 |
-
-The same cold-loaded artifact passed the complete correctness matrix for
-`S={128, 2688, 6144, 24576}`, `D={64,128}`, both block-mean modes, bitwise
-CUDA Graph replay, and explicit invalid-contract rejection. Torch 2.12/CUDA
-13.2 and Torch 2.13/CUDA 13.2 artifacts were built and published by the same
-release job; their runtime qualification remains hardware/environment
-specific and is not implied by the RTX 5090 row above.
+The CUDA 12.8 D64 audio path remains supported and measured 143.629 us at
+`S=2688,D=64` versus 262.333 us for SDPA (1.83x). Release validation requires a
+cold-loaded clean artifact, D64 full correctness and graph replay, plus an
+explicit D128 rejection test.

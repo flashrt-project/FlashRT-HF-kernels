@@ -98,17 +98,11 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 
 template<typename T, int Headdim, typename O = cutlass::bfloat16_t, typename DS = float>
 void run_mha_fwd_(Flash_fwd_params &params, cudaStream_t stream) {
-#if __CUDACC_VER_MAJOR__ == 12 && __CUDACC_VER_MINOR__ <= 8
-    // CUDA 12.8 spills the D128 BlockN=128 kernel to roughly 1 KiB/thread.
-    constexpr int kBlockN = Headdim == 128 ? 64 : 128;
-#else
-    constexpr int kBlockN = 128;
-#endif
     BOOL_SWITCH(params.is_causal, Is_causal, [&] {
         BOOL_SWITCH(params.per_block_mean, per_block, [&] {
             if constexpr (Headdim == 64 || Headdim == 128) {
                 run_flash_fwd<
-                    Flash_fwd_kernel_traits<Headdim, 128, kBlockN, 3, 1, per_block, T, O, DS>,
+                    Flash_fwd_kernel_traits<Headdim, 128, 128, 3, 1, per_block, T, O, DS>,
                     Is_causal
                 >(params, stream);
             } else {

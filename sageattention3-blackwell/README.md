@@ -9,7 +9,8 @@ the higher-fidelity `flashrt/sageattention2-blackwell` default.
 
 - GPU: SM120a/SM121a Blackwell
 - input layout: contiguous NHD `[batch, sequence, heads, head_dim]`
-- head dimensions: 64 and 128
+- head dimension 64 with CUDA 12.8 or newer artifacts
+- head dimensions 64 and 128 with CUDA 13.0 or newer artifacts
 - preferred fused input is raw contiguous BF16 NHD; it accepts arbitrary
   positive sequence lengths and pads/crops internally
 - the low-level API retains the pre-centered, 128-padded Q/K/V and FP32
@@ -49,6 +50,13 @@ graph replay.
 The existing `allocate_workspace` / `prepare_qkv_fp4_nhd` /
 `blockscaled_fp4_attention_static` APIs remain available for advanced callers
 that already own preprocessed tensors.
+
+Call `capabilities()` after loading the package and dispatch only head
+dimensions listed in `head_dims`. CUDA 12.8 D128 builds are intentionally not
+published as a supported performance tier: CUDA 12.8 spills the upstream D128
+template to roughly 1 KiB of local stack per thread and is slower than SDPA.
+Both the Python contract and the compiled operator reject that combination;
+CUDA 13.0+ artifacts provide the validated D128 implementation.
 
 Direct `out=` binding is zero-copy for 128-aligned lengths. For an unaligned
 length, omit `out`; the returned tensor is a cropped view of the padded,

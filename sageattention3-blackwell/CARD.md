@@ -6,8 +6,10 @@ Apache-2.0 SageAttention3 implementation in `thu-ml/SageAttention`.
 Use this package as an explicitly gated lower-precision tier for long video or
 audio sequences. Its preferred `sage3_prefill_fp4_bf16` entry accepts raw BF16
 NHD Q/K/V and owns Sage3 centering, padding, FP4 quantization, and correction
-preparation behind a caller-owned CUDA Graph-safe workspace. Head dimensions
-64 and 128 are supported. It does not support GQA/MQA in v1 and does not replace
+preparation behind a caller-owned CUDA Graph-safe workspace. Head dimension 64
+is available in CUDA 12.8+ artifacts; head dimension 128 requires a CUDA 13.0+
+artifact. Query `capabilities()` rather than assuming a head-dimension set. It
+does not support GQA/MQA in v1 and does not replace
 the higher-fidelity
 `flashrt/sageattention2-blackwell` default.
 

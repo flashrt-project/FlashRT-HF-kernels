@@ -10,7 +10,16 @@ import torch
 from ._ops import add_op_namespace_prefix, ops
 
 
-SUPPORTED_HEAD_DIMS = (64, 128)
+def _cuda_version_tuple() -> tuple[int, int]:
+    version = torch.version.cuda
+    if not version:
+        return (0, 0)
+    major, minor, *_ = version.split(".")
+    return (int(major), int(minor))
+
+
+CUDA_VERSION = _cuda_version_tuple()
+SUPPORTED_HEAD_DIMS = (64, 128) if CUDA_VERSION >= (13, 0) else (64,)
 SUPPORTED_LAYOUTS = ("NHD",)
 TOKEN_ALIGNMENT = 128
 ACCURACY_PROFILE = "speed-first"
@@ -29,6 +38,7 @@ def capabilities() -> dict[str, object]:
         "cuda_graph_safe": True,
         "fused_prep": True,
         "delta_dtypes": ("float32", "bfloat16"),
+        "d128_min_cuda": "13.0",
     }
 
 
@@ -62,7 +72,11 @@ class Sage3FusedWorkspace:
 
 def _check_nhd(x: torch.Tensor, name: str) -> None:
     if x.dim() != 4 or x.shape[-1] not in SUPPORTED_HEAD_DIMS:
-        raise RuntimeError(f"{name} must have contiguous NHD shape [B,L,H,64|128]")
+        supported = "|".join(str(dim) for dim in SUPPORTED_HEAD_DIMS)
+        raise RuntimeError(
+            f"{name} must have contiguous NHD shape [B,L,H,{supported}] "
+            f"for this CUDA {torch.version.cuda} artifact"
+        )
     if not x.is_cuda or not x.is_contiguous():
         raise RuntimeError(f"{name} must be contiguous CUDA")
     if x.dtype not in (torch.float16, torch.bfloat16):

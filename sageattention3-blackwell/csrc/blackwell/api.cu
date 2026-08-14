@@ -189,7 +189,15 @@ void run_mha_fwd_dispatch_dtype(Flash_fwd_params &params, cudaStream_t stream) {
     if (params.d == 64) {
         run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 64, OType, DS>(params, stream);
     } else if (params.d == 128) {
+#if CUDART_VERSION >= 13000
         run_mha_fwd_<cutlass::nv_float4_t<cutlass::float_e2m1_t>, 128, OType, DS>(params, stream);
+#else
+        TORCH_CHECK(false,
+                    "SageAttention3 head_dim=128 requires a CUDA 13.0+ artifact; "
+                    "the CUDA 12.8 compiler spills this kernel and is not a supported performance tier");
+#endif
+    } else {
+        TORCH_CHECK(false, "SageAttention3 supports head_dim 64 and 128 only");
     }
 }
 
