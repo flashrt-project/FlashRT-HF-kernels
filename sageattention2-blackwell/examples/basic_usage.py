@@ -12,8 +12,12 @@ def main() -> None:
     v = torch.randn((1, 1024, 8, 128), device="cuda", dtype=torch.bfloat16)
 
     out = ops.sage2_prefill_f16_bf16_d128(q, k, v, causal=True)
+    workspace = ops.allocate_workspace(q, k, v, fp8v=True)
+    out_static = ops.sage2_prefill_fp8v_bf16_d128(
+        q, k, v, causal=True, workspace=workspace
+    )
     torch.cuda.synchronize()
-    print(out.shape, out.dtype)
+    print(out.shape, out.dtype, out_static.shape)
 
 
 if __name__ == "__main__":

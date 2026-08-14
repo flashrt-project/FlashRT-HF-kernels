@@ -1,5 +1,27 @@
 # sageattention2-blackwell Benchmark Results
 
+## Per-thread and Q/K producer release gate
+
+RTX 5090, PyTorch 2.11 + CUDA 12.8, 5 warmup and 20 measured iterations.
+All rows use caller-owned buffers. `PW` is the existing per-warp Q/K contract;
+`PT` is the SageAttention-compatible per-thread contract. Attempted
+single-launch PW producers were rejected from the release surface because they
+were slower than the two independently tuned producers.
+
+| Workload | Sq/Sk | Hq/Hkv | SDPA us | Static FP8V PW us | Static FP8V PT us | PT vs SDPA | PW/PT cosine |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| qwen3 prefill | 1024/1024 | 32/8 | 96.701 | 74.666 | 82.221 | 1.18x | 0.999998/0.999393 |
+| qwen3 prefill | 4096/4096 | 32/8 | 838.680 | 422.886 | 497.157 | 1.69x | 0.999998/0.999360 |
+| video self-attn | 6144/6144 | 32/32 | 3092.154 | 1692.186 | 2021.234 | 1.53x | 0.999997/0.999191 |
+| video self-attn | 24576/24576 | 32/32 | 45854.745 | 19652.870 | 20790.935 | 2.21x | 0.999997/0.999216 |
+| video cross-attn | 6144/1024 | 32/32 | 549.734 | 327.395 | 449.054 | 1.22x | 0.999997/0.999218 |
+| video cross-attn | 24576/1024 | 32/32 | 1991.554 | 1041.955 | 1329.354 | 1.50x | 0.999997/0.999256 |
+
+Contract gates additionally require combined PW wrapper results to be bitwise
+equal to the legacy producers, PT INT8/scales to match the official grouping
+and rounding formula, partial Q tiles (`S=3600/5070`), causal GQA, F16V/FP8V,
+and bitwise CUDA Graph replay for both granularities.
+
 ## PR #172 static-workspace source gate
 
 RTX 5090, PyTorch 2.11.0+cu128, 5 warmup and 20 measured iterations. The

@@ -8,6 +8,8 @@ to int8 and V is kept in FP16 or FP8 Sage layout. It supports:
 - Wan/video non-causal self-attention.
 - Qwen-style causal prefill.
 - GQA, including `32/8` heads with `head_dim=128`.
+- Caller-owned workspaces for allocation-free CUDA Graph replay.
+- Existing per-warp and optional SageAttention per-thread Q/K contracts.
 
 This is not a decode attention kernel. For decode over FP8 K/V cache, use
 `flashrt/fp8-kv-attention`.
@@ -26,5 +28,9 @@ v = torch.randn((1, 4096, 8, 128), device="cuda", dtype=torch.bfloat16)
 
 out = ops.sage2_prefill_f16_bf16_d128(q, k, v, causal=True)
 ```
+
+Use `allocate_workspace(...)` outside capture and pass `workspace=` on the hot
+path. Pass `qk_quant_granularity="per_thread"` to both allocation and execution
+to select the per-thread contract. The default remains the faster per-warp path.
 
 See `README.md` for all functions, tensor contracts, and validation details.

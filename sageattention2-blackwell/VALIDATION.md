@@ -23,11 +23,21 @@ Covered rows:
 | Wan/video self-attn | `B=1,S=256,H=24,D=128` | none | FP8 V | PASS |
 | Qwen prefill GQA | `B=1,S=256,Hq=32,Hkv=8,D=128` | causal | FP8 V | PASS |
 | Qwen prefill GQA | `B=1,S=512,Hq=32,Hkv=8,D=128` | causal | FP16 V | PASS |
+| Wan partial tile | `B=1,S=3600/5070,H=24,D=128` | none | FP16/FP8 V | PASS |
+| Qwen partial GQA | `B=1,S=3600,Hq=32,Hkv=8,D=128` | causal | FP16 V | PASS |
+| Per-thread Q/K | `S=512/3600/5070` | causal/non-causal | FP16/FP8 V | PASS |
 
 The reference is PyTorch SDPA over the same BF16 Q/K/V tensors. Sage2 is a
 quantized attention path, so validation uses cosine/p99/max error gates instead
 of bit-exact equality. Local full-source run passed with cosine around
 `0.9993-0.999998` depending on FP16-V vs FP8-V path.
+
+The release gate also checks:
+
+- combined public Q/K wrapper output against the existing per-warp producer contract;
+- per-thread scales and INT8 values against SageAttention grouping/rounding;
+- stable pointers and bitwise replay under CUDA Graph for both granularities;
+- explicit rejection of invalid shapes and undersized workspace buffers.
 
 ## Benchmark
 

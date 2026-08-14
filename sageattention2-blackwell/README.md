@@ -8,7 +8,7 @@ attention. For decode over FP8 K/V cache, use `flashrt/fp8-kv-attention`.
 
 The package exposes Tensor APIs for:
 
-- Q/K BF16 -> int8 per-warp/per-block quantization.
+- Q/K BF16 -> int8 per-warp or SageAttention-compatible per-thread quantization.
 - V BF16 -> FP16 contiguous layout.
 - V BF16 -> FP8 transposed/padded Sage layout.
 - Sage2 attention over already-quantized Q/K and FP16 or FP8 V.
@@ -30,10 +30,13 @@ The complete FlashRT runtime and serving pipeline live upstream at
 - `padded_k64(seqlen_k)`
 - `q_scale_elems(batch, seqlen_q, q_heads)`
 - `k_scale_elems(batch, seqlen_k, kv_heads)`
+- `q_thread_scale_elems(batch, seqlen_q, q_heads)`
+- `k_thread_scale_elems(batch, seqlen_k, kv_heads)`
 - `v_scale_elems(batch, kv_heads)`
 - `allocate_workspace(q, k, v, fp8v=True)`
 - `quantize_q_bf16_d128(q, q_i8=None, q_scale=None)`
 - `quantize_k_bf16_d128(k, k_i8=None, k_scale=None)`
+- `quantize_qk_bf16_d128(q, k, ..., qk_quant_granularity="per_warp")`
 - `quantize_v_fp16_bf16_d128(v, v_half=None)`
 - `quantize_v_fp8_bf16_d128(v, v_fp8_tpp=None, v_scale=None)`
 - `sage2_qk_int8_sv_f16_bf16_d128(q_i8, k_i8, v_half, q_scale, k_scale, softmax_scale=None, causal=False, out=None)`
@@ -75,9 +78,19 @@ out = ops.sage2_prefill_fp8v_bf16_d128(
 )
 ```
 
-Passing `workspace=` makes the Python wrapper allocation-free. The Q, K and V
-preparation kernels are still distinct CUDA launches in v1; launch fusion is a
-separate performance variant and is not implied by this API.
+Passing `workspace=` makes the Python wrapper allocation-free. The default
+per-warp path keeps the independently tuned Q and K producers: on the release
+shape grid they are faster than attempted single-launch variants. The optional
+SageAttention per-thread contract uses a dedicated Q/K producer:
+
+```python
+workspace = ops.allocate_workspace(
+    q, k, v, fp8v=True, qk_quant_granularity="per_thread"
+)
+out = ops.sage2_prefill_fp8v_bf16_d128(
+    q, k, v, workspace=workspace, qk_quant_granularity="per_thread"
+)
+```
 
 Static-buffer/core usage:
 

@@ -60,6 +60,7 @@ def run_case(ops, name: str, seqlen_q: int, seqlen_k: int, q_heads: int, kv_head
     v_half = ops.quantize_v_fp16_bf16_d128(v)
     workspace_f16 = ops.allocate_workspace(q, k, v, fp8v=False)
     workspace_fp8 = ops.allocate_workspace(q, k, v, fp8v=True)
+    workspace_fp8_pt = ops.allocate_workspace(q, k, v, fp8v=True, qk_quant_granularity="per_thread")
     torch.cuda.synchronize()
 
     def run_sdpa():
@@ -80,6 +81,12 @@ def run_case(ops, name: str, seqlen_q: int, seqlen_k: int, q_heads: int, kv_head
             q, k, v, causal=causal, out=out, workspace=workspace_fp8
         )
 
+    def run_fp8v_pt():
+        return ops.sage2_prefill_fp8v_bf16_d128(
+            q, k, v, causal=causal, out=out, workspace=workspace_fp8_pt,
+            qk_quant_granularity="per_thread",
+        )
+
     got = run_core()
     torch.cuda.synchronize()
     s = stats(got, ref)
@@ -87,6 +94,8 @@ def run_case(ops, name: str, seqlen_q: int, seqlen_k: int, q_heads: int, kv_head
     core_us = time_cuda(run_core, iters, warmup)
     bf16_us = time_cuda(run_bf16, iters, warmup)
     fp8v_us = time_cuda(run_fp8v, iters, warmup)
+    fp8v_pt_us = time_cuda(run_fp8v_pt, iters, warmup)
+    pt_stats = stats(run_fp8v_pt(), ref)
     return {
         "name": name,
         "seqlen_q": seqlen_q,
@@ -98,9 +107,12 @@ def run_case(ops, name: str, seqlen_q: int, seqlen_k: int, q_heads: int, kv_head
         "core_us": core_us,
         "bf16_us": bf16_us,
         "fp8v_us": fp8v_us,
+        "fp8v_pt_us": fp8v_pt_us,
         "core_speedup": sdpa_us / core_us,
         "bf16_speedup": sdpa_us / bf16_us,
         "fp8v_speedup": sdpa_us / fp8v_us,
+        "fp8v_pt_speedup": sdpa_us / fp8v_pt_us,
+        "pt_cos": pt_stats["cos"],
         **s,
     }
 
@@ -137,16 +149,15 @@ def main() -> None:
         ]
     rows = [run_case(ops, *case, args.iters, args.warmup) for case in cases]
     lines = [
-        "| Workload | Sq/Sk | Hq/Hkv | Mask | SDPA us | Sage core us | Core speedup | Static F16V us | Speedup | Static FP8V us | Speedup | Cos | p99 abs |",
-        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Workload | Sq/Sk | Hq/Hkv | Mask | SDPA us | Sage core us | Static FP8V PW us | Static FP8V PT us | PT vs SDPA | PW/PT cos |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         line = (
             f"| {row['name']} | {row['seqlen_q']}/{row['seqlen_k']} | {row['q_heads']}/{row['kv_heads']} | "
             f"{'causal' if row['causal'] else 'none'} | {row['sdpa_us']:.3f} | {row['core_us']:.3f} | "
-            f"{row['core_speedup']:.2f}x | {row['bf16_us']:.3f} | {row['bf16_speedup']:.2f}x | "
-            f"{row['fp8v_us']:.3f} | {row['fp8v_speedup']:.2f}x | "
-            f"{row['cos']:.6f} | {row['p99_abs']:.6f} |"
+            f"{row['fp8v_us']:.3f} | {row['fp8v_pt_us']:.3f} | {row['fp8v_pt_speedup']:.2f}x | "
+            f"{row['cos']:.6f}/{row['pt_cos']:.6f} |"
         )
         print(line)
         lines.append(line)
