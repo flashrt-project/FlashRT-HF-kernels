@@ -693,32 +693,44 @@ struct CollectiveMainloopFwd {
         auto add_delta_s = [&](auto& acc) {
             auto acc_float4 = recast<float4>(acc);
             int quad_id = (threadIdx.x % 4) * 2;
-            for (int i = 0; i < 4; i++) {
-                auto num = quad_id + i * 8;
-                float4 delta_s_0;
-                float4 delta_s_1;
-                if constexpr (std::is_same_v<ElementDS, float>) {
-                    auto tSsDS_stage = recast<float4>(sDS(_, _, smem_pipe_read_k.index()));
-                    delta_s_0 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num, _0{}));
-                    delta_s_1 = tSsDS_stage(make_coord(_0{}, _0{}), make_coord(num + 1, _0{}));
-                } else {
-                    const int stage = smem_pipe_read_k.index();
-                    const int col0 = num * 4;
-                    const int col1 = (num + 1) * 4;
-                    auto load_bf16x4 = [&](int col) {
-                        const auto* ptr = reinterpret_cast<const __nv_bfloat162*>(
-                            &sDS(_0{}, col, stage));
-                        const float2 lo = __bfloat1622float2(ptr[0]);
-                        const float2 hi = __bfloat1622float2(ptr[1]);
-                        return make_float4(lo.x, lo.y, hi.x, hi.y);
-                    };
-                    delta_s_0 = load_bf16x4(col0);
-                    delta_s_1 = load_bf16x4(col1);
+            if constexpr (std::is_same_v<ElementDS, float>) {
+                auto tSsDS_stage = recast<float4>(sDS(_, _, smem_pipe_read_k.index()));
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < 4; i++) {
+                    auto num = quad_id + i * 8;
+                    float4 delta_s_0 = tSsDS_stage(
+                        make_coord(_0{}, _0{}), make_coord(num, _0{}));
+                    float4 delta_s_1 = tSsDS_stage(
+                        make_coord(_0{}, _0{}), make_coord(num + 1, _0{}));
+                    acc_float4(make_coord(make_coord(_0{}, _0{}), _0{}), _0{}, i) = delta_s_0;
+                    acc_float4(make_coord(make_coord(_0{}, _0{}), _1{}), _0{}, i) = delta_s_0;
+                    acc_float4(make_coord(make_coord(_0{}, _1{}), _0{}), _0{}, i) = delta_s_1;
+                    acc_float4(make_coord(make_coord(_0{}, _1{}), _1{}), _0{}, i) = delta_s_1;
                 }
-                acc_float4(make_coord(make_coord(_0{}, _0{}), _0{}), _0{}, i) = delta_s_0;
-                acc_float4(make_coord(make_coord(_0{}, _0{}), _1{}), _0{}, i) = delta_s_0;
-                acc_float4(make_coord(make_coord(_0{}, _1{}), _0{}), _0{}, i) = delta_s_1;
-                acc_float4(make_coord(make_coord(_0{}, _1{}), _1{}), _0{}, i) = delta_s_1;
+            } else {
+                const int stage = smem_pipe_read_k.index();
+                CUTLASS_PRAGMA_UNROLL
+                for (int i = 0; i < 4; i++) {
+                    auto num = quad_id + i * 8;
+                    const auto* ptr0 = reinterpret_cast<const __nv_bfloat162*>(
+                        &sDS(_0{}, num * 4, stage));
+                    const auto* ptr1 = reinterpret_cast<const __nv_bfloat162*>(
+                        &sDS(_0{}, (num + 1) * 4, stage));
+                    const float2 delta_s_0_lo = __bfloat1622float2(ptr0[0]);
+                    const float2 delta_s_0_hi = __bfloat1622float2(ptr0[1]);
+                    const float2 delta_s_1_lo = __bfloat1622float2(ptr1[0]);
+                    const float2 delta_s_1_hi = __bfloat1622float2(ptr1[1]);
+                    const float4 delta_s_0 = make_float4(
+                        delta_s_0_lo.x, delta_s_0_lo.y,
+                        delta_s_0_hi.x, delta_s_0_hi.y);
+                    const float4 delta_s_1 = make_float4(
+                        delta_s_1_lo.x, delta_s_1_lo.y,
+                        delta_s_1_hi.x, delta_s_1_hi.y);
+                    acc_float4(make_coord(make_coord(_0{}, _0{}), _0{}), _0{}, i) = delta_s_0;
+                    acc_float4(make_coord(make_coord(_0{}, _0{}), _1{}), _0{}, i) = delta_s_0;
+                    acc_float4(make_coord(make_coord(_0{}, _1{}), _0{}), _0{}, i) = delta_s_1;
+                    acc_float4(make_coord(make_coord(_0{}, _1{}), _1{}), _0{}, i) = delta_s_1;
+                }
             }
         };
         consumer_wait(pipeline_q, smem_pipe_read_q);
