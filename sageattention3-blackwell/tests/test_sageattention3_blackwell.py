@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import math
 import os
 import sys
@@ -48,6 +49,32 @@ class SourceOps:
 class InstalledOps(SourceOps):
     def __init__(self, module):
         self.ops = module.ops
+
+
+def load_installed_module(artifact: str | None):
+    if not artifact:
+        return importlib.import_module("sageattention3_blackwell")
+
+    artifact_path = Path(artifact)
+    flat_init = artifact_path / "__init__.py"
+    if flat_init.is_file():
+        spec = importlib.util.spec_from_file_location(
+            "sageattention3_blackwell",
+            flat_init,
+            submodule_search_locations=[str(artifact_path)],
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load artifact entry: {flat_init}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    sys.path.insert(0, str(artifact_path))
+    try:
+        return importlib.import_module("sageattention3_blackwell")
+    finally:
+        sys.path.remove(str(artifact_path))
 
 
 def load_source_ops():
@@ -197,9 +224,7 @@ def main():
     if args.backend == "source":
         ops = load_source_ops()
     else:
-        if args.artifact:
-            sys.path.insert(0, args.artifact)
-        module = importlib.import_module("sageattention3_blackwell")
+        module = load_installed_module(args.artifact)
         expected = {
             "head_dims": (64, 128),
             "layouts": ("NHD",),
