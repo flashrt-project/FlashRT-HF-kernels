@@ -43,7 +43,7 @@ The release gate also checks:
 ## Published artifact gate
 
 Cold-cache validation loaded `flashrt/sageattention2-blackwell@v1` commit
-`ca36bd86` and selected `torch211-cxx11-cu128-x86_64-linux`. The installed
+`b1bef1f5` and selected `torch211-cxx11-cu128-x86_64-linux`. The installed
 full matrix passed with the same metrics as the source gate. A
 `torch.compile(..., fullgraph=True)` call over the static FP8-V wrapper also
 passed and was bitwise equal to eager execution.

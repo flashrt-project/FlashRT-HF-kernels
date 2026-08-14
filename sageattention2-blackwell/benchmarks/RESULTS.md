@@ -3,28 +3,28 @@
 ## Native V-producer parity update
 
 RTX 5090, published `flashrt/sageattention2-blackwell@v1` artifact
-`ca36bd86`, Torch 2.11/CUDA 12.8, 10 warmup and 50 measured iterations. The FP8-V path
+`b1bef1f5`, Torch 2.11/CUDA 12.8, 10 warmup and 50 measured iterations. The FP8-V path
 uses the FlashRT native two-stage V producer with caller-owned BF16 transpose
 workspace. The earlier direct strided V producer is retained only as a
 low-level compatibility op and is not used by the public FP8-V wrapper.
 
 | Workload | Sq/Sk | Hq/Hkv | SDPA us | Static FP8V PW us | Static FP8V PT us | PW vs SDPA | PW/PT cosine |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| qwen3 prefill | 1024/1024 | 32/8 | 96.492 | 63.654 | 69.795 | 1.52x | 0.999998/0.999393 |
-| qwen3 prefill | 4096/4096 | 32/8 | 840.331 | 388.069 | 460.062 | 2.17x | 0.999998/0.999360 |
-| video self-attn | 6144/6144 | 32/32 | 3106.768 | 1375.407 | 1680.252 | 2.26x | 0.999997/0.999191 |
-| video self-attn | 24576/24576 | 32/32 | 45869.180 | 18748.281 | 19741.284 | 2.45x | 0.999997/0.999216 |
-| video cross-attn | 6144/1024 | 32/32 | 551.809 | 282.143 | 404.425 | 1.96x | 0.999997/0.999218 |
-| video cross-attn | 24576/1024 | 32/32 | 2014.350 | 1012.648 | 1287.469 | 1.99x | 0.999997/0.999256 |
+| qwen3 prefill | 1024/1024 | 32/8 | 96.508 | 63.608 | 69.746 | 1.51x | 0.999998/0.999392 |
+| qwen3 prefill | 4096/4096 | 32/8 | 840.246 | 388.349 | 459.311 | 2.16x | 0.999997/0.999359 |
+| video self-attn | 6144/6144 | 32/32 | 3102.310 | 1373.791 | 1680.066 | 2.26x | 0.999997/0.999193 |
+| video self-attn | 24576/24576 | 32/32 | 45861.597 | 18735.784 | 19711.908 | 2.45x | 0.999997/0.999217 |
+| video cross-attn | 6144/1024 | 32/32 | 547.931 | 281.617 | 404.131 | 1.95x | 0.999997/0.999220 |
+| video cross-attn | 24576/1024 | 32/32 | 2016.243 | 1011.889 | 1285.750 | 1.99x | 0.999997/0.999256 |
 
 Same-process direct FlashRT-native comparison used identical inputs and timing:
 
 | Workload | Packaged full us | FlashRT native full us | Ratio | Packaged/native cosine |
 |---|---:|---:|---:|---:|
-| video self-attn 6144 | 1344.846 | 1360.019 | 0.989x | 0.9999883 |
-| video self-attn 24576 | 18764.397 | 18619.458 | 1.008x | 0.9999874 |
-| video cross-attn 6144/1024 | 278.314 | 277.645 | 1.002x | 0.9999899 |
-| video cross-attn 24576/1024 | 977.043 | 986.879 | 0.990x | 0.9999892 |
+| video self-attn 6144 | 1344.192 | 1357.312 | 0.990x | 1.0000000 |
+| video self-attn 24576 | 18702.976 | 18568.512 | 1.007x | 1.0000000 |
+| video cross-attn 6144/1024 | 288.944 | 287.376 | 1.005x | 1.0000000 |
+| video cross-attn 24576/1024 | 1013.232 | 1018.752 | 0.995x | 1.0000000 |
 
 The final source parity gate runs independent Hub and native producer+core
 paths from the same BF16 inputs. At `S=6144` and `S=24576`, all Q/K INT8 bytes,
