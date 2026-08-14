@@ -2,7 +2,7 @@
   description = "Flake for FlashRT SageAttention2 Blackwell kernels";
 
   inputs = {
-    kernel-builder.url = "github:huggingface/kernels";
+    kernel-builder.url = "github:flashrt-project/kernels/flashrt-torch211-cutlass44";
   };
 
   outputs =
