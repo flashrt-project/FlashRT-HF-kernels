@@ -7,6 +7,10 @@ The SageAttention2 CUDA implementation is synchronized against FlashRT PR
 The package preserves the native quantization expressions and attention core.
 The FP8-V convenience path also preserves the native two-stage coalesced
 transpose/pad/permutation followed by vectorized per-channel FP8 quantization.
+The V producer uses a scoped `__fdividef` for the inverse scale because the
+native Sage2 object is compiled with `--use_fast_math`; this is required for
+byte-exact FP8 parity while keeping the packaged attention core's compilation
+contract unchanged.
 Permitted package-only differences are:
 
 - Tensor/custom-op bindings and caller-owned workspace APIs;

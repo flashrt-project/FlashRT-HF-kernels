@@ -415,7 +415,9 @@ __global__ void v_tpp_quant_fp8_d128_kernel(
   if (tid == 0) {
     scale[((long long)b * heads + h) * kHeadDim + d] = safe_amax * (1.0f / 448.0f);
   }
-  const float inv_scale = 448.0f / safe_amax;
+  // FlashRT's native Sage2 object is built with --use_fast_math. Match its
+  // reciprocal semantics locally without changing the packaged attention core.
+  const float inv_scale = __fdividef(448.0f, safe_amax);
   for (int t = tid * kPack; t < padded; t += blockDim.x * kPack) {
     __nv_bfloat16 values_bf16[kPack];
     float values[kPack];

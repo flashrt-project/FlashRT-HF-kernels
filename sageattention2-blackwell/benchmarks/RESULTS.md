@@ -26,10 +26,12 @@ Same-process direct FlashRT-native comparison used identical inputs and timing:
 | video cross-attn 6144/1024 | 278.314 | 277.645 | 1.002x | 0.9999899 |
 | video cross-attn 24576/1024 | 977.043 | 986.879 | 0.990x | 0.9999892 |
 
-The direct comparison's core-only output is bitwise identical. Small complete
-path differences come from FP8 boundary rounding between separately compiled
-CUDA artifacts; both paths satisfy the same FP8 numerical contract and SDPA
-correctness gates.
+The final source parity gate additionally checks the native producer and core
+without changing inputs between paths. At `S=6144` and `S=24576`, all V FP8
+bytes and scale values are exact. Complete self-attention and cross-attention
+outputs are bitwise identical (`max_abs=0`). The scoped `__fdividef` in the Hub
+producer matches the native object's `--use_fast_math` reciprocal semantics
+without enabling fast math for the packaged attention core.
 
 ## Per-thread and Q/K producer release gate
 
