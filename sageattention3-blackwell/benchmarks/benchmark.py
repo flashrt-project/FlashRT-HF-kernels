@@ -54,10 +54,14 @@ def main() -> None:
         ops = test.load_source_ops()
         sage2 = sage2_test.load_source_ops()
     else:
-        if args.artifact:
-            sys.path.insert(0, args.artifact)
-        ops = test.InstalledOps(importlib.import_module("sageattention3_blackwell"))
-        sage2 = importlib.import_module("sageattention2_blackwell")
+        from kernels import get_kernel
+
+        ops = test.InstalledOps(test.load_installed_module(args.artifact))
+        sage2 = get_kernel(
+            "flashrt/sageattention2-blackwell",
+            version=1,
+            trust_remote_code=True,
+        )
 
     cases = [(6144, 128), (2688, 64)]
     if args.mode == "full":
