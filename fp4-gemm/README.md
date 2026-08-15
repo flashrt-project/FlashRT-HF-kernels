@@ -169,6 +169,17 @@ elementwise code between low-bit GEMMs. Stream-K variants are selected only
 for the validated large down-projection shapes; unsupported shapes reject
 rather than silently selecting a losing schedule.
 
+For M=1 decode, call `fp4_repack_b_interleaved_sm120` once when binding a
+static packed weight, then use `fp4_w4a4_gemv_warpsplit_interleaved_bf16` in
+the hot path. The default 8-warp/3-stage schedule is the qualified
+out-of-cache profile; explicit `warps` and `stages` remain available for
+shape-specific tuning.
+
+`nvfp4_gemm_m256_bf16` is an explicit SM120 large-M tier. Query
+`nvfp4_gemm_m256_workspace_size` and allocate the workspace before graph
+capture. Runtime dispatchers must read `capabilities()`; M>=512 alone is not
+a performance qualification for every N/K pair.
+
 ## Validation
 
 ```bash

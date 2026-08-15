@@ -30,6 +30,8 @@ src = [
   "csrc/gated_delta_wy_recompute_wu_mma_fla.cu",
   "csrc/gated_delta_wy_bf16_mma_fla.cu",
   "csrc/gated_delta_wy_output_o_mma_fla.cu",
+  "csrc/gated_delta_wy_kkt_mma.cu",
+  "csrc/gated_delta_wy_kkt_mma.cuh",
 ]
 cuda-flags = [
   "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",

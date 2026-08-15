@@ -31,6 +31,10 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 - `nvfp4_gemm_streamk_bf16`
 - `nvfp4_gemm_streamk_bias_bf16`
 - `fp4_w4a16_linear_bf16` (compatibility alias)
+- `fp4_repack_b_interleaved_sm120`
+- `fp4_w4a4_gemv_warpsplit_interleaved_bf16`
+- `nvfp4_gemm_m256_workspace_size`
+- `nvfp4_gemm_m256_bf16`
 - `e0m3_weight_gemm_fp16`
 - `nvfp4_gemm_relu2_nvfp4`
 
@@ -48,6 +52,25 @@ w = torch.randn((512, 256), device="cuda", dtype=torch.float16)
 a, sfa = ops.quantize_fp4_sfa_fp16(x, is_sfb=False)
 b, sfb = ops.quantize_fp4_sfa_fp16(w, is_sfb=True)
 y = ops.nvfp4_gemm_bf16(a, b, sfa, sfb)
+```
+
+For M=1 decode, repack each static weight once and retain the interleaved
+buffer beside the original packed weight:
+
+```python
+b_interleaved = ops.fp4_repack_b_interleaved_sm120(b)
+y = ops.fp4_w4a4_gemv_warpsplit_interleaved_bf16(
+    a, b_interleaved, sfa, sfb, warps=8, stages=3
+)
+```
+
+The large-M tier uses a caller-owned workspace. Allocate it before CUDA Graph
+capture and pass the same tensor on every replay:
+
+```python
+workspace_bytes = ops.nvfp4_gemm_m256_workspace_size(a, b, sfa, sfb)
+workspace = torch.empty(workspace_bytes, device=a.device, dtype=torch.uint8)
+y = ops.nvfp4_gemm_m256_bf16(a, b, sfa, sfb, workspace=workspace)
 ```
 
 BF16 activations should use the direct producer to avoid a separate cast and
@@ -74,3 +97,6 @@ a, sfa = ops.quantize_fp4_sfa_bf16(x)
 - Dimensions used by Blackwell NVFP4 TMA are physically aligned to 32. For
   logical widths such as SigLIP 4304, use the bind-time padding/packing helpers
   to create static 4320 tensors; the GEMM hot path performs no padding.
+- `nvfp4_gemm_m256_bf16` requires M>=512. Production qualification currently
+  covers `(N,K)=(17408,5120),(5120,17408),(12288,5120)` on RTX 5090. Read
+  `capabilities()` before dispatch; `(16384,5120)` is diagnostic only.

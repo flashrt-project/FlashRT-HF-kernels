@@ -4,6 +4,8 @@
 - Original SM110 sync commit: `132049d7c3a3534fb7d35676cd726f39408b1af6`
 - GROOT N1.7 fused-epilogue sync commit:
   `24df793f4fa2d50780aea03b644208c6e0cb4162`
+- Qwen3.8 SM120 decode/prefill tier sync commit:
+  `e2f4b16cea32bd520c93119b142758693793dfeb`
 - Initial package date: June 20, 2026
 
 Copied source files:
@@ -13,6 +15,8 @@ Copied source files:
 - `csrc/gemm/fp4/cutlass_fp4_gemm_bias_bf16_sm100.cu/.cuh`
 - `csrc/quantize/quantize_fp4_sfa.cu/.cuh`
 - `csrc/quantize/quantize_fp4_sfa_bf16.cu/.cuh`
+- `csrc/gemm/fp4/fp4_w4a4_mma_warpsplit_ilv_sm120.cu/.cuh`
+- `csrc/gemm/fp4/cutlass_nvfp4_gemm_m256_sm120.cu/.cuh`
 - `cutlass/util/packed_stride.hpp`, copied from CUTLASS tools util headers
   into `csrc/cutlass/util/packed_stride.hpp` so the Hub package does not
   depend on a local `third_party/cutlass/tools/util/include` path.
@@ -46,4 +50,13 @@ Architecture limits:
   backend copied from the production GROOT N1.7 path. Stream-K remains an
   SM120-only API and rejects on SM110.
 - SM110 requires CUDA 13 and the package's pinned CUTLASS 4.4 target; SM120
-  requires CUDA 12.8 and CUTLASS 4.0.
+  requires CUDA 12.8 and CUTLASS 4.5 after the M256 tier was added.
+- The M256 source include was rewritten to the package-local
+  `gemm/fp4/...` path. Kernel arithmetic is otherwise unchanged.
+- The interleaved GEMV accepts only M=1, N divisible by 8, K divisible by 64,
+  and a K/64 tile count divisible by the selected warp count. Repacking is a
+  bind-time byte permutation and is not part of the decode hot path.
+- The M256 entry is explicit rather than automatic. RTX 5090 qualification
+  covers `(N,K)=(17408,5120),(5120,17408),(12288,5120)` at M=2044. The
+  `(16384,5120)` row remains diagnostic because it did not beat the existing
+  128-tile path in min-of-N testing.

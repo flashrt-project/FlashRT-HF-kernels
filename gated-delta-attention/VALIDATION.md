@@ -13,6 +13,19 @@ Correctness metrics:
 - `p99_abs`
 - cosine similarity
 
+## SM120 MMA WY KKT
+
+The additive `gdn_wy_kkt_b64_mma_bf16` source gate covers
+`S={63,64,657,2048,2049}` against the established scalar entry. Across the
+grid, max absolute error was at most `3.73e-8`, p99 relative error was at most
+`3.20e-6`, and every upper-triangular and out-of-range tail value was exactly
+zero. Two CUDA Graph replays were bit-identical.
+
+At S=2048 on RTX 5090, PyTorch `2.11.0+cu128`, the scalar entry measured
+`876.26 us` and the MMA entry `26.65 us`, a `32.88x` speedup. This comparison
+uses the same package, tensors, stream, output layout, warmup, and timing
+harness.
+
 The reference uses the same recurrent Gated DeltaNet math with FP32 internal
 accumulation and BF16 state/output casts. Split/gating helpers are checked
 against exact PyTorch tensor formulas. `gdn_chunk_from_conv_smem_bf16` and the

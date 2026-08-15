@@ -1,5 +1,16 @@
 # Results
 
+## SM120 MMA WY KKT
+
+RTX 5090, PyTorch `2.11.0+cu128`, 10 warmup and 100 measured launches:
+
+| S | Scalar KKT | MMA KKT | Speedup |
+| ---: | ---: | ---: | ---: |
+| 2048 | 876.26 us | 26.65 us | 32.88x |
+
+Both rows use the same tensors, output layout, stream, and package source
+extension. See `VALIDATION.md` for the five-length numerical and graph gate.
+
 Built-artifact benchmark results are pending for v5.
 
 ## H32/H16 WY prefill

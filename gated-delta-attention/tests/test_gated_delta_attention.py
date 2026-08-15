@@ -229,6 +229,17 @@ class SourceOps:
         self._ops.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum, out)
         return out
 
+    def wy_kkt_mma(self, k16_l2, beta, g_cumsum, A=None):
+        S = k16_l2.shape[0]
+        if A is None:
+            A = torch.empty(
+                ((S + 63) // 64, 48, 64, 64),
+                device=k16_l2.device,
+                dtype=torch.float32,
+            )
+        self._ops.gdn_wy_kkt_b64_mma_bf16(k16_l2, beta, g_cumsum, A)
+        return A
+
     def wy_mma_fla(self, q16, k16, v48, g, beta, state):
         S = q16.shape[0]
         chunks = (S + 63) // 64
@@ -452,6 +463,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "gated_delta_wy_recompute_wu_mma_fla.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_bf16_mma_fla.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_output_o_mma_fla.cu"),
+            str(PACKAGE / "csrc" / "gated_delta_wy_kkt_mma.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -671,6 +683,76 @@ def run_h32_graph(ops) -> None:
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
     torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
+
+
+def run_wy_kkt_mma_gate(ops) -> None:
+    rows = []
+    for S in (63, 64, 657, 2048, 2049):
+        gen = torch.Generator(device="cuda").manual_seed(20260815 + S)
+        k = (torch.randn((S, 16, D), device="cuda", generator=gen) * 0.05).bfloat16()
+        beta = torch.sigmoid(torch.randn((S, 48), device="cuda", generator=gen)).bfloat16()
+        g_cumsum = torch.cumsum(
+            -(torch.rand((S, 48), device="cuda", generator=gen) * 0.02), 0
+        ).bfloat16()
+        shape = ((S + 63) // 64, 48, 64, 64)
+        reference = torch.empty(shape, device="cuda", dtype=torch.float32)
+        got = torch.empty_like(reference)
+        ops._ops.gdn_wy_kkt_b64_bf16(k, beta, g_cumsum, reference)
+        ops._ops.gdn_wy_kkt_b64_mma_bf16(k, beta, g_cumsum, got)
+        torch.cuda.synchronize()
+        diffs, rels = [], []
+        for chunk in range(shape[0]):
+            valid = min(64, S - chunk * 64)
+            ref = reference[chunk, :, :valid, :valid].flatten()
+            diff = (got[chunk, :, :valid, :valid].flatten() - ref).abs()
+            diffs.append(diff)
+            nz = ref.abs() > 1e-7
+            rels.append(diff[nz] / ref[nz].abs())
+        diff = torch.cat(diffs)
+        rel = torch.cat(rels)
+        upper_mask = torch.triu(
+            torch.ones((64, 64), device="cuda", dtype=torch.bool), diagonal=0
+        )
+        upper_zero = float(got[:, :, upper_mask].abs().max().item())
+        tail_zero = 0.0
+        if S % 64:
+            valid = S % 64
+            tail_zero = float(torch.cat((
+                got[-1, :, valid:, :].flatten(),
+                got[-1, :, :valid, valid:].flatten(),
+            )).abs().max().item())
+        rows.append((
+            S, float(diff.max().item()), float(torch.quantile(rel, 0.99).item()),
+            upper_zero, tail_zero,
+        ))
+    for S, max_abs, p99_rel, upper_zero, tail_zero in rows:
+        if not (max_abs <= 5e-8 and p99_rel <= 5e-3
+                and upper_zero == 0.0 and tail_zero == 0.0):
+            raise AssertionError(
+                f"MMA KKT failed S={S}: max_abs={max_abs} p99_rel={p99_rel} "
+                f"upper={upper_zero} tail={tail_zero}"
+            )
+
+    S = 657
+    gen = torch.Generator(device="cuda").manual_seed(9)
+    k = (torch.randn((S, 16, D), device="cuda", generator=gen) * 0.05).bfloat16()
+    beta = torch.sigmoid(torch.randn((S, 48), device="cuda", generator=gen)).bfloat16()
+    g_cumsum = torch.cumsum(
+        -(torch.rand((S, 48), device="cuda", generator=gen) * 0.02), 0
+    ).bfloat16()
+    out = torch.empty(((S + 63) // 64, 48, 64, 64), device="cuda", dtype=torch.float32)
+    ops.wy_kkt_mma(k, beta, g_cumsum, out)
+    torch.cuda.synchronize()
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.wy_kkt_mma(k, beta, g_cumsum, out)
+    graph.replay()
+    torch.cuda.synchronize()
+    first = out.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    if not torch.equal(first, out):
+        raise AssertionError("MMA KKT CUDA Graph replay is not bitwise stable")
 
 
 def run_h32_wy_graph(ops) -> None:
@@ -986,6 +1068,7 @@ def main() -> int:
     if not all(r.passed for r in rows):
         raise AssertionError("gated-delta-attention correctness failed")
     if args.mode == "full":
+        run_wy_kkt_mma_gate(ops)
         run_sequence_graph(ops)
         run_h32_graph(ops)
         run_h32_wy_graph(ops)

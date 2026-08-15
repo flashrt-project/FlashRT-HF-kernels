@@ -104,6 +104,10 @@ void gdn_wy_kkt_b64_bf16(torch::Tensor const& k16_l2,
                          torch::Tensor const& beta,
                          torch::Tensor const& g_cumsum,
                          torch::Tensor& A);
+void gdn_wy_kkt_b64_mma_bf16(torch::Tensor const& k16_l2,
+                             torch::Tensor const& beta,
+                             torch::Tensor const& g_cumsum,
+                             torch::Tensor& A);
 void gdn_wy_solve_tril_b64_f32(torch::Tensor const& A,
                                torch::Tensor& Ai,
                                int64_t S);

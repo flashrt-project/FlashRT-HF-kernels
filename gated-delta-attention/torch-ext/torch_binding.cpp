@@ -10,6 +10,7 @@
 
 #include "gated_delta_attention.cuh"
 #include "gated_delta_wy_bf16.cuh"
+#include "gated_delta_wy_kkt_mma.cuh"
 #include "kernels/gdn_recurrent_seq_sm120.cuh"
 #include "registration.h"
 #include "torch_binding.h"
@@ -817,6 +818,27 @@ void gdn_wy_kkt_b64_bf16(torch::Tensor const& k16_l2,
 #endif
 }
 
+void gdn_wy_kkt_b64_mma_bf16(torch::Tensor const& k16_l2,
+                             torch::Tensor const& beta,
+                             torch::Tensor const& g_cumsum,
+                             torch::Tensor& A) {
+  const auto S = k16_l2.size(0);
+  const auto chunks = (S + 63) / 64;
+  check_q16(k16_l2, "k16_l2", S);
+  check_heads48(beta, "beta", S);
+  check_heads48(g_cumsum, "g_cumsum", S);
+  check_wy_chunks(A, "A", chunks, 64, 64);
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(k16_l2.device());
+  auto stream = at::cuda::getCurrentCUDAStream(k16_l2.get_device()).stream();
+  qwen36_gdn_wy_kkt_b64_mma_bf16(
+      k16_l2.data_ptr(), beta.data_ptr(), g_cumsum.data_ptr(), A.data_ptr(),
+      static_cast<int>(S), stream);
+#else
+  TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
+#endif
+}
+
 void gdn_wy_solve_tril_b64_f32(torch::Tensor const& A,
                                torch::Tensor& Ai,
                                int64_t S) {
@@ -1368,6 +1390,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("gdn_chunk_from_conv_smem_h_bf16(Tensor conv_out, Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! state, Tensor! out, int num_v_heads, int num_k_heads, int head_dim=128, bool use_qk_l2norm=True) -> ()");
   ops.def("gdn_wy_norm_cumsum_pack_qk_bf16(Tensor q16, Tensor k16, Tensor g, Tensor! q16_l2, Tensor! k16_l2, Tensor! q_pack_hv, Tensor! k_pack_hk, Tensor! g_cumsum) -> ()");
   ops.def("gdn_wy_kkt_b64_bf16(Tensor k16_l2, Tensor beta, Tensor g_cumsum, Tensor! A) -> ()");
+  ops.def("gdn_wy_kkt_b64_mma_bf16(Tensor k16_l2, Tensor beta, Tensor g_cumsum, Tensor! A) -> ()");
   ops.def("gdn_wy_solve_tril_b64_f32(Tensor A, Tensor! Ai, int S) -> ()");
   ops.def("gdn_wy_recompute_wu_b64_bf16(Tensor k16_l2, Tensor v48, Tensor beta, Tensor g_cumsum, Tensor Ai, Tensor! w48, Tensor! u48) -> ()");
   ops.def("gdn_wy_chunk_h_b64_bf16(Tensor k16_l2, Tensor u48, Tensor w48, Tensor g_cumsum, Tensor! state, Tensor! h0, Tensor! v_new) -> ()");
@@ -1409,6 +1432,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("gdn_chunk_from_conv_smem_h_bf16", torch::kCUDA, &gdn_chunk_from_conv_smem_h_bf16);
   ops.impl("gdn_wy_norm_cumsum_pack_qk_bf16", torch::kCUDA, &gdn_wy_norm_cumsum_pack_qk_bf16);
   ops.impl("gdn_wy_kkt_b64_bf16", torch::kCUDA, &gdn_wy_kkt_b64_bf16);
+  ops.impl("gdn_wy_kkt_b64_mma_bf16", torch::kCUDA, &gdn_wy_kkt_b64_mma_bf16);
   ops.impl("gdn_wy_solve_tril_b64_f32", torch::kCUDA, &gdn_wy_solve_tril_b64_f32);
   ops.impl("gdn_wy_recompute_wu_b64_bf16", torch::kCUDA, &gdn_wy_recompute_wu_b64_bf16);
   ops.impl("gdn_wy_chunk_h_b64_bf16", torch::kCUDA, &gdn_wy_chunk_h_b64_bf16);

@@ -286,6 +286,11 @@ def _wy_kkt_fake(k16_l2, beta, g_cumsum, A) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_kkt_b64_mma_bf16"))
+def _wy_kkt_mma_fake(k16_l2, beta, g_cumsum, A) -> None:
+    return _wy_kkt_fake(k16_l2, beta, g_cumsum, A)
+
+
 @torch.library.register_fake(add_op_namespace_prefix("gdn_wy_solve_tril_b64_f32"))
 def _wy_solve_fake(A, Ai, S: int) -> None:
     if A.shape != (_chunks(S), 48, 64, 64) or Ai.shape != A.shape:
@@ -954,6 +959,25 @@ def gdn_wy_kkt_b64_bf16(
     return A
 
 
+def gdn_wy_kkt_b64_mma_bf16(
+    k16_l2: torch.Tensor,
+    beta: torch.Tensor,
+    g_cumsum: torch.Tensor,
+    *,
+    A: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """MMA WY KKT for 16 K heads, 48 V heads, D=128 and 64-token chunks."""
+    S = k16_l2.shape[0]
+    if A is None:
+        A = torch.empty(
+            (_chunks(S), 48, 64, 64),
+            device=k16_l2.device,
+            dtype=torch.float32,
+        )
+    ops.gdn_wy_kkt_b64_mma_bf16(k16_l2, beta, g_cumsum, A)
+    return A
+
+
 def gdn_wy_solve_tril_b64_f32(
     A: torch.Tensor,
     S: int,
@@ -1283,6 +1307,7 @@ __all__ = [
     "gdn_chunk_from_conv_smem_h_bf16",
     "gdn_wy_norm_cumsum_pack_qk_bf16",
     "gdn_wy_kkt_b64_bf16",
+    "gdn_wy_kkt_b64_mma_bf16",
     "gdn_wy_solve_tril_b64_f32",
     "gdn_wy_recompute_wu_b64_bf16",
     "gdn_wy_chunk_h_b64_bf16",

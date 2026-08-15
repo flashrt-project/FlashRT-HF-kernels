@@ -1,5 +1,21 @@
 # fp4-gemm Benchmark Results
 
+## SM120 Qwen3.8 Decode/Prefill Tiers
+
+Source-extension validation on RTX 5090, PyTorch `2.11.0+cu128`, CUTLASS
+4.5.0. The interleaved GEMV bandwidth row cycles a `574.6 MiB` working set.
+
+| Workload | Shape | Baseline | New tier | Speedup / bandwidth |
+| --- | --- | ---: | ---: | ---: |
+| interleaved GEMV | M1 N17408 K5120 | 35.99 us | 32.82 us | 1.096x / 1529.8 GB/s |
+| M256 GEMM | M2044 N17408 K5120 | 0.275 ms | 0.251 ms | 1.097x |
+| M256 GEMM | M2044 N5120 K17408 | 0.268 ms | 0.230 ms | 1.167x |
+| M256 GEMM | M2044 N12288 K5120 | 0.196 ms | 0.179 ms | 1.099x |
+| M256 diagnostic | M2044 N16384 K5120 | 0.262 ms | 0.266 ms | 0.986x; rejected from production qualification |
+
+Correctness is reported in `VALIDATION.md`; performance rows are never used as
+a substitute for the bit-exact and graph-replay gates.
+
 ## SM120 public bias dispatch (2026-08-11)
 
 Source release candidate on RTX 5090, PyTorch `2.11.0+cu128`. The public

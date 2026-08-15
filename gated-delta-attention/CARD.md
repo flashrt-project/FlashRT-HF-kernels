@@ -40,6 +40,7 @@ host fallback for that profile.
 - `gdn_chunk_from_conv_smem_h_bf16`
 - `gdn_wy_norm_cumsum_pack_qk_bf16`
 - `gdn_wy_kkt_b64_bf16`
+- `gdn_wy_kkt_b64_mma_bf16`
 - `gdn_wy_solve_tril_b64_f32`
 - `gdn_wy_cast_ai_f32_to_bf16`
 - `gdn_wy_recompute_wu_b64_bf16`
@@ -94,7 +95,7 @@ The FLA-style path keeps the hot prefill chain in CUDA kernels:
 
 ```python
 q16_l2, k16_l2, q_pack, _, g_cumsum = gdn.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
-A = gdn.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum)
+A = gdn.gdn_wy_kkt_b64_mma_bf16(k16_l2, beta, g_cumsum)
 Ai = gdn.gdn_wy_solve_tril_b64_f32(A, S)
 Ai_pack = gdn.gdn_wy_cast_ai_f32_to_bf16(Ai, S)
 w_pack, u_pack = gdn.gdn_wy_recompute_wu_b64_mma_fla_bf16(k16_l2, v48, beta, g_cumsum, Ai_pack)
