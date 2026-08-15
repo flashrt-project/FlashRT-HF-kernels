@@ -253,6 +253,7 @@ jobs:
             # The HF Jobs container is started with `set -x`, which would echo
             # secrets into streamed logs. Disable tracing before exporting.
             set +x
+            unset HF_HUB_DISABLE_IMPLICIT_TOKEN
             export HF_TOKEN="${{ secrets.HF_TOKEN }}"
             export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
             export HF_TOKEN_PATH="$HF_HOME/token"
@@ -261,6 +262,20 @@ jobs:
             chmod 600 "$HF_TOKEN_PATH"
             export GIT_LFS_SKIP_SMUDGE=1
             export DEBUG=0
+
+            python - <<'PY'
+            import os
+            import urllib.request
+
+            request = urllib.request.Request(
+                "https://huggingface.co/api/whoami-v2",
+                headers={"Authorization": f"Bearer {os.environ['HF_TOKEN']}"},
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"HF auth preflight failed: HTTP {response.status}")
+            print("HF auth preflight passed")
+            PY
 
             git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
             cd FlashRT-HF-kernels
