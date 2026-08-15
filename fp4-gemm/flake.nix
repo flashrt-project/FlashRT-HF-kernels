@@ -2,8 +2,9 @@
   description = "Flake for FlashRT FP4 GEMM kernels";
 
   inputs = {
-    # Includes the CUTLASS 4.4 dependency mapping required by the SM110 path.
-    kernel-builder.url = "github:huggingface/kernels";
+    # Retains the maintained Torch 2.11 CUDA variants while providing both
+    # CUTLASS 4.4 (SM110) and CUTLASS 4.5 (SM120) dependency mappings.
+    kernel-builder.url = "github:flashrt-project/kernels/flashrt-torch211-cutlass44";
   };
 
   outputs =
