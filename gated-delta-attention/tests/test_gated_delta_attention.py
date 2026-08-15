@@ -206,6 +206,18 @@ class SourceOps:
         )
         return out
 
+    def chunk_from_conv_stash(self, conv_out, a, b, neg, dt, state, stash, num_v_heads, num_k_heads, head_dim=D, use_qk_l2norm=True, out=None):
+        if out is None:
+            out = torch.empty(
+                (conv_out.shape[0], num_v_heads, head_dim),
+                device=conv_out.device, dtype=conv_out.dtype,
+            )
+        self._ops.gdn_chunk_from_conv_smem_stash_bf16(
+            conv_out, a, b, neg, dt, state, out, stash,
+            num_v_heads, num_k_heads, head_dim, use_qk_l2norm,
+        )
+        return out
+
     def wy_pipeline(self, q16, k16, v48, g, beta, state):
         S = q16.shape[0]
         chunks = (S + 63) // 64
@@ -391,6 +403,13 @@ class InstalledOps:
             head_dim=head_dim, use_qk_l2norm=use_qk_l2norm, out=out
         )
 
+    def chunk_from_conv_stash(self, conv_out, a, b, neg, dt, state, stash, num_v_heads, num_k_heads, head_dim=D, use_qk_l2norm=True, out=None):
+        return self._mod.gdn_chunk_from_conv_smem_stash_bf16(
+            conv_out, a, b, neg, dt, state, stash,
+            num_v_heads=num_v_heads, num_k_heads=num_k_heads,
+            head_dim=head_dim, use_qk_l2norm=use_qk_l2norm, out=out,
+        )
+
     def wy_pipeline(self, q16, k16, v48, g, beta, state):
         q16_l2, k16_l2, _, _, g_cumsum = self._mod.gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g)
         A = self._mod.gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum)
@@ -466,6 +485,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "gated_delta_attention.cu"),
             str(PACKAGE / "csrc" / "kernels" / "gdn_recurrent_seq_sm120.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "gdn_chunk_from_conv_smem_stash.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_recompute_wu_mma_fla.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_bf16_mma_fla.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_output_o_mma_fla.cu"),
@@ -689,6 +709,67 @@ def run_h32_graph(ops) -> None:
     torch.cuda.synchronize()
     torch.testing.assert_close(out, expected, rtol=0, atol=0)
     torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
+
+
+def run_h32_stash_gate(ops) -> None:
+    S, Hv, Hk = 8, 32, 16
+    conv, a, b, neg, dt, initial = make_conv_inputs_h(
+        S, Hv, Hk, 434344
+    )
+    expected_state = initial.clone()
+    expected_out = ops.chunk_from_conv_h(
+        conv, a, b, neg, dt, expected_state, Hv, Hk
+    ).clone()
+    state = initial.clone()
+    out = torch.empty_like(expected_out)
+    stash = torch.empty(
+        (S, Hv, D, D), device="cuda", dtype=torch.bfloat16
+    )
+    ops.chunk_from_conv_stash(
+        conv, a, b, neg, dt, state, stash, Hv, Hk, out=out
+    )
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, expected_out, rtol=0, atol=0)
+    torch.testing.assert_close(state, expected_state, rtol=0, atol=0)
+    torch.testing.assert_close(stash[-1], expected_state, rtol=0, atol=0)
+    for prefix in (1, 3, 5, 7):
+        prefix_state = initial.clone()
+        ops.chunk_from_conv_h(
+            conv[:prefix].contiguous(), a[:prefix].contiguous(),
+            b[:prefix].contiguous(), neg, dt, prefix_state, Hv, Hk,
+        )
+        torch.testing.assert_close(
+            stash[prefix - 1], prefix_state, rtol=0, atol=0
+        )
+
+    state.copy_(initial)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        state.copy_(initial)
+        ops.chunk_from_conv_stash(
+            conv, a, b, neg, dt, state, stash, Hv, Hk, out=out
+        )
+    graph.replay()
+    torch.cuda.synchronize()
+    first_out, first_state, first_stash = out.clone(), state.clone(), stash.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    torch.testing.assert_close(out, first_out, rtol=0, atol=0)
+    torch.testing.assert_close(state, first_state, rtol=0, atol=0)
+    torch.testing.assert_close(stash, first_stash, rtol=0, atol=0)
+
+    bad_stash = torch.empty(
+        (S - 1, Hv, D, D), device="cuda", dtype=torch.bfloat16
+    )
+    try:
+        ops.chunk_from_conv_stash(
+            conv, a, b, neg, dt, initial.clone(), bad_stash, Hv, Hk
+        )
+    except RuntimeError as error:
+        if "rows>=S" not in str(error):
+            raise
+    else:
+        raise AssertionError("undersized stash was not rejected")
 
 
 def run_wy_kkt_mma_gate(ops) -> None:
@@ -1077,6 +1158,7 @@ def main() -> int:
         run_wy_kkt_mma_gate(ops)
         run_sequence_graph(ops)
         run_h32_graph(ops)
+        run_h32_stash_gate(ops)
         run_h32_wy_graph(ops)
         run_h32_wy_poisoned_tail(ops)
         run_h32_wy_single_chunk_stress(ops)

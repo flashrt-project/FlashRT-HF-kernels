@@ -16,6 +16,11 @@ RTX 5090, PyTorch `2.11.0+cu128`, CUDA source extension built against CUTLASS
 - M256: bit-exact against the existing 128-tile GEMM at `(512,1024,1024)`;
 - M=511 is rejected before launch;
 - two M256 CUDA Graph replays are bit-identical with caller-owned workspace.
+- multi-row warp-split GEMM: `24/24` production rows are bit-identical to
+  independently quantized per-row warp-split GEMV (`M={2,4,7,8}` over six
+  Qwen3.8 N/K pairs);
+- M=17 is rejected before launch and two multi-row CUDA Graph replays are
+  bit-identical.
 
 The interleaved GEMV measured `1529.8 GB/s` on a `574.6 MiB` cyclic working
 set at `(N,K)=(17408,5120)`, 8 warps and 3 stages, versus `1.096x` slower base
@@ -23,6 +28,11 @@ GEMV. The M256/128-tile speedups at M=2044 were `1.097x`, `1.167x`, and
 `1.099x` for `(N,K)=(17408,5120),(5120,17408),(12288,5120)`. The
 `(16384,5120)` row measured `0.986x` in alternating min-of-N runs and is
 therefore diagnostic, not production-qualified.
+
+At `(M,N,K)=(8,17408,5120)`, the standard-layout multi-row entry measured
+`42.24 us` median versus `234.86 us` for eight independent warp-split GEMV
+launches, a `5.56x` speedup. Both paths consumed the same packed tensors and
+used the same warp/stage configuration.
 
 ```bash
 python fp4-gemm/tests/test_fp4_gemm.py \

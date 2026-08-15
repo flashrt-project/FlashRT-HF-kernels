@@ -34,6 +34,9 @@ def capabilities() -> dict[str, object]:
         "sm120_m256_diagnostic_nk": ((16384, 5120),),
         "sm120_interleaved_gemv_m": 1,
         "sm120_interleaved_weight_layout": "groups-of-8 x K/64 x 8 x 32B",
+        "sm120_warpsplit_mrows": (1, 16),
+        "sm120_warpsplit_mrows_n_alignment": 8,
+        "sm120_warpsplit_mrows_k_alignment": "64 * warps",
         "errors": "exceptions",
     }
 
@@ -100,6 +103,22 @@ def _bias_residual_fp16_fake(a, b, sfa, sfb, bias, residual, out) -> None:
 
 @torch.library.register_fake(add_op_namespace_prefix("fp4_w4a4_gemm_warpsplit_mrows_bf16"))
 def _gemm_warpsplit_mrows_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, warps: int = 2, stages: int = 6) -> None:
+    if a_packed.dim() != 2 or b_packed.dim() != 2:
+        raise RuntimeError("a_packed and b_packed must be rank-2")
+    if a_packed.shape[1] != b_packed.shape[1]:
+        raise RuntimeError("a_packed and b_packed must have the same K / 2")
+    if not 1 <= a_packed.shape[0] <= 16:
+        raise RuntimeError("the multi-row warp-split tier serves 1..16 rows")
+    if b_packed.shape[0] % 8:
+        raise RuntimeError("N must be a multiple of 8")
+    if warps not in (2, 4, 8):
+        raise RuntimeError("warps must be 2, 4 or 8")
+    if stages not in (3, 4, 6) or (warps == 8 and stages == 6):
+        raise RuntimeError("unsupported stages/warps combination")
+    if (a_packed.shape[1] * 2) % (64 * warps):
+        raise RuntimeError("K must be a multiple of 64*warps")
+    if out.shape != (a_packed.shape[0], b_packed.shape[0]):
+        raise RuntimeError("out must have shape (M, N)")
     return None
 
 

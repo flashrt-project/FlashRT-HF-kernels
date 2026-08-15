@@ -38,6 +38,7 @@ host fallback for that profile.
 - `gdn_gating_strided_h_bf16`
 - `gdn_chunk_from_conv_smem_bf16`
 - `gdn_chunk_from_conv_smem_h_bf16`
+- `gdn_chunk_from_conv_smem_stash_bf16`
 - `gdn_wy_norm_cumsum_pack_qk_bf16`
 - `gdn_wy_kkt_b64_bf16`
 - `gdn_wy_kkt_b64_mma_bf16`
@@ -89,6 +90,18 @@ out = gdn.gdn_chunk_from_conv_smem_h_bf16(
     conv_out, a, b, neg_exp_A_log, dt_bias, state,
     num_v_heads=Hv, num_k_heads=Hk,
 )
+```
+
+Speculative verification can retain every carried state in caller-owned
+storage. Row `s` is the state after consuming rows `0..s`:
+
+```python
+stash = torch.empty(S, Hv, D, D, device="cuda", dtype=torch.bfloat16)
+out = gdn.gdn_chunk_from_conv_smem_stash_bf16(
+    conv_out, a, b, neg_exp_A_log, dt_bias, state, stash,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+accepted_state = stash[accepted_length - 1]
 ```
 
 The FLA-style path keeps the hot prefill chain in CUDA kernels:

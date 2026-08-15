@@ -248,6 +248,17 @@ def _chunk_from_conv_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, us
 
 @torch.library.register_fake(add_op_namespace_prefix("gdn_chunk_from_conv_smem_stash_bf16"))
 def _chunk_from_conv_stash_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, stash, num_v_heads: int, num_k_heads: int, head_dim: int = 128, use_qk_l2norm: bool = True) -> None:
+    _check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim)
+    S = conv_out.shape[0]
+    _check_heads_h(a, S, num_v_heads, "a")
+    _check_heads_h(b, S, num_v_heads, "b")
+    if neg_exp_A_log.shape != (num_v_heads,) or dt_bias.shape != (num_v_heads,):
+        raise RuntimeError("neg_exp_A_log/dt_bias must have shape (num_v_heads)")
+    if state.shape != (num_v_heads, head_dim, head_dim):
+        raise RuntimeError("state must have shape (num_v_heads,head_dim,head_dim)")
+    _check_qkv_h(out, S, num_v_heads, head_dim, "out")
+    if stash.dim() != 4 or stash.shape[0] < S or stash.shape[1:] != (num_v_heads, head_dim, head_dim):
+        raise RuntimeError("stash must have shape (rows>=S,num_v_heads,head_dim,head_dim)")
     return None
 
 

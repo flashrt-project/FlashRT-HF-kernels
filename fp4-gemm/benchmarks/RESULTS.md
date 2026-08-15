@@ -177,3 +177,15 @@ replay, and unsupported-shape rejection. The BF16 MSE packer reduced
 reconstruction MSE from `0.000571271` to `0.000450529`. The RTX 5090 source
 regression passed `26/26`. Installed-artifact validation is required after the
 Hub build is published.
+
+## SM120 speculative-verify multi-row tier
+
+RTX 5090, PyTorch `2.11.0+cu128`, CUDA 12.8, 20 warmup and 100 measured
+iterations with preallocated outputs:
+
+| Shape | Multi-row GEMM | 8x warp-split GEMV | Speedup | Correctness |
+| --- | ---: | ---: | ---: | --- |
+| M=8, N=17408, K=5120 | 42.24 us | 234.86 us | 5.56x | bit-exact |
+
+The full gate covers six production N/K pairs and `M={2,4,7,8}`. All 24
+rows are bit-exact against independently quantized per-row GEMV references.

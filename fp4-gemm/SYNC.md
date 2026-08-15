@@ -6,6 +6,7 @@
   `24df793f4fa2d50780aea03b644208c6e0cb4162`
 - Qwen3.8 SM120 decode/prefill tier sync commit:
   `e2f4b16cea32bd520c93119b142758693793dfeb`
+- Qwen3.8 SM120 multi-row verify source revision: `045fe7c`
 - Initial package date: June 20, 2026
 
 Copied source files:
@@ -17,6 +18,7 @@ Copied source files:
 - `csrc/quantize/quantize_fp4_sfa_bf16.cu/.cuh`
 - `csrc/gemm/fp4/fp4_w4a4_mma_warpsplit_ilv_sm120.cu/.cuh`
 - `csrc/gemm/fp4/cutlass_nvfp4_gemm_m256_sm120.cu/.cuh`
+- `csrc/gemm/fp4/fp4_w4a4_mma_warpsplit_mrows_sm120.cu/.cuh`
 - `cutlass/util/packed_stride.hpp`, copied from CUTLASS tools util headers
   into `csrc/cutlass/util/packed_stride.hpp` so the Hub package does not
   depend on a local `third_party/cutlass/tools/util/include` path.
@@ -56,6 +58,9 @@ Architecture limits:
 - The interleaved GEMV accepts only M=1, N divisible by 8, K divisible by 64,
   and a K/64 tile count divisible by the selected warp count. Repacking is a
   bind-time byte permutation and is not part of the decode hot path.
+- The standard-layout multi-row tier accepts `M=1..16`; it preserves the
+  M=1 warp-split reduction order independently for each row and reuses the
+  canonical packed weight.
 - The M256 entry is explicit rather than automatic. RTX 5090 qualification
   covers `(N,K)=(17408,5120),(5120,17408),(12288,5120)` at M=2044. The
   `(16384,5120)` row remains diagnostic because it did not beat the existing

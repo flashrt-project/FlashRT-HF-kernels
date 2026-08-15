@@ -5,6 +5,8 @@ Synced from FlashRT:
 - sequence source revision: `1103633cecfb40ff9159f8fbbebcf972dbf286da`
 - SM120 MMA WY KKT revision:
   `e2f4b16cea32bd520c93119b142758693793dfeb`
+- per-row state-stash revision:
+  `64844842`
 
 - `official/FlashRT/csrc/kernels/gated_deltanet_qwen36.cu`
 - `official/FlashRT/csrc/kernels/gated_deltanet_qwen36.cuh`
@@ -12,6 +14,8 @@ Synced from FlashRT:
 - `official/FlashRT/csrc/kernels/gdn_recurrent_seq_sm120.cuh`
 - `official/FlashRT/csrc/kernels/gated_delta_wy_kkt_mma.cu`
 - `official/FlashRT/csrc/kernels/gated_delta_wy_kkt_mma.cuh`
+- `official/FlashRT/csrc/kernels/gdn_chunk_from_conv_smem_stash.cu`
+- `official/FlashRT/csrc/kernels/gdn_chunk_from_conv_smem_stash.cuh`
 
 Public package rename:
 

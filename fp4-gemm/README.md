@@ -35,6 +35,7 @@ paths.
 - `nvfp4_gemm_streamk_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None)`
 - `nvfp4_gemm_streamk_bias_bf16(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out=None)`
 - `fp4_w4a16_linear_bf16(...)` is retained as a compatibility alias
+- `fp4_w4a4_gemm_warpsplit_mrows_bf16(a_packed, b_packed, sfa, sfb, ...)`
 - `e0m3_weight_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, a_format=1, out=None)`
 - `nvfp4_gemm_relu2_nvfp4(a_packed, b_packed, sfa, sfb, out_packed=None, out_sfa=None)`
 
@@ -179,6 +180,11 @@ shape-specific tuning.
 `nvfp4_gemm_m256_workspace_size` and allocate the workspace before graph
 capture. Runtime dispatchers must read `capabilities()`; M>=512 alone is not
 a performance qualification for every N/K pair.
+
+`fp4_w4a4_gemm_warpsplit_mrows_bf16` is the SM120 speculative-verify tier.
+It serves `M=1..16` with the standard packed weight and scale layout, so it
+does not require the duplicate interleaved weight used by the M=1 decode
+tier. Read the exact alignment and row range from `capabilities()`.
 
 ## Validation
 

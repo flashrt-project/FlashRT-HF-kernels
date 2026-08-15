@@ -30,6 +30,7 @@ The package supports two validated linear-attention producer profiles:
 - `gdn_gating_strided_h_bf16(a, b, neg_exp_A_log, dt_bias, rows, num_heads, a_stride, b_stride, ...)`
 - `gdn_chunk_from_conv_smem_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, ...)`
 - `gdn_chunk_from_conv_smem_h_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, num_v_heads, num_k_heads, ...)`
+- `gdn_chunk_from_conv_smem_stash_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, stash, num_v_heads, num_k_heads, ...)`
 - `gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g, ...)`
 - `gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum, A=None)`
 - `gdn_wy_solve_tril_b64_f32(A, S, Ai=None)`
@@ -99,6 +100,12 @@ out = gdn.gdn_chunk_from_conv_smem_h_bf16(
     num_v_heads=Hv, num_k_heads=Hk,
 )
 
+stash = torch.empty(S, Hv, D, D, device="cuda", dtype=torch.bfloat16)
+out = gdn.gdn_chunk_from_conv_smem_stash_bf16(
+    conv_out, a, b, neg_exp_A_log, dt_bias, state, stash,
+    num_v_heads=Hv, num_k_heads=Hk,
+)
+
 # H32/H16 WY prefill uses the same native stages with model-neutral head args.
 q16 = conv_out[:, : Hk * D].view(S, Hk, D).contiguous()
 k16 = conv_out[:, Hk * D : 2 * Hk * D].view(S, Hk, D).contiguous()
@@ -130,6 +137,10 @@ The generic producer requires `Hv % Hk == 0` and currently supports
 `head_dim=128`. `neg_exp_A_log` and `dt_bias` are FP32 by contract; inputs,
 state, and outputs are BF16. The fused chunk updates `state` in place and is
 CUDA Graph replay safe after normal warmup.
+
+The stash entry uses the same recurrence and BF16 carried-state rounding as
+the plain fused chunk. It requires contiguous `stash` storage shaped
+`(rows>=S,Hv,128,128)` and writes the state after each input row.
 
 Prefill-style WY pipeline:
 

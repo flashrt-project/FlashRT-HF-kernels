@@ -31,6 +31,19 @@ accumulation and BF16 state/output casts. Split/gating helpers are checked
 against exact PyTorch tensor formulas. `gdn_chunk_from_conv_smem_bf16` and the
 WY pipeline are checked end-to-end against the same recurrent reference.
 
+## Speculative state stash
+
+The H32/H16 stash gate uses `S=8` and requires bit-exact equality against the
+plain native fused chunk for the full output and final in-place state. Stash
+rows `0,2,4,6,7` are independently compared with plain-kernel re-advances over
+prefix lengths `1,3,5,7,8`; every comparison is bit-exact. An undersized stash
+is rejected, and two CUDA Graph replays are bit-identical for output, final
+state, and the complete stash.
+
+On RTX 5090 with PyTorch `2.11.0+cu128`, the stash entry measured `58.02 us`
+at `S/Hv/Hk/D=8/32/16/128`. Four separate prefix re-advances measured
+`119.89 us`, so state selection replaces that work at `2.07x` lower latency.
+
 The v5 H32/H16 producer profile covers `S={1,4,64}`. The complete H32 WY
 profile covers `S={1,17,64,65,128,256}` and all 11 head-parameterized stages.
 It additionally requires:

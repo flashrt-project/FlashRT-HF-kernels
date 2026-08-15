@@ -33,6 +33,7 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 - `fp4_w4a16_linear_bf16` (compatibility alias)
 - `fp4_repack_b_interleaved_sm120`
 - `fp4_w4a4_gemv_warpsplit_interleaved_bf16`
+- `fp4_w4a4_gemm_warpsplit_mrows_bf16`
 - `nvfp4_gemm_m256_workspace_size`
 - `nvfp4_gemm_m256_bf16`
 - `e0m3_weight_gemm_fp16`
@@ -61,6 +62,15 @@ buffer beside the original packed weight:
 b_interleaved = ops.fp4_repack_b_interleaved_sm120(b)
 y = ops.fp4_w4a4_gemv_warpsplit_interleaved_bf16(
     a, b_interleaved, sfa, sfb, warps=8, stages=3
+)
+```
+
+Speculative verify batches with `1 <= M <= 16` can reuse the standard packed
+weight without an interleaved duplicate:
+
+```python
+y = ops.fp4_w4a4_gemm_warpsplit_mrows_bf16(
+    a, b, sfa, sfb, warps=2, stages=6
 )
 ```
 
@@ -100,3 +110,6 @@ a, sfa = ops.quantize_fp4_sfa_bf16(x)
 - `nvfp4_gemm_m256_bf16` requires M>=512. Production qualification currently
   covers `(N,K)=(17408,5120),(5120,17408),(12288,5120)` on RTX 5090. Read
   `capabilities()` before dispatch; `(16384,5120)` is diagnostic only.
+- `fp4_w4a4_gemm_warpsplit_mrows_bf16` is SM120-only, accepts standard
+  row-major packed E2M1 weights, and requires `1<=M<=16`, `N%8==0`, and
+  `K%(64*warps)==0`. Unsupported calls raise before launch.
