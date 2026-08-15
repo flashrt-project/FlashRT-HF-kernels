@@ -263,20 +263,6 @@ jobs:
             export GIT_LFS_SKIP_SMUDGE=1
             export DEBUG=0
 
-            python - <<'PY'
-            import os
-            import urllib.request
-
-            request = urllib.request.Request(
-                "https://huggingface.co/api/whoami-v2",
-                headers={"Authorization": f"Bearer {os.environ['HF_TOKEN']}"},
-            )
-            with urllib.request.urlopen(request, timeout=30) as response:
-                if response.status != 200:
-                    raise RuntimeError(f"HF auth preflight failed: HTTP {response.status}")
-            print("HF auth preflight passed")
-            PY
-
             git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
             cd FlashRT-HF-kernels
             git checkout "${{ github.sha }}"
