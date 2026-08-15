@@ -241,51 +241,62 @@ jobs:
 
       - name: Build and upload ${{ matrix.package }} via HF Jobs
         if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
-        uses: huggingface/kernel-builder-job@main
-        with:
-          token: ${{ secrets.HF_TOKEN }}
-          # HF Jobs billing/credits are attached to the runner namespace.
-          # Artifacts are still uploaded to flashrt/<package> via --repo-id below.
-          namespace: liangsu9988
-          flavor: cpu-xl
-          timeout: "21600"
-          script: |
-            # The HF Jobs container is started with `set -x`, which would echo
-            # secrets into streamed logs. Disable tracing before exporting.
-            set +x
-            unset HF_HUB_DISABLE_IMPLICIT_TOKEN
-            export HF_TOKEN="${{ secrets.HF_TOKEN }}"
-            export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
-            export HF_TOKEN_PATH="$HF_HOME/token"
-            mkdir -p "$HF_HOME"
-            printf '%s' "$HF_TOKEN" > "$HF_TOKEN_PATH"
-            chmod 600 "$HF_TOKEN_PATH"
-            export GIT_LFS_SKIP_SMUDGE=1
-            export DEBUG=0
+        shell: bash
+        timeout-minutes: 360
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade "huggingface_hub>=1.16.0"
 
-            git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
-            cd FlashRT-HF-kernels
-            git checkout "${{ github.sha }}"
-            cd "${{ matrix.package }}"
+          remote_script=$(base64 -w0 <<'REMOTE_SCRIPT'
+          set -eux
+          grep -v -E 'sandbox|filter-syscalls' /etc/nix/nix.conf > /tmp/nix.conf
+          echo 'sandbox = true' >> /tmp/nix.conf
+          echo 'filter-syscalls = true' >> /tmp/nix.conf
+          echo 'accept-flake-config = true' >> /tmp/nix.conf
+          mv /tmp/nix.conf /etc/nix/nix.conf
+          git config --global user.email '${GIT_EMAIL:-ci@huggingface.co}'
+          git config --global user.name '${GIT_NAME:-CI}'
+          cd /tmp
 
-            variants="${{ github.event.inputs.variants }}"
-            if [[ -z "$variants" ]]; then
+          unset HF_HUB_DISABLE_IMPLICIT_TOKEN
+          export GIT_LFS_SKIP_SMUDGE=1
+          export DEBUG=0
+
+          git clone "${{ github.server_url }}/${{ github.repository }}" FlashRT-HF-kernels
+          cd FlashRT-HF-kernels
+          git checkout "${{ github.sha }}"
+          cd "${{ matrix.package }}"
+
+          variants="${{ github.event.inputs.variants }}"
+          if [[ -z "$variants" ]]; then
+            nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
+              --max-jobs 4 \
+              --cores 8 \
+              --repo-id "flashrt/${{ matrix.package }}"
+          else
+            IFS=',' read -ra requested_variants <<< "$variants"
+            for variant in "${requested_variants[@]}"; do
+              variant="${variant//[[:space:]]/}"
+              [[ -n "$variant" ]] || continue
               nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
-                --max-jobs 4 \
+                --variant "$variant" \
+                --max-jobs 1 \
                 --cores 8 \
                 --repo-id "flashrt/${{ matrix.package }}"
-            else
-              IFS=',' read -ra requested_variants <<< "$variants"
-              for variant in "${requested_variants[@]}"; do
-                variant="${variant//[[:space:]]/}"
-                [[ -n "$variant" ]] || continue
-                nix run github:huggingface/kernels#kernel-builder -- build-and-upload \
-                  --variant "$variant" \
-                  --max-jobs 1 \
-                  --cores 8 \
-                  --repo-id "flashrt/${{ matrix.package }}"
-              done
-            fi
+            done
+          fi
+          REMOTE_SCRIPT
+          )
+
+          hf jobs run \
+            --namespace liangsu9988 \
+            --flavor cpu-xl \
+            --timeout 6h \
+            --secrets HF_TOKEN \
+            ghcr.io/huggingface/kernel-builder-job:latest \
+            sh -c "printf '%s' '$remote_script' | base64 -d | bash"
 
       - name: Mirror ${{ matrix.package }} for legacy kernels clients
         if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
