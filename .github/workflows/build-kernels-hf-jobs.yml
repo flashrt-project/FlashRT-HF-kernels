@@ -254,6 +254,11 @@ jobs:
             # secrets into streamed logs. Disable tracing before exporting.
             set +x
             export HF_TOKEN="${{ secrets.HF_TOKEN }}"
+            export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
+            export HF_TOKEN_PATH="$HF_HOME/token"
+            mkdir -p "$HF_HOME"
+            printf '%s' "$HF_TOKEN" > "$HF_TOKEN_PATH"
+            chmod 600 "$HF_TOKEN_PATH"
             export GIT_LFS_SKIP_SMUDGE=1
             export DEBUG=0
 
