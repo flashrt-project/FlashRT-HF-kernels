@@ -246,6 +246,11 @@ def _chunk_from_conv_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, us
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("gdn_chunk_from_conv_smem_stash_bf16"))
+def _chunk_from_conv_stash_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, stash, num_v_heads: int, num_k_heads: int, head_dim: int = 128, use_qk_l2norm: bool = True) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("gdn_chunk_from_conv_smem_h_bf16"))
 def _chunk_from_conv_h_fake(conv_out, a, b, neg_exp_A_log, dt_bias, state, out, num_v_heads: int, num_k_heads: int, head_dim: int = 128, use_qk_l2norm: bool = True) -> None:
     _check_conv_out_h(conv_out, num_v_heads, num_k_heads, head_dim)
@@ -891,6 +896,42 @@ def gdn_chunk_from_conv_smem_bf16(
     return out
 
 
+def gdn_chunk_from_conv_smem_stash_bf16(
+    conv_out: torch.Tensor,
+    a: torch.Tensor,
+    b: torch.Tensor,
+    neg_exp_A_log: torch.Tensor,
+    dt_bias: torch.Tensor,
+    state: torch.Tensor,
+    stash: torch.Tensor,
+    *,
+    num_v_heads: int,
+    num_k_heads: int,
+    head_dim: int = 128,
+    use_qk_l2norm: bool = True,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """From-conv chunk core with a per-row state stash (spec verify).
+
+    Identical recurrence and per-row bf16 state requantisation to the
+    plain chunk entry; ``stash`` row s additionally records the carried
+    state after row s, bit-equal to the final state a re-advance over
+    rows 0..s would store. A rejected speculative round rolls back by
+    selecting a stash row. ``stash`` is contiguous (rows>=S,
+    num_v_heads, head_dim, head_dim)."""
+    if out is None:
+        out = torch.empty(
+            (conv_out.shape[0], num_v_heads, head_dim),
+            device=conv_out.device,
+            dtype=conv_out.dtype,
+        )
+    ops.gdn_chunk_from_conv_smem_stash_bf16(
+        conv_out, a, b, neg_exp_A_log, dt_bias, state, out, stash,
+        int(num_v_heads), int(num_k_heads), int(head_dim), bool(use_qk_l2norm)
+    )
+    return out
+
+
 def gdn_chunk_from_conv_smem_h_bf16(
     conv_out: torch.Tensor,
     a: torch.Tensor,
@@ -1305,6 +1346,7 @@ __all__ = [
     "gdn_gating_strided_h_bf16",
     "gdn_chunk_from_conv_smem_bf16",
     "gdn_chunk_from_conv_smem_h_bf16",
+    "gdn_chunk_from_conv_smem_stash_bf16",
     "gdn_wy_norm_cumsum_pack_qk_bf16",
     "gdn_wy_kkt_b64_bf16",
     "gdn_wy_kkt_b64_mma_bf16",
