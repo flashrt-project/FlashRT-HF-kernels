@@ -225,6 +225,7 @@ class InstalledOps:
 
     def __init__(self, module) -> None:
         self._module = module
+        self._ops = module.ops
 
     def sfa_size_bytes(self, rows: int, dim: int) -> int:
         return int(self._module.sfa_size_bytes(rows, dim))
@@ -278,6 +279,38 @@ class InstalledOps:
             alpha=float(alpha),
             out=out,
             variant=int(variant),
+        )
+
+    def repack_b_interleaved(self, b, out):
+        self._module.fp4_repack_b_interleaved_sm120(b, out=out)
+
+    def gemv_interleaved(self, a, b, sfa, sfb, out, alpha=1.0, warps=4, stages=4):
+        self._module.fp4_w4a4_gemv_warpsplit_interleaved_bf16(
+            a,
+            b,
+            sfa,
+            sfb,
+            alpha=float(alpha),
+            warps=int(warps),
+            stages=int(stages),
+            out=out,
+        )
+
+    def m256(self, a, b, sfa, sfb, out, alpha=1.0):
+        workspace_size = self._module.nvfp4_gemm_m256_workspace_size(
+            a, b, sfa, sfb
+        )
+        workspace = torch.empty(
+            workspace_size, device=a.device, dtype=torch.uint8
+        )
+        self._module.nvfp4_gemm_m256_bf16(
+            a,
+            b,
+            sfa,
+            sfb,
+            workspace=workspace,
+            alpha=float(alpha),
+            out=out,
         )
 
     def nvfp4_gemm_fp16(self, a, b, sfa, sfb, out, alpha=1.0, variant=-1):
