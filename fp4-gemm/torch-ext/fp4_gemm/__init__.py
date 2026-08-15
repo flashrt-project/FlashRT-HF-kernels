@@ -89,6 +89,11 @@ def _bias_residual_fp16_fake(a, b, sfa, sfb, bias, residual, out) -> None:
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("fp4_w4a4_gemm_warpsplit_mrows_bf16"))
+def _gemm_warpsplit_mrows_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, warps: int = 2, stages: int = 6) -> None:
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp4_w4a4_gemv_warpsplit_bf16"))
 def _gemv_warpsplit_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, warps: int = 4, stages: int = 4) -> None:
     if a_packed.shape[0] != 1:
@@ -557,6 +562,31 @@ def nvfp4_gemm_bias_residual_fp16(
     return out
 
 
+def fp4_w4a4_gemm_warpsplit_mrows_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    alpha: float = 1.0,
+    warps: int = 2,
+    stages: int = 6,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Multi-row (M<=16) warp-split-K NVFP4 W4A4 GEMM (SM120).
+
+    The 16x8x64 block-scaled MMA atom computes a full 16-row output
+    tile, so up to sixteen rows ride one weight stream at near-GEMV
+    cost - the spec-verify block and its re-advance prefixes are the
+    customers. Same packed/scale layouts as the linear entry points;
+    deeper default stages hide the strided-B latency the extra A-row
+    loads expose."""
+    if out is None:
+        out = torch.empty((a_packed.shape[0], b_packed.shape[0]), device=a_packed.device, dtype=torch.bfloat16)
+    ops.fp4_w4a4_gemm_warpsplit_mrows_bf16(a_packed, b_packed, sfa, sfb, out, float(alpha), int(warps), int(stages))
+    return out
+
+
 def fp4_w4a4_gemv_warpsplit_bf16(
     a_packed: torch.Tensor,
     b_packed: torch.Tensor,
@@ -748,6 +778,7 @@ __all__ = [
     "e0m3_weight_gemm_fp16",
     "fp4_w4a16_linear_bf16",
     "fp4_w4a4_gemv_warpsplit_bf16",
+    "fp4_w4a4_gemm_warpsplit_mrows_bf16",
     "nvfp4_gemm_bf16",
     "nvfp4_gemm_fp16",
     "nvfp4_gemm_variant_bf16",

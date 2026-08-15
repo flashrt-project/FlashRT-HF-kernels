@@ -46,4 +46,6 @@ cuda-capabilities = ["11.0a", "12.0"]
 src = [
   "csrc/kernels/gdn_recurrent_seq_sm120.cu",
   "csrc/kernels/gdn_recurrent_seq_sm120.cuh",
+  "csrc/kernels/gdn_chunk_from_conv_smem_stash.cu",
+  "csrc/kernels/gdn_chunk_from_conv_smem_stash.cuh",
 ]

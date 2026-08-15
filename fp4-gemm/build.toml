@@ -85,6 +85,8 @@ src = [
   "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cu",
   "csrc/gemm/fp4/fp4_w4a4_mma_warpsplit_sm120.cu",
   "csrc/gemm/fp4/fp4_w4a4_mma_warpsplit_sm120.cuh",
+  "csrc/gemm/fp4/fp4_w4a4_mma_warpsplit_mrows_sm120.cu",
+  "csrc/gemm/fp4/fp4_w4a4_mma_warpsplit_mrows_sm120.cuh",
   "csrc/gemm/fp4/cutlass_nvfp4_w4a16_gemm_sm120.cuh",
   "csrc/gemm/fp4/cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.cu",
   "csrc/gemm/fp4/cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.cuh",
