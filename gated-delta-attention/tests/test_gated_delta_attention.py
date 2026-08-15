@@ -300,6 +300,12 @@ class SourceOps:
 class InstalledOps:
     def __init__(self, mod) -> None:
         self._mod = mod
+        self._ops = mod.ops
+
+    def wy_kkt_mma(self, k16_l2, beta, g_cumsum, A=None):
+        return self._mod.gdn_wy_kkt_b64_mma_bf16(
+            k16_l2, beta, g_cumsum, A=A
+        )
 
     def recurrent(self, q, k, v, g, beta, state, use_qk_l2norm=True):
         return self._mod.gated_delta_recurrent_bf16(
