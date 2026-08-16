@@ -292,18 +292,31 @@ jobs:
                   --cores 8
                 export FLASHRT_RELEASE_VARIANT="$variant"
                 export FLASHRT_RELEASE_REPO="flashrt/${{ matrix.package }}"
-                hub_cli=$(nix build nixpkgs#python313Packages.huggingface-hub \
-                  --no-link --print-out-paths)
-                version=$(awk '$1 == "version" && $2 == "=" { print $3; exit }' build.toml)
-                artifact="result/$variant"
-                [[ -f "$artifact/metadata.json" ]]
-                "$hub_cli/bin/hf" upload \
-                  "$FLASHRT_RELEASE_REPO" \
-                  "$artifact" \
-                  "build/$variant" \
-                  --repo-type kernel \
-                  --revision "v$version" \
-                  --commit-message "Publish $variant"
+                nix shell \
+                  nixpkgs#python313 \
+                  nixpkgs#python313Packages.huggingface-hub \
+                  -c python3.13 - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          from huggingface_hub import HfApi
+
+          with open("build.toml", "rb") as handle:
+              version = tomllib.load(handle)["general"]["version"]
+          variant = os.environ["FLASHRT_RELEASE_VARIANT"]
+          artifact = Path("result") / variant
+          if not (artifact / "metadata.json").is_file():
+              raise RuntimeError(f"missing built artifact: {artifact}")
+          HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
+              repo_id=os.environ["FLASHRT_RELEASE_REPO"],
+              repo_type="kernel",
+              revision=f"v{version}",
+              folder_path=artifact,
+              path_in_repo=f"build/{variant}",
+              commit_message=f"Publish {variant}",
+          )
+          PY
                 continue
               fi
               nix run "$builder_ref" -- build-and-upload \
