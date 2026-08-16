@@ -283,7 +283,11 @@ jobs:
             for variant in "${requested_variants[@]}"; do
               variant="${variant//[[:space:]]/}"
               [[ -n "$variant" ]] || continue
-              nix run github:huggingface/kernels/3a5c09d941a19f582fe551d038dc2b3bc6b0a03d#kernel-builder -- build-and-upload \
+              builder_ref="github:huggingface/kernels/3a5c09d941a19f582fe551d038dc2b3bc6b0a03d#kernel-builder"
+              if [[ "$variant" == torch213-* ]]; then
+                builder_ref="github:huggingface/kernels#kernel-builder"
+              fi
+              nix run "$builder_ref" -- build-and-upload \
                 --variant "$variant" \
                 --max-jobs 1 \
                 --cores 8 \
