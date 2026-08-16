@@ -292,7 +292,11 @@ jobs:
                   --cores 8
                 export FLASHRT_RELEASE_VARIANT="$variant"
                 export FLASHRT_RELEASE_REPO="flashrt/${{ matrix.package }}"
-                nix shell nixpkgs#python313Packages.huggingface-hub -c python3 - <<'PY'
+                hub_cli=$(nix build nixpkgs#python313Packages.huggingface-hub \
+                  --no-link --print-out-paths)
+                hub_python=$(head -n 1 "$hub_cli/bin/hf")
+                hub_python="${hub_python#\#!}"
+                "$hub_python" - <<'PY'
           import os
           import tomllib
           from pathlib import Path
