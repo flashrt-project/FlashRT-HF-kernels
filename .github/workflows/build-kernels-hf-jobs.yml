@@ -286,6 +286,41 @@ jobs:
               builder_ref="github:huggingface/kernels/3a5c09d941a19f582fe551d038dc2b3bc6b0a03d#kernel-builder"
               if [[ "$variant" == torch213-* ]]; then
                 builder_ref="github:huggingface/kernels#kernel-builder"
+                nix run "$builder_ref" -- build-and-copy \
+                  --variant "$variant" \
+                  --max-jobs 1 \
+                  --cores 8
+                python -m pip install --quiet --upgrade "huggingface_hub>=1.16.0"
+                export FLASHRT_RELEASE_VARIANT="$variant"
+                export FLASHRT_RELEASE_REPO="flashrt/${{ matrix.package }}"
+                export FLASHRT_RELEASE_VERSION
+                FLASHRT_RELEASE_VERSION=$(python - <<'PY'
+          import tomllib
+
+          with open("build.toml", "rb") as handle:
+              print(tomllib.load(handle)["general"]["version"])
+          PY
+                )
+                python - <<'PY'
+          import os
+          from pathlib import Path
+
+          from huggingface_hub import HfApi
+
+          variant = os.environ["FLASHRT_RELEASE_VARIANT"]
+          artifact = Path("build") / variant
+          if not (artifact / "metadata.json").is_file():
+              raise RuntimeError(f"missing built artifact: {artifact}")
+          HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
+              repo_id=os.environ["FLASHRT_RELEASE_REPO"],
+              repo_type="kernel",
+              revision=f"v{os.environ['FLASHRT_RELEASE_VERSION']}",
+              folder_path=artifact,
+              path_in_repo=f"build/{variant}",
+              commit_message=f"Publish {variant}",
+          )
+          PY
+                continue
               fi
               nix run "$builder_ref" -- build-and-upload \
                 --variant "$variant" \
