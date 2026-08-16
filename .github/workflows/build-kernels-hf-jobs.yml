@@ -290,23 +290,17 @@ jobs:
                   --variant "$variant" \
                   --max-jobs 1 \
                   --cores 8
-                python -m pip install --quiet --upgrade "huggingface_hub>=1.16.0"
                 export FLASHRT_RELEASE_VARIANT="$variant"
                 export FLASHRT_RELEASE_REPO="flashrt/${{ matrix.package }}"
-                export FLASHRT_RELEASE_VERSION
-                FLASHRT_RELEASE_VERSION=$(python - <<'PY'
-          import tomllib
-
-          with open("build.toml", "rb") as handle:
-              print(tomllib.load(handle)["general"]["version"])
-          PY
-                )
-                python - <<'PY'
+                nix shell nixpkgs#python313Packages.huggingface-hub -c python - <<'PY'
           import os
+          import tomllib
           from pathlib import Path
 
           from huggingface_hub import HfApi
 
+          with open("build.toml", "rb") as handle:
+              version = tomllib.load(handle)["general"]["version"]
           variant = os.environ["FLASHRT_RELEASE_VARIANT"]
           artifact = Path("result") / variant
           if not (artifact / "metadata.json").is_file():
@@ -314,7 +308,7 @@ jobs:
           HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
               repo_id=os.environ["FLASHRT_RELEASE_REPO"],
               repo_type="kernel",
-              revision=f"v{os.environ['FLASHRT_RELEASE_VERSION']}",
+              revision=f"v{version}",
               folder_path=artifact,
               path_in_repo=f"build/{variant}",
               commit_message=f"Publish {variant}",
