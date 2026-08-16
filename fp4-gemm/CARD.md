@@ -83,6 +83,10 @@ workspace = torch.empty(workspace_bytes, device=a.device, dtype=torch.uint8)
 y = ops.nvfp4_gemm_m256_bf16(a, b, sfa, sfb, workspace=workspace)
 ```
 
+The current persistent M256 schedule reports exactly zero workspace bytes.
+The helper has a matching FakeTensor implementation, and the convenience
+wrapper keeps this scalar query outside `torch.compile(fullgraph=True)`.
+
 BF16 activations should use the direct producer to avoid a separate cast and
 copy before every low-bit projection:
 

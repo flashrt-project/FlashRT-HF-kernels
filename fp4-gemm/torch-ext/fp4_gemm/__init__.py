@@ -150,6 +150,19 @@ def _gemv_warpsplit_interleaved_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_m256_workspace_size"))
+def _m256_workspace_size_fake(a_packed, b_packed, sfa, sfb) -> int:
+    del sfa, sfb
+    if a_packed.ndim != 2 or b_packed.ndim != 2:
+        raise RuntimeError("a_packed and b_packed must be rank-2")
+    if a_packed.shape[0] < 512:
+        raise RuntimeError("the M256 tier requires M >= 512")
+    if a_packed.shape[1] != b_packed.shape[1]:
+        raise RuntimeError("packed A and B K dimensions must match")
+    # The current persistent M256 CUTLASS schedule has no auxiliary storage.
+    return 0
+
+
 @torch.library.register_fake(add_op_namespace_prefix("nvfp4_gemm_m256_bf16"))
 def _m256_fake(a_packed, b_packed, sfa, sfb, workspace, out, alpha: float = 1.0) -> None:
     if a_packed.shape[0] < 512:
@@ -733,8 +746,16 @@ def nvfp4_gemm_m256_bf16(
 ) -> torch.Tensor:
     """SM120 M>=512 NVFP4 GEMM with a caller-owned graph-stable workspace."""
     if workspace is None:
+        # Dynamo cannot place a custom operator returning a Python scalar in
+        # an FX graph. This is exact for the current persistent M256 schedule;
+        # eager setup still queries the native helper as a future-proof check.
+        workspace_size = (
+            0
+            if torch.compiler.is_compiling()
+            else nvfp4_gemm_m256_workspace_size(a_packed, b_packed, sfa, sfb)
+        )
         workspace = torch.empty(
-            nvfp4_gemm_m256_workspace_size(a_packed, b_packed, sfa, sfb),
+            workspace_size,
             device=a_packed.device,
             dtype=torch.uint8,
         )

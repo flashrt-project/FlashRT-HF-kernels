@@ -772,6 +772,22 @@ def run_sm120_qwen38_tier_gate(ops) -> dict[str, object]:
         boundary_rejected = "M >= 512" in str(error)
 
     workspace_size = ops._ops.nvfp4_gemm_m256_workspace_size(a, b, sfa, sfb)
+    workspace_size_exact = workspace_size == 0
+    fake_workspace_size_exact = True
+    if hasattr(ops, "_module"):
+        from torch._subclasses.fake_tensor import FakeTensorMode
+
+        with FakeTensorMode():
+            fake_a = torch.empty(a.shape, device="cuda", dtype=a.dtype)
+            fake_b = torch.empty(b.shape, device="cuda", dtype=b.dtype)
+            fake_sfa = torch.empty(sfa.shape, device="cuda", dtype=sfa.dtype)
+            fake_sfb = torch.empty(sfb.shape, device="cuda", dtype=sfb.dtype)
+            fake_workspace_size_exact = (
+                ops._module.nvfp4_gemm_m256_workspace_size(
+                    fake_a, fake_b, fake_sfa, fake_sfb
+                )
+                == 0
+            )
     workspace = torch.empty(workspace_size, device="cuda", dtype=torch.uint8)
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
@@ -782,6 +798,23 @@ def run_sm120_qwen38_tier_gate(ops) -> dict[str, object]:
     graph.replay()
     torch.cuda.synchronize()
     graph_exact = torch.equal(first, got)
+
+    compiled_m256 = (
+        torch.compile(
+            lambda a_arg: ops._module.nvfp4_gemm_m256_bf16(
+                a_arg, b, sfa, sfb, out=got
+            ),
+            fullgraph=True,
+        )
+        if hasattr(ops, "_module")
+        else None
+    )
+    if compiled_m256 is not None:
+        compiled_m256(a)
+        torch.cuda.synchronize()
+        compiled_exact = torch.equal(got, base)
+    else:
+        compiled_exact = True
 
     mrows_rows = []
     for shape_index, (n, k) in enumerate(gemv_shapes):
@@ -865,13 +898,18 @@ def run_sm120_qwen38_tier_gate(ops) -> dict[str, object]:
         and len(mrows_rows) == 24
         and all(row["passed"] for row in mrows_rows)
         and mrows_graph_exact and m17_rejected
-        and m256_exact and boundary_rejected and graph_exact
+        and m256_exact and workspace_size_exact and fake_workspace_size_exact
+        and boundary_rejected
+        and graph_exact and compiled_exact
     )
     return {
         "gemv_rows": exact_rows,
         "m256_vs_tile128_exact": m256_exact,
+        "m256_workspace_size_zero": workspace_size_exact,
+        "m256_fake_workspace_size_zero": fake_workspace_size_exact,
         "m511_rejected": boundary_rejected,
         "m256_graph_exact": graph_exact,
+        "m256_compile_exact": compiled_exact,
         "mrows_rows": mrows_rows,
         "mrows_graph_exact": mrows_graph_exact,
         "mrows_m17_rejected": m17_rejected,

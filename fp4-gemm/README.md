@@ -179,7 +179,10 @@ shape-specific tuning.
 `nvfp4_gemm_m256_bf16` is an explicit SM120 large-M tier. Query
 `nvfp4_gemm_m256_workspace_size` and allocate the workspace before graph
 capture. Runtime dispatchers must read `capabilities()`; M>=512 alone is not
-a performance qualification for every N/K pair.
+a performance qualification for every N/K pair. The current persistent M256
+schedule reports exactly zero workspace bytes. Its fake implementation and
+compile path preserve that contract under FakeTensor and
+`torch.compile(fullgraph=True)`.
 
 `fp4_w4a4_gemm_warpsplit_mrows_bf16` is the SM120 speculative-verify tier.
 It serves `M=1..16` with the standard packed weight and scale layout, so it
