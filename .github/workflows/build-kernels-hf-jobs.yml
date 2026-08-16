@@ -230,7 +230,12 @@ jobs:
           python -m pip install --quiet --upgrade "huggingface_hub>=1.1.0"
           python - <<'PY'
           import os
-          from huggingface_hub import HfApi
+          from huggingface_hub import HfApi, constants
+
+          # Kernel repositories already have URL/type mappings in
+          # huggingface_hub, but upload_folder still validates against the
+          # legacy model/dataset/space-only list in current Nixpkgs releases.
+          constants.REPO_TYPES[:] = constants.REPO_TYPES_WITH_KERNEL
 
           HfApi(token=os.environ["HF_TOKEN"]).create_repo(
               repo_id="flashrt/${{ matrix.package }}",
