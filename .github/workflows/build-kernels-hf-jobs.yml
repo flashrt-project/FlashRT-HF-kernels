@@ -292,7 +292,7 @@ jobs:
                   --cores 8
                 export FLASHRT_RELEASE_VARIANT="$variant"
                 export FLASHRT_RELEASE_REPO="flashrt/${{ matrix.package }}"
-                nix shell nixpkgs#python313Packages.huggingface-hub -c python - <<'PY'
+                nix shell nixpkgs#python313Packages.huggingface-hub -c python3 - <<'PY'
           import os
           import tomllib
           from pathlib import Path
