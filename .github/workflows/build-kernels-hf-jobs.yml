@@ -292,10 +292,12 @@ jobs:
                   --cores 8
                 export FLASHRT_RELEASE_VARIANT="$variant"
                 export FLASHRT_RELEASE_REPO="flashrt/${{ matrix.package }}"
-                nix shell \
-                  nixpkgs#python313 \
-                  nixpkgs#python313Packages.huggingface-hub \
-                  -c python3.13 - <<'PY'
+                upload_python=$(nix build \
+                  --no-link \
+                  --print-out-paths \
+                  --impure \
+                  --expr 'let pkgs = import (builtins.getFlake "nixpkgs") {}; in pkgs.python313.withPackages (ps: [ ps."huggingface-hub" ])')
+                "$upload_python/bin/python3.13" - <<'PY'
           import os
           import tomllib
           from pathlib import Path
