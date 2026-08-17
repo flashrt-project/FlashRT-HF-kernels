@@ -11,7 +11,8 @@ RTX 5090, PyTorch `2.11.0+cu128`, 10 warmup and 100 measured launches:
 Both rows use the same tensors, output layout, stream, and package source
 extension. See `VALIDATION.md` for the five-length numerical and graph gate.
 
-Built-artifact benchmark results are pending for v5.
+These v5 rows are source-extension measurements. The v6 request-2 artifact
+receipt is reported below.
 
 ## Speculative state stash
 
@@ -83,3 +84,16 @@ launches with preallocated outputs:
 
 The full package gate passed `38/38` plus CUDA Graph, poisoned-tail,
 unsupported-shape, and request-2 checks.
+
+### v6 installed artifact
+
+Cold Hub artifact on RTX 5090, PyTorch `2.13.0+cu130`, caller-owned outputs,
+20 warmups and 100 measured launches:
+
+| Entry | Shape | Artifact us | Source receipt us | Artifact/source |
+| --- | --- | ---: | ---: | ---: |
+| `gdn_wy_norm_cumsum_pack_qk_v2_bf16` | `S=2044, Hk/Hv/D=16/48/128` | 24.64 | 33.02 | 0.746x |
+
+The installed full gate passed `38/38` plus CUDA Graph, poisoned-tail,
+fail-fast, and `torch.compile(fullgraph=True)`. A separate cold-cache
+`get_kernel(..., version=6)` run compiled and launched both request-2 entries.

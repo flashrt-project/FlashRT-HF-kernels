@@ -19,8 +19,7 @@ python causal-conv1d-state/benchmarks/benchmark.py \
 
 These rows are source-extension sanity numbers. The reference is a simple
 Python/Torch state contract and should not be used as the public competitive
-baseline. Built-artifact and runtime-pipeline benchmarks should be regenerated
-after HF Jobs upload succeeds.
+baseline.
 
 ## Step-batched GQA prefill
 
@@ -34,3 +33,15 @@ caller-owned outputs and in-place state:
 
 The full gate covers `S=1/63/64/2044`. At `S=2044`, max absolute error is
 `0.000244`, p99 is zero, cosine is `1.0`, and final state is exact.
+
+### v2 installed artifact
+
+Cold Hub artifact on RTX 5090, PyTorch `2.13.0+cu130`, caller-owned outputs,
+20 warmups and 50 measured launches:
+
+| Entry | Shape | Artifact us | Source receipt us | Artifact/source |
+| --- | --- | ---: | ---: | ---: |
+| `causal_conv1d_update_steps_gqa_bf16` | `S=2044, C=10240, K=4` | 28.70 | 45.44 | 0.632x |
+
+The installed full gate passed `10/10`; final state remained exact. The public
+`get_kernel(..., version=2)` path also passed `torch.compile(fullgraph=True)`.

@@ -137,4 +137,18 @@ bytes bit for bit equal to the repository's production BF16 NVFP4 quantizer.
 | `rms_norm_quantize_fp4_sfa_bf16` | rows `1/63/257`, dim `2048/4096` | gate only | norm metrics + production packed/SFA exact |
 
 The staged PyTorch elementwise reference is not reported as a competitive
-speedup baseline. Installed-artifact timing is regenerated after Hub upload.
+speedup baseline.
+
+### v2 installed artifact
+
+Cold Hub artifact on RTX 5090, PyTorch `2.13.0+cu130`, caller-owned outputs,
+20 warmups and 50 measured launches:
+
+| Entry | Shape | Artifact us | Source receipt us | Artifact/source |
+| --- | --- | ---: | ---: | ---: |
+| `silu_mul_quantize_fp4_sfa_bf16` | `2044x(2x17408)` | 91.61 | 100.48 | 0.912x |
+
+The installed full gate passed `61/61`. The request-2 packed E2M1 and SFA
+outputs are bitwise equal to an independently compiled production quantizer;
+the public `get_kernel(..., version=2)` path also passed
+`torch.compile(fullgraph=True)`.
