@@ -52,3 +52,10 @@ compiled for SM120a. The separate BF16 probe artifact is compiled for SM110a;
 it is exposed for development and parity work but does not replace cuDNN. It
 is not used by the current Cosmos3-Edge quantized denoise pipeline, whose
 model-level speedup is a separate multi-kernel/runtime result.
+
+On SM110a the FP8/NVFP4 ops use a portable pure-SIMT reference
+(`portable_conv_simt.cu`), since no native tensor-core backend exists for them
+on Thor; the BF16 conv3d keeps its native SM110 kernel. SM120 always uses the
+tensor-core kernels. Set `FLASHRT_FORCE_SIMT=1` to route any device through
+the SIMT reference (used by the correctness test to validate parity against
+the native path).

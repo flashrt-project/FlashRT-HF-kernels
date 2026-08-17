@@ -154,6 +154,7 @@ def load_source_ops() -> SourceOps:
         "nvfp4_causal_conv3d_sm120.cu",
         "nvfp4_causal_conv3d_residual_sm120.cu",
         "nvfp4_causal_conv3d_residual_k128_sm120.cu",
+        "portable_conv_simt.cu",
     ]
     sm110_sources = ["bf16_conv3d_v0_sm110.cu"]
     if (major, minor) == (11, 0):
@@ -652,6 +653,89 @@ def run_compile_tests(ops) -> int:
     return 3
 
 
+def _parity(fn, *args):
+    """Run fn natively and with FLASHRT_FORCE_SIMT, returning (native, simt)."""
+    native = fn(*args)
+    torch.cuda.synchronize()
+    os.environ["FLASHRT_FORCE_SIMT"] = "1"
+    try:
+        simt = fn(*args)
+    finally:
+        del os.environ["FLASHRT_FORCE_SIMT"]
+    torch.cuda.synchronize()
+    return native, simt
+
+
+def _check_simt_parity(name, native, simt, max_abs=0.25, mean_abs=0.02, cos_min=0.998):
+    d = (simt.float() - native.float()).abs().flatten()
+    max_err = float(d.max())
+    mean_err = float(d.mean())
+    cos = float(F.cosine_similarity(
+        simt.float().flatten(), native.float().flatten(), dim=0
+    ))
+    assert (
+        max_err <= max_abs and mean_err <= mean_abs and cos >= cos_min
+    ), f"{name} max={max_err} mean={mean_err} cos={cos}"
+    print(
+        f"PASS {name} SIMT parity max={max_err:.6f} mean={mean_err:.6f} cos={cos:.8f}"
+    )
+    return 1
+
+
+def run_simt_tests(ops) -> int:
+    """Validate the portable SIMT fp8/nvfp4 fallback matches the native path."""
+    torch.manual_seed(7)
+    count = 0
+
+    n, tc, tn, h, w, ci, co = 1, 2, 1, 8, 8, 32, 16
+    cache = (torch.randn((n, tc, h, w, ci), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    new = (torch.randn((n, tn, h, w, ci), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    weight = (torch.randn((co, 3, 3, 3, ci), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    bias = (torch.randn(co, device="cuda") * 0.01).to(torch.bfloat16)
+    residual = (torch.randn((n, co, tn, h, w), device="cuda") * 0.05).to(
+        torch.bfloat16
+    )
+    native, simt = _parity(
+        ops.fp8_conv3d_v18_ncdhw_res_bf16out,
+        cache, new, weight, bias, residual, 0.75,
+    )
+    count += _check_simt_parity("fp8_conv3d_v18", native, simt)
+
+    cache = (torch.randn((1, 2, 8, 8, 32), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    new = (torch.randn((1, 2, 8, 8, 32), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    weight = (torch.randn((16, 3, 3, 3, 32), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    bias = (torch.randn(16, device="cuda") * 0.01).to(torch.bfloat16)
+    native, simt = _parity(
+        ops.fp8_causal_conv3d_ndhwc_bf16, cache, new, weight, bias, 0.75
+    )
+    count += _check_simt_parity("fp8_causal_conv3d", native, simt)
+
+    x2d = (torch.randn((1, 8, 8, 32), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    w2d = (torch.randn((16, 3, 3, 32), device="cuda") * 0.1).to(
+        torch.float8_e4m3fn
+    )
+    b2d = (torch.randn(16, device="cuda") * 0.01).to(torch.bfloat16)
+    native, simt = _parity(
+        ops.fp8_conv2d_3x3_nhwc_bf16, x2d, w2d, b2d, 0.75
+    )
+    count += _check_simt_parity("fp8_conv2d_3x3", native, simt)
+    return count
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -669,6 +753,7 @@ def main() -> int:
     else:
         total = run_tests(ops)
         total += run_compile_tests(ops)
+        total += run_simt_tests(ops)
     torch.cuda.synchronize()
     print(f"world-model-conv correctness passed: {total} checks")
     return 0
