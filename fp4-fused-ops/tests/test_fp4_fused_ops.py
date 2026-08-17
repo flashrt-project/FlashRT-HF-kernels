@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import math
 import os
@@ -345,19 +346,59 @@ def load_source_ops() -> SourceOps:
 
 def load_installed_ops(artifact: str | None):
     if artifact:
-        sys.path.insert(0, artifact)
-    try:
+        artifact_path = Path(artifact).resolve()
+        init_path = artifact_path / "__init__.py"
+        if init_path.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "fp4_fused_ops",
+                init_path,
+                submodule_search_locations=[str(artifact_path)],
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"cannot load artifact entry: {init_path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        else:
+            sys.path.insert(0, artifact)
+            try:
+                module = importlib.import_module("fp4_fused_ops")
+            finally:
+                sys.path.remove(artifact)
+    else:
         module = importlib.import_module("fp4_fused_ops")
-        # Exercise the installed torch.library ABI with the same explicit
-        # output-buffer contract used by source tests.  The public Python
-        # helpers intentionally expose a more convenient keyword API.
-        adapter = object.__new__(SourceOps)
-        adapter._ops = module.ops
-        adapter._anchor = torch.empty((1,), device="cuda", dtype=torch.uint8)
-        return adapter
-    finally:
-        if artifact:
-            sys.path.remove(artifact)
+    # Exercise the installed torch.library ABI with the same explicit
+    # output-buffer contract used by source tests.  The public Python
+    # helpers intentionally expose a more convenient keyword API.
+    adapter = object.__new__(SourceOps)
+    adapter._ops = module.ops
+    adapter._anchor = torch.empty((1,), device="cuda", dtype=torch.uint8)
+    return adapter
+
+
+def load_request2_reference_oracle() -> None:
+    try:
+        torch.ops.fp4_request2_reference.quantize
+        return
+    except AttributeError:
+        pass
+
+    from torch.utils.cpp_extension import load
+
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _current_arch_list())
+    quantize_dir = ROOT / "fp4-gemm" / "csrc" / "quantize"
+    load(
+        name="fp4_request2_reference_installed_test",
+        sources=[
+            str(PACKAGE / "tests" / "request2_reference_binding.cpp"),
+            str(quantize_dir / "quantize_fp4_sfa_bf16.cu"),
+        ],
+        extra_include_paths=[str(quantize_dir), str(ROOT / "fp4-gemm" / "csrc")],
+        extra_cflags=["-O3"],
+        extra_cuda_cflags=["-std=c++17", "-O3"],
+        is_python_module=False,
+        verbose=False,
+    )
 
 
 def make_fp16(shape: tuple[int, int], seed: int, scale: float = 0.25) -> torch.Tensor:
@@ -1876,6 +1917,8 @@ def main() -> int:
     results.extend(run_pi05_thor_producer_checks(ops))
     results.extend(run_pi05_thor_bf16_batch3_checks(ops))
     if args.mode == "full":
+        if args.backend == "installed":
+            load_request2_reference_oracle()
         run_request2_checks(ops)
 
     passed = sum(1 for item in results if item.passed)

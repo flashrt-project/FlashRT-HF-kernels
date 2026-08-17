@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import math
 import os
@@ -191,12 +192,26 @@ def load_source_ops() -> SourceOps:
 
 def load_installed_ops(artifact: str | None):
     if artifact:
+        artifact_path = Path(artifact).resolve()
+        init_path = artifact_path / "__init__.py"
+        if init_path.is_file():
+            spec = importlib.util.spec_from_file_location(
+                "causal_conv1d_state",
+                init_path,
+                submodule_search_locations=[str(artifact_path)],
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"cannot load artifact entry: {init_path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+            return InstalledOps(module)
         sys.path.insert(0, artifact)
-    try:
-        return InstalledOps(importlib.import_module("causal_conv1d_state"))
-    finally:
-        if artifact:
+        try:
+            return InstalledOps(importlib.import_module("causal_conv1d_state"))
+        finally:
             sys.path.remove(artifact)
+    return InstalledOps(importlib.import_module("causal_conv1d_state"))
 
 
 def make_inputs(B: int, S: int, C: int, K: int, seed: int):
