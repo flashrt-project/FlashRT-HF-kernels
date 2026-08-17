@@ -25,6 +25,7 @@ host fallback for that profile.
 
 - `gated_delta_recurrent_bf16`
 - `gated_delta_recurrent_inout_bf16`
+- `gdn_recurrent_inout_stream_bf16`
 - `gated_delta_recurrent_f32state_bf16io`
 - `gated_delta_chunk_bf16`
 - `gated_delta_chunk_smem_bf16`

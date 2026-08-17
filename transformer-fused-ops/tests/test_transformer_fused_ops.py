@@ -25,6 +25,19 @@ class SourceOps:
         self.ops.rms_norm_gated_silu_bf16(x, gate, weight, float(eps), out)
         return out
 
+    def rms_norm_gated_silu_quant_fp4_bf16(self, x, gate, weight, eps=1e-6):
+        out = torch.empty_like(x)
+        packed = torch.empty(
+            (1, x.numel() // 2), device=x.device, dtype=torch.uint8
+        )
+        sfa = torch.zeros(
+            (x.shape[0] * 1024,), device=x.device, dtype=torch.uint8
+        )
+        self.ops.rms_norm_gated_silu_quant_fp4_bf16(
+            x, gate, weight, float(eps), out, packed, sfa
+        )
+        return out, packed, sfa
+
     def silu_mul_bf16(self, gate, up):
         out = torch.empty_like(gate)
         self.ops.silu_mul_bf16(gate, up, out)
@@ -225,6 +238,7 @@ def load_source_ops() -> SourceOps:
     sources = [
         str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
         str(PACKAGE / "csrc" / "kernels" / "rms_norm_gated_silu_qwen36.cu"),
+        str(PACKAGE / "csrc" / "kernels" / "rms_norm_gated_silu_quant_fp4_bf16.cu"),
         str(PACKAGE / "csrc" / "kernels" / "silu_mul_qwen36.cu"),
         str(PACKAGE / "csrc" / "kernels" / "qwen36_misc.cu"),
         str(PACKAGE / "csrc" / "kernels" / "nexn2_misc.cu"),
@@ -266,6 +280,32 @@ def assert_close(name: str, got: torch.Tensor, ref: torch.Tensor, atol: float = 
     cos = float(torch.nn.functional.cosine_similarity(got.float().flatten(), ref.float().flatten(), dim=0).item())
     if max_abs > atol or cos < 0.999:
         raise AssertionError(f"{name}: max_abs={max_abs:.8f} cos={cos:.8f}")
+
+
+def load_fp4_reference() -> None:
+    try:
+        torch.ops.transformer_fused_fp4_reference.quantize
+        return
+    except AttributeError:
+        pass
+    from torch.utils.cpp_extension import load
+
+    os.environ.setdefault("TORCH_CUDA_ARCH_LIST", _arch_list())
+    load(
+        name="transformer_fused_fp4_reference",
+        sources=[
+            str(PACKAGE / "tests" / "fp4_reference_binding.cpp"),
+            str(ROOT / "fp4-gemm" / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
+        ],
+        extra_include_paths=[
+            str(ROOT / "fp4-gemm" / "csrc"),
+            str(ROOT / "fp4-gemm" / "csrc" / "quantize"),
+        ],
+        extra_cflags=["-O3"],
+        extra_cuda_cflags=["-O3"],
+        is_python_module=False,
+        verbose=False,
+    )
 
 
 def assert_fp8_distribution(
@@ -311,7 +351,66 @@ def run(ops, mode: str) -> int:
         weighted = (w.float() * norm.to(torch.bfloat16).float()).to(torch.bfloat16)
         ref = (weighted.float() * torch.nn.functional.silu(gate.float())).to(torch.bfloat16)
         assert_close(f"rms_norm_gated_silu rows={m}", got, ref, 0.00390625)
+        quant_out, packed, sfa = ops.rms_norm_gated_silu_quant_fp4_bf16(
+            x, gate, w
+        )
+        if not torch.equal(quant_out, got):
+            raise AssertionError(f"fused norm output mismatch rows={m}")
+        ref_packed = torch.empty_like(packed)
+        ref_sfa = torch.zeros_like(sfa)
+        torch.ops.transformer_fused_fp4_reference.quantize(
+            got.reshape(1, -1), ref_packed, ref_sfa
+        )
+        if not torch.equal(packed, ref_packed) or not torch.equal(sfa, ref_sfa):
+            raise AssertionError(f"fused norm NVFP4 mismatch rows={m}")
         count += 1
+
+    if mode == "full":
+        x = torch.randn((48, 128), device="cuda", dtype=torch.bfloat16)
+        gate = torch.randn_like(x)
+        weight = torch.randn((128,), device="cuda", dtype=torch.bfloat16)
+        expected_out, expected_packed, expected_sfa = (
+            ops.rms_norm_gated_silu_quant_fp4_bf16(x, gate, weight)
+        )
+        graph_out = torch.empty_like(x)
+        graph_packed = torch.empty((1, x.numel() // 2), device="cuda", dtype=torch.uint8)
+        graph_sfa = torch.zeros((x.shape[0] * 1024,), device="cuda", dtype=torch.uint8)
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            ops.ops.rms_norm_gated_silu_quant_fp4_bf16(
+                x, gate, weight, 1e-6, graph_out, graph_packed, graph_sfa
+            )
+        graph.replay()
+        torch.cuda.synchronize()
+        if not all(torch.equal(a, b) for a, b in (
+            (graph_out, expected_out),
+            (graph_packed, expected_packed),
+            (graph_sfa, expected_sfa),
+        )):
+            raise AssertionError("fused norm NVFP4 CUDA Graph mismatch")
+        first = (graph_out.clone(), graph_packed.clone(), graph_sfa.clone())
+        graph.replay()
+        torch.cuda.synchronize()
+        if not all(torch.equal(a, b) for a, b in zip(
+            (graph_out, graph_packed, graph_sfa), first
+        )):
+            raise AssertionError("fused norm NVFP4 graph replay is not bitwise stable")
+        count += 1
+
+        if not isinstance(ops, SourceOps):
+            compiled = torch.compile(
+                ops.rms_norm_gated_silu_quant_fp4_bf16,
+                fullgraph=True,
+            )
+            compiled_result = compiled(x, gate, weight)
+            if not all(torch.equal(a, b) for a, b in zip(
+                compiled_result,
+                (expected_out, expected_packed, expected_sfa),
+            )):
+                raise AssertionError(
+                    "fused norm NVFP4 torch.compile output is not bitwise exact"
+                )
+            count += 1
 
     gate = (torch.randn((4, 1024), device="cuda") * 0.2).to(torch.bfloat16)
     up = (torch.randn_like(gate.float()) * 0.2).to(torch.bfloat16)
@@ -700,6 +799,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=["smoke", "full"], default="smoke")
     args = parser.parse_args()
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
+    load_fp4_reference()
     count = run(ops, args.mode)
     print(f"transformer-fused-ops {args.backend} {args.mode}: passed {count}/{count}")
     return 0

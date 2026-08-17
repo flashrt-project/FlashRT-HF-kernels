@@ -108,6 +108,11 @@ void gdn_wy_norm_cumsum_pack_qk_v2_bf16(torch::Tensor const& q16,
                                         torch::Tensor& q_pack_hv,
                                         torch::Tensor& k_pack_hk,
                                         torch::Tensor& g_cumsum);
+void gdn_recurrent_inout_stream_bf16(
+    torch::Tensor const& q, torch::Tensor const& k, torch::Tensor const& v,
+    torch::Tensor const& g, torch::Tensor const& beta,
+    torch::Tensor const& state_in, torch::Tensor& state_out,
+    torch::Tensor& out, bool use_qk_l2norm);
 void batched_unit_ltri_inv64_f32(torch::Tensor const& A, torch::Tensor& X);
 void gdn_wy_kkt_b64_bf16(torch::Tensor const& k16_l2,
                          torch::Tensor const& beta,

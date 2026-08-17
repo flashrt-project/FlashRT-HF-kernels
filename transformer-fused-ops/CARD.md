@@ -19,6 +19,11 @@ See `README.md` for the public function list.
 The public surface includes `relu2_quantize_fp8_static_bf16`, a fused BF16
 ReLU-squared to FP8 producer.
 
+`rms_norm_gated_silu_quant_fp4_bf16` preserves the BF16 gated-RMSNorm output
+and emits its flattened NVFP4 packed tensor and 128x64-atom scale-factor
+buffer in the same launch. It supports contiguous `(rows, 128)` BF16 inputs
+and caller-provided static output buffers for CUDA Graph capture.
+
 The SM110 BF16 producer surface also includes `quantize_fp8_static_bf16`,
 `layer_norm_quant_fp8_static_bf16`, and
 `gate_geglu_merged_quant_fp8_static_bf16` for PI0.5 prefill and SigLIP MLP

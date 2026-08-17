@@ -71,6 +71,11 @@ reference therefore does the same; comparing it to the legacy per-token BF16
 state-rounding loop is not an equivalent numerical contract. Sequence rows
 cover `S={1,17,63,64,65,127,128,129,256,512}` and `H={4,48}`.
 
+`gdn_recurrent_inout_stream_bf16` is checked against the prior package entry
+with identical BF16 inputs. Both output and updated recurrent state must be
+bit-exact. The gate additionally requires two bit-identical CUDA Graph replays
+and installed-wrapper execution under `torch.compile(fullgraph=True)`.
+
 ## RTX 5090 Source Results
 
 Command:

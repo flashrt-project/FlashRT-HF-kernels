@@ -104,6 +104,14 @@ class SourceOps:
         self._ops.gated_delta_recurrent_inout_bf16(q, k, v, g, beta, state, state_out, out, use_qk_l2norm)
         return out, state_out
 
+    def stream(self, q, k, v, g, beta, state, use_qk_l2norm=True):
+        out = torch.empty_like(q)
+        state_out = torch.empty_like(state)
+        self._ops.gdn_recurrent_inout_stream_bf16(
+            q, k, v, g, beta, state, state_out, out, use_qk_l2norm
+        )
+        return out, state_out
+
     def inout_gf32(self, q, k, v, g, beta, state, use_qk_l2norm=True):
         out = torch.empty_like(q)
         state_out = torch.empty_like(state)
@@ -329,6 +337,11 @@ class InstalledOps:
             q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm
         )
 
+    def stream(self, q, k, v, g, beta, state, use_qk_l2norm=True):
+        return self._mod.gdn_recurrent_inout_stream_bf16(
+            q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm
+        )
+
     def inout_gf32(self, q, k, v, g, beta, state, use_qk_l2norm=True):
         return self._mod.gated_delta_recurrent_inout_gf32_bf16(
             q, k, v, g, beta, state, use_qk_l2norm=use_qk_l2norm
@@ -486,6 +499,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "gated_delta_attention.cu"),
             str(PACKAGE / "csrc" / "kernels" / "batched_unit_ltri_inv64.cu"),
             str(PACKAGE / "csrc" / "kernels" / "gdn_wy_norm_cumsum_pack_qk_v2.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "gdn_recurrent_inout_stream_bf16.cu"),
             str(PACKAGE / "csrc" / "kernels" / "gdn_recurrent_seq_sm120.cu"),
             str(PACKAGE / "csrc" / "kernels" / "gdn_chunk_from_conv_smem_stash.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_recompute_wu_mma_fla.cu"),
@@ -845,6 +859,41 @@ def run_wy_kkt_mma_gate(ops) -> None:
 
 
 def run_request2_gate(ops) -> None:
+    gen = torch.Generator(device="cuda").manual_seed(2026081701)
+    q = (torch.randn((1, 48, D), device="cuda", generator=gen) * 0.05).bfloat16()
+    k = (torch.randn((1, 48, D), device="cuda", generator=gen) * 0.05).bfloat16()
+    v = (torch.randn((1, 48, D), device="cuda", generator=gen) * 0.05).bfloat16()
+    g = (torch.randn((1, 48), device="cuda", generator=gen) * 0.02).bfloat16()
+    beta = torch.sigmoid(torch.randn((1, 48), device="cuda", generator=gen)).bfloat16()
+    state = (torch.randn((1, 48, D, D), device="cuda", generator=gen) * 0.01).bfloat16()
+    expected_out, expected_state = ops.stream(q, k, v, g, beta, state)
+    graph_out = torch.empty_like(q)
+    graph_state = torch.empty_like(state)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops._ops.gdn_recurrent_inout_stream_bf16(
+            q, k, v, g, beta, state, graph_state, graph_out, True
+        )
+    graph.replay()
+    torch.cuda.synchronize()
+    if not torch.equal(graph_out, expected_out) or not torch.equal(graph_state, expected_state):
+        raise AssertionError("stream recurrent CUDA Graph mismatch")
+    first_out, first_state = graph_out.clone(), graph_state.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    if not torch.equal(graph_out, first_out) or not torch.equal(graph_state, first_state):
+        raise AssertionError("stream recurrent CUDA Graph replay is not bitwise stable")
+
+    if isinstance(ops, InstalledOps):
+        compiled = torch.compile(ops.stream, fullgraph=True)
+        compiled_out, compiled_state = compiled(q, k, v, g, beta, state)
+        if not torch.equal(compiled_out, expected_out) or not torch.equal(
+            compiled_state, expected_state
+        ):
+            raise AssertionError(
+                "stream recurrent torch.compile output is not bitwise exact"
+            )
+
     for S in (63, 64, 2044):
         gen = torch.Generator(device="cuda").manual_seed(2026081700 + S)
         q = (torch.randn((S, 16, D), device="cuda", generator=gen) * 0.05).bfloat16()

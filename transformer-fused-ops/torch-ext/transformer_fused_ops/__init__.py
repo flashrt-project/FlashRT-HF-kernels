@@ -32,6 +32,26 @@ def _rms_norm_gated_silu_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("rms_norm_gated_silu_quant_fp4_bf16"))
+def _rms_norm_gated_silu_quant_fp4_fake(
+    x: torch.Tensor,
+    gate: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+    out: torch.Tensor,
+    packed: torch.Tensor,
+    sfa: torch.Tensor,
+) -> None:
+    del eps
+    if x.dim() != 2 or x.shape[1] != 128:
+        raise RuntimeError("x must have shape (rows,128)")
+    if gate.shape != x.shape or out.shape != x.shape or weight.shape != (128,):
+        raise RuntimeError("gate/out/weight shape contract failed")
+    if packed.shape != (1, x.numel() // 2) or sfa.dim() != 1:
+        raise RuntimeError("packed/SFA output shape contract failed")
+    return None
+
+
 _same_shape_fake("silu_mul_bf16")
 _same_shape_fake("sigmoid_mul_bf16")
 
@@ -230,6 +250,29 @@ def rms_norm_gated_silu_bf16(x, gate, weight, *, eps: float = 1e-6, out: Optiona
         out = torch.empty_like(x)
     ops.rms_norm_gated_silu_bf16(x, gate, weight, float(eps), out)
     return out
+
+
+def rms_norm_gated_silu_quant_fp4_bf16(
+    x: torch.Tensor,
+    gate: torch.Tensor,
+    weight: torch.Tensor,
+    *,
+    eps: float = 1e-6,
+    out: Optional[torch.Tensor] = None,
+    packed: Optional[torch.Tensor] = None,
+    sfa: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    rows = x.shape[0]
+    if out is None:
+        out = torch.empty_like(x)
+    if packed is None:
+        packed = torch.empty((1, x.numel() // 2), device=x.device, dtype=torch.uint8)
+    if sfa is None:
+        sfa = torch.zeros((rows * 1024,), device=x.device, dtype=torch.uint8)
+    ops.rms_norm_gated_silu_quant_fp4_bf16(
+        x, gate, weight, float(eps), out, packed, sfa
+    )
+    return out, packed, sfa
 
 
 def silu_mul_bf16(gate, up, *, out: Optional[torch.Tensor] = None):
@@ -513,6 +556,7 @@ __all__ = [
     "nexn2_split_q_gate_bf16",
     "partial_rope_qk_bf16",
     "rms_norm_gated_silu_bf16",
+    "rms_norm_gated_silu_quant_fp4_bf16",
     "sigmoid_mul_bf16",
     "per_head_sigmoid_gate_bf16",
     "silu_mul_bf16",

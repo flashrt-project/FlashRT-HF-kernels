@@ -25,6 +25,8 @@ cuda-minver = "12.8"
 src = [
   "csrc/kernels/rms_norm_gated_silu_qwen36.cu",
   "csrc/kernels/rms_norm_gated_silu_qwen36.cuh",
+  "csrc/kernels/rms_norm_gated_silu_quant_fp4_bf16.cu",
+  "csrc/kernels/rms_norm_gated_silu_quant_fp4_bf16.cuh",
   "csrc/kernels/silu_mul_qwen36.cu",
   "csrc/kernels/silu_mul_qwen36.cuh",
   "csrc/kernels/qwen36_misc.cu",

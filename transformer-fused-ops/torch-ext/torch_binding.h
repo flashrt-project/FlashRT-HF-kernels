@@ -6,6 +6,10 @@
 void rms_norm_gated_silu_bf16(torch::Tensor const& x, torch::Tensor const& gate,
                               torch::Tensor const& weight, double eps,
                               torch::Tensor& out);
+void rms_norm_gated_silu_quant_fp4_bf16(
+    torch::Tensor const& x, torch::Tensor const& gate,
+    torch::Tensor const& weight, double eps, torch::Tensor& out,
+    torch::Tensor& packed, torch::Tensor& sfa);
 void silu_mul_bf16(torch::Tensor const& gate, torch::Tensor const& up, torch::Tensor& out);
 void sigmoid_mul_bf16(torch::Tensor const& gate, torch::Tensor const& x, torch::Tensor& out);
 void embedding_lookup_bf16(torch::Tensor const& token_ids, torch::Tensor const& embed,

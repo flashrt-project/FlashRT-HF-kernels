@@ -97,3 +97,18 @@ Cold Hub artifact on RTX 5090, PyTorch `2.13.0+cu130`, caller-owned outputs,
 The installed full gate passed `38/38` plus CUDA Graph, poisoned-tail,
 fail-fast, and `torch.compile(fullgraph=True)`. A separate cold-cache
 `get_kernel(..., version=6)` run compiled and launched both request-2 entries.
+
+## Streaming recurrent decode
+
+RTX 5090 source-extension benchmark, PyTorch `2.11.0+cu128`, one token,
+48 heads, head dimension 128. Both paths use caller-owned output and state
+buffers and the same input tensors. Output and state are bit-exact.
+
+| Entry | Source us | Current Hub v6 us | Speedup | Output | State |
+| --- | ---: | ---: | ---: | --- | --- |
+| `gdn_recurrent_inout_stream_bf16` | 6.11 | 12.30 | 2.01x | exact | exact |
+
+The public `gated_delta_recurrent_inout_bf16` entry now dispatches to the same
+stream implementation, so existing callers receive the register-pressure fix
+without changing APIs. Final release acceptance reruns this comparison from a
+cold Hub artifact.

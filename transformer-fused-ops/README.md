@@ -5,6 +5,7 @@ FlashRT native CUDA fused helper kernels for transformer hot paths.
 ## Functions
 
 - `rms_norm_gated_silu_bf16`
+- `rms_norm_gated_silu_quant_fp4_bf16`
 - `silu_mul_bf16`
 - `sigmoid_mul_bf16`
 - `per_head_sigmoid_gate_bf16` (`NHD * 2*sigmoid([B,T,H])`, caller-owned `out=`)

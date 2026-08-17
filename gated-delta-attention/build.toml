@@ -36,6 +36,8 @@ src = [
   "csrc/kernels/batched_unit_ltri_inv64.cuh",
   "csrc/kernels/gdn_wy_norm_cumsum_pack_qk_v2.cu",
   "csrc/kernels/gdn_wy_norm_cumsum_pack_qk_v2.cuh",
+  "csrc/kernels/gdn_recurrent_inout_stream_bf16.cu",
+  "csrc/kernels/gdn_recurrent_inout_stream_bf16.cuh",
 ]
 cuda-flags = [
   "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",

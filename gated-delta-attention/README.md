@@ -16,6 +16,7 @@ The package supports two validated linear-attention producer profiles:
 
 - `gated_delta_recurrent_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`
 - `gated_delta_recurrent_inout_bf16(q, k, v, g, beta, state_in, use_qk_l2norm=True, state_out=None, out=None)`
+- `gdn_recurrent_inout_stream_bf16(q, k, v, g, beta, state_in, use_qk_l2norm=True, state_out=None, out=None)`
 - `gated_delta_recurrent_f32state_bf16io(q, k, v, g, beta, state_f32, use_qk_l2norm=True, out=None)`
 - `gated_delta_chunk_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`
 - `gated_delta_chunk_smem_bf16(q, k, v, g, beta, state, use_qk_l2norm=True, out=None)`

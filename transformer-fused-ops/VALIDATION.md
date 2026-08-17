@@ -31,6 +31,13 @@ The additive PI0.5/SigLIP BF16 producer gate covers:
 - `torch.compile(fullgraph=True)` and CUDA Graph replay for all three API
   families.
 
+The fused `rms_norm_gated_silu_quant_fp4_bf16` gate covers rows
+`1/8/64/257`. Its BF16 output must exactly equal the established package
+RMSNorm-gated-SiLU entry. Packed FP4 values and scale-factor bytes must exactly
+equal the production `fp4-gemm` quantizer, compiled into the test as an
+independent native oracle. The full installed-artifact gate also requires
+bit-identical CUDA Graph replay and `torch.compile(fullgraph=True)` execution.
+
 The August 8 Thor source and clean installed-artifact gates passed `67/67`;
 the representative producer benchmark reported FP8 p99 error zero and
 `5.97x..12.20x` over PyTorch eager. Explicit vector-entry latency was

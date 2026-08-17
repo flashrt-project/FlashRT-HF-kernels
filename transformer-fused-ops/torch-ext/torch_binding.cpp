@@ -16,6 +16,7 @@
 #include "kernels/qwen36_misc.cuh"
 #include "kernels/relu2_quantize_fp8.cuh"
 #include "kernels/rms_norm_gated_silu_qwen36.cuh"
+#include "kernels/rms_norm_gated_silu_quant_fp4_bf16.cuh"
 #include "kernels/silu_mul_qwen36.cuh"
 #include "kernels/vec_fp16_dispatch.cuh"
 #include "registration.h"
@@ -110,6 +111,47 @@ void rms_norm_gated_silu_bf16(torch::Tensor const& x, torch::Tensor const& gate,
       x.data_ptr(), gate.data_ptr(), weight.data_ptr(), out.data_ptr(),
       checked_int(x.size(0), "rows"), checked_int(x.size(1), "dim"),
       static_cast<float>(eps), stream);
+#else
+  TORCH_CHECK(false, "transformer-fused-ops was not built with CUDA support");
+#endif
+}
+
+void rms_norm_gated_silu_quant_fp4_bf16(
+    torch::Tensor const& x, torch::Tensor const& gate,
+    torch::Tensor const& weight, double eps, torch::Tensor& out,
+    torch::Tensor& packed, torch::Tensor& sfa) {
+  check_bf16(x, "x");
+  check_bf16(gate, "gate");
+  check_bf16(weight, "weight");
+  check_bf16(out, "out");
+  check_cuda_contiguous(packed, "packed");
+  check_cuda_contiguous(sfa, "sfa");
+  TORCH_CHECK(x.dim() == 2 && x.size(1) == 128,
+              "x must have shape (rows,128)");
+  TORCH_CHECK(gate.sizes() == x.sizes() && out.sizes() == x.sizes(),
+              "gate and out must match x");
+  TORCH_CHECK(weight.sizes() == torch::IntArrayRef({128}),
+              "weight must have shape (128,)");
+  TORCH_CHECK(packed.scalar_type() == torch::kUInt8 &&
+                  packed.sizes() == torch::IntArrayRef({1, x.numel() / 2}),
+              "packed must be uint8 with shape (1, rows * 64)");
+  TORCH_CHECK(sfa.scalar_type() == torch::kUInt8 && sfa.dim() == 1 &&
+                  sfa.numel() >= x.size(0) * 1024,
+              "sfa must be uint8 with at least rows * 1024 bytes");
+  same_device(x, gate, "x", "gate");
+  same_device(x, weight, "x", "weight");
+  same_device(x, out, "x", "out");
+  same_device(x, packed, "x", "packed");
+  same_device(x, sfa, "x", "sfa");
+#if defined(CUDA_KERNEL)
+  c10::cuda::CUDAGuard guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int status = flash_rt::kernels::rms_norm_gated_silu_quant_fp4_bf16(
+      x.data_ptr(), gate.data_ptr(), weight.data_ptr(), out.data_ptr(),
+      packed.data_ptr(), sfa.data_ptr(), checked_int(x.size(0), "rows"),
+      128, static_cast<float>(eps), stream);
+  TORCH_CHECK(status == 0,
+              "rms_norm_gated_silu_quant_fp4_bf16 failed with status ", status);
 #else
   TORCH_CHECK(false, "transformer-fused-ops was not built with CUDA support");
 #endif
@@ -680,6 +722,7 @@ void repeat_interleave_heads_fp16(torch::Tensor const& x, int64_t repeat,
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("rms_norm_gated_silu_bf16(Tensor x, Tensor gate, Tensor weight, float eps, Tensor! out) -> ()");
+  ops.def("rms_norm_gated_silu_quant_fp4_bf16(Tensor x, Tensor gate, Tensor weight, float eps, Tensor! out, Tensor! packed, Tensor! sfa) -> ()");
   ops.def("silu_mul_bf16(Tensor gate, Tensor up, Tensor! out) -> ()");
   ops.def("sigmoid_mul_bf16(Tensor gate, Tensor x, Tensor! out) -> ()");
   ops.def("per_head_sigmoid_gate_bf16(Tensor x, Tensor gate, Tensor! out) -> ()");
@@ -712,6 +755,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("gpu_repeat_interleave_heads_vec(Tensor x, int repeat, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("rms_norm_gated_silu_bf16", torch::kCUDA, &rms_norm_gated_silu_bf16);
+  ops.impl("rms_norm_gated_silu_quant_fp4_bf16", torch::kCUDA,
+           &rms_norm_gated_silu_quant_fp4_bf16);
   ops.impl("silu_mul_bf16", torch::kCUDA, &silu_mul_bf16);
   ops.impl("sigmoid_mul_bf16", torch::kCUDA, &sigmoid_mul_bf16);
   ops.impl("per_head_sigmoid_gate_bf16", torch::kCUDA,
