@@ -78,6 +78,20 @@ The full gate captures and replays both the `32/16/128` and
 The `16/2/256` profile uses a dedicated group-size-8 CUDA instantiation. It is
 not an alias of the existing `24/4/256` group-size-6 image.
 
+## Hub v4 Installed Artifact
+
+Validated from a cold Hub cache with:
+
+- artifact: `torch213-cxx11-cu130-x86_64-linux`;
+- runtime: PyTorch `2.13.0+cu130`, `kernels==0.16.0`;
+- GPU: NVIDIA GeForce RTX 5090;
+- resolver: `get_kernel("flashrt/fp8-kv-attention", version=4)`.
+
+The installed full gate passed the page-32 contract, all 16 correctness rows,
+both bit-identical CUDA Graph replay checks, and both
+`torch.compile(fullgraph=True)` parity checks. The Hub matrix audit reports
+exactly the requested Torch 2.13/CUDA 13.0 x86_64 variant for v4.
+
 ## Generated Pyproject Build Smoke
 
 Command:

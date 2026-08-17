@@ -39,7 +39,7 @@ KV cache bandwidth.
 ```python
 from kernels import get_kernel
 
-attn = get_kernel("flashrt/fp8-kv-attention", version=3, trust_remote_code=True)
+attn = get_kernel("flashrt/fp8-kv-attention", version=4, trust_remote_code=True)
 out = attn.xqa_bf16_fp8kv(q_bf16, k_cache_fp8, v_cache_fp8)
 ```
 
