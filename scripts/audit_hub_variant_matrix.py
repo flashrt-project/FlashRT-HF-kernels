@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import tomllib
 from pathlib import Path
 
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, hf_hub_download
 
 
 DEFAULT_VARIANTS = (
@@ -55,6 +56,31 @@ def build_variants(files: list[str]) -> set[str]:
         if len(parts) == 3 and parts[0] == "build" and parts[2] == "metadata.json":
             variants.add(parts[1])
     return variants
+
+
+def legacy_universal_matches_source(
+    repo_id: str,
+    package_root: Path,
+    model_files: list[str],
+    token: str | None,
+) -> bool:
+    module = package_root.name.replace("-", "_")
+    remote_path = f"build/torch-universal/{module}/__init__.py"
+    local_path = package_root / "torch-ext" / module / "__init__.py"
+    if remote_path not in model_files or not local_path.is_file():
+        return False
+    downloaded = Path(
+        hf_hub_download(
+            repo_id,
+            remote_path,
+            repo_type="model",
+            revision="main",
+            token=token,
+        )
+    )
+    return hashlib.sha256(downloaded.read_bytes()).digest() == hashlib.sha256(
+        local_path.read_bytes()
+    ).digest()
 
 
 def parse_args() -> argparse.Namespace:
@@ -108,6 +134,9 @@ def main() -> None:
             continue
         model_files = api.list_repo_files(repo_id, repo_type="model", revision="main")
         model_variants = build_variants(model_files)
+        if legacy_universal_matches_source(repo_id, root / package, model_files, token):
+            print(f"{repo_id} legacy main: source-identical torch-universal")
+            continue
         if model_variants != kernel_variants:
             only_kernel = sorted(kernel_variants - model_variants)
             only_model = sorted(model_variants - kernel_variants)
