@@ -129,7 +129,7 @@ void init_ue4m3_lut() {
 
 }  // namespace
 
-int nexn2_w4a16_matvec_bf16(
+int nexn2_w4a16_matvec_bf16_sm120(
     const void*  x_bf16,
     const void*  W_packed,
     const void*  SFB,

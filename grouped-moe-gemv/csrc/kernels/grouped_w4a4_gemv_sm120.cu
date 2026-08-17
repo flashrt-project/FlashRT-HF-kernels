@@ -311,7 +311,7 @@ __global__ void grouped_n_kernel(
 
 }  // namespace
 
-int grouped_w4a4_gemv_sm120_bf16(
+int grouped_w4a4_gemv_sm120_bf16_impl(
     const void*  A_packed,
     const void*  B_stack,
     void*        D,

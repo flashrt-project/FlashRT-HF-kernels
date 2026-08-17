@@ -127,7 +127,7 @@ void init_ue4m3_g() {
 
 }  // namespace
 
-int nexn2_moe_grouped_w4a16_bf16(
+int nexn2_moe_grouped_w4a16_bf16_sm120(
     const void*  A_stack,
     const void*  W_stack,
     const void*  SFB_stack,
