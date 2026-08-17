@@ -1,10 +1,10 @@
 {
   description = "Flake for FlashRT Blackwell INT4 primitives";
 
-  # Temporary upstream hash fix: one-line CUTLASS 4.5.2 fixed-output update
-  # based on huggingface/kernels main. Return to upstream after it lands.
+  # Public immutable builder revision covering Torch 2.11-2.13 with the
+  # merged CUTLASS 4.4/4.5 source hash fixes.
   inputs.kernel-builder.url =
-    "github:LiangSu8899/kernels/da73ab4c34bde4916c8efe88854722ed00c036bd";
+    "github:flashrt-project/kernels/b39ca23f1b36383df00b27b3ffe1276cd5dbea85";
 
   outputs =
     { self, kernel-builder }:

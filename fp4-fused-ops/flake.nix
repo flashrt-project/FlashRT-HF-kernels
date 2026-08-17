@@ -2,8 +2,8 @@
   description = "Flake for FlashRT FP4 fused producer kernels";
 
   inputs = {
-    # Includes the CUTLASS 4.4 dependency mapping required by the SM110 path.
-    kernel-builder.url = "github:huggingface/kernels/81f55ea30fd8f819dcf93a3c934dd584c895bd2f";
+    # Covers Torch 2.11-2.13 and includes the CUTLASS 4.4 dependency mapping.
+    kernel-builder.url = "github:flashrt-project/kernels/b39ca23f1b36383df00b27b3ffe1276cd5dbea85";
   };
 
   outputs =
