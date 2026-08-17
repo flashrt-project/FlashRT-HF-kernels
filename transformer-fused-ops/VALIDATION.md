@@ -38,6 +38,12 @@ equal the production `fp4-gemm` quantizer, compiled into the test as an
 independent native oracle. The full installed-artifact gate also requires
 bit-identical CUDA Graph replay and `torch.compile(fullgraph=True)` execution.
 
+Cold Hub artifacts passed `28/28` on both
+`torch211-cxx11-cu128-x86_64-linux` and
+`torch213-cxx11-cu130-x86_64-linux`. The latter is the previously missing ABI
+variant. The older kernels 0.10.5 client also loaded and launched the new entry
+through the unversioned `main` alias.
+
 The August 8 Thor source and clean installed-artifact gates passed `67/67`;
 the representative producer benchmark reported FP8 p99 error zero and
 `5.97x..12.20x` over PyTorch eager. Explicit vector-entry latency was

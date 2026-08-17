@@ -92,9 +92,9 @@ RTX 5090 source-extension benchmark, PyTorch `2.11.0+cu128`, shape
 staged path uses this package's RMSNorm-gated-SiLU output followed by the
 production `fp4-gemm` NVFP4 quantizer; it is not a Python emulation.
 
-| Entry | Fused us | Staged native us | Speedup | BF16 output | Packed FP4 | SFA |
-| --- | ---: | ---: | ---: | --- | --- | --- |
-| `rms_norm_gated_silu_quant_fp4_bf16` | 4.10 | 6.07 | 1.48x | exact | exact | exact |
+| Entry | Source us | Published artifact us | Staged native us | Speedup | BF16 output | Packed FP4 | SFA |
+| --- | ---: | ---: | ---: | ---: | --- | --- | --- |
+| `rms_norm_gated_silu_quant_fp4_bf16` | 4.10 | 4.086 | 6.07 | 1.49x | exact | exact | exact |
 
-The release gate also requires bit-identical CUDA Graph replay and
-`torch.compile(fullgraph=True)` execution from the installed Hub artifact.
+The published `torch211-cxx11-cu128-x86_64-linux` artifact passed bit-identical
+CUDA Graph replay and `torch.compile(fullgraph=True)` execution.

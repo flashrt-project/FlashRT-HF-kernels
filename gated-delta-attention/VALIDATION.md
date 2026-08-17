@@ -76,6 +76,12 @@ with identical BF16 inputs. Both output and updated recurrent state must be
 bit-exact. The gate additionally requires two bit-identical CUDA Graph replays
 and installed-wrapper execution under `torch.compile(fullgraph=True)`.
 
+Cold Hub artifacts passed the complete installed gate on both
+`torch211-cxx11-cu128-x86_64-linux` and
+`torch213-cxx11-cu130-x86_64-linux`. The latter closes the vLLM ABI gap; the
+former was also loaded through the unversioned `main` alias with kernels
+0.10.5.
+
 ## RTX 5090 Source Results
 
 Command:
