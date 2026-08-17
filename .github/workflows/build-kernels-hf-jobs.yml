@@ -368,6 +368,7 @@ jobs:
 
   build-fa2:
     name: Build fa2-seqused-runtime (${{ matrix.variant }})
+    if: github.event_name != 'workflow_dispatch' || github.event.inputs.mirror_only != 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -459,6 +460,10 @@ jobs:
   mirror-fa2:
     name: Mirror fa2-seqused-runtime for legacy kernels clients
     needs: build-fa2
+    if: >-
+      always() &&
+      (needs.build-fa2.result == 'success' ||
+       (github.event_name == 'workflow_dispatch' && github.event.inputs.mirror_only == 'true'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
