@@ -22,3 +22,16 @@ weighted unpermute. Those scheduling tensors are intentionally outside this
 compute-only ABI.
 
 No hidden dequantization or eager fallback occurs in this package.
+
+## Architecture support
+
+- `sm_120a`/`sm_121`: native CUTLASS block-scaled MMA tiles (`M16`, `M64`,
+  `64x64` block tile). This is the only dispatch target on SM120.
+- `sm_110a` (Jetson AGX Thor): a portable pure-SIMT reference
+  (`portable_moe_simt.cu`) computes the same grouped FP4 x FP4 -> BF16 GEMM.
+  It is a compatibility path, not a performance kernel.
+
+The dispatcher selects the SIMT reference only on non-SM120 devices where no
+tensor-core backend exists. Set `FLASHRT_FORCE_SIMT=1` to route any device
+through the SIMT reference (used by the correctness test to validate parity
+against the native path).

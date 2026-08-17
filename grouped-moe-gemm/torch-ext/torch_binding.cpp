@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <torch/all.h>
 #include <torch/library.h>
+#include <cstdlib>
 #if defined(CUDA_KERNEL)
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
@@ -8,6 +9,7 @@
 #include "moe_blocktile_mma_sm120.cuh"
 #include "moe_m16_mma_sm120.cuh"
 #include "moe_m64_mma_sm120.cuh"
+#include "portable_moe_simt.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -53,26 +55,36 @@ void grouped_nvfp4_gemm_bf16_out(
 #if defined(CUDA_KERNEL)
   c10::cuda::CUDAGuard guard(input.device());
   auto s = at::cuda::getCurrentCUDAStream(input.get_device()).stream();
+  const auto* props = at::cuda::getDeviceProperties(input.get_device());
+  const bool force_simt = std::getenv("FLASHRT_FORCE_SIMT") != nullptr;
   int rc;
-  if (tile_rows == 16) {
-    TORCH_CHECK(N % 8 == 0, "M16 path requires N divisible by 8");
-    rc = flash_rt::gemm::moe_m16_mma_sm120_bf16(
-        input.data_ptr(), weight.data_ptr(), input_scale.data_ptr(),
-        weight_scale.data_ptr(), output.data_ptr(), alpha.data_ptr(),
-        tile_expert.data_ptr(), num_tiles, N, K, input_scale_stride,
-        weight_stride, weight_scale_stride, s);
-  } else if (N % 64 == 0) {
-    rc = flash_rt::gemm::moe_blocktile_mma_sm120_bf16(
-        input.data_ptr(), weight.data_ptr(), input_scale.data_ptr(),
-        weight_scale.data_ptr(), output.data_ptr(), alpha.data_ptr(),
-        tile_expert.data_ptr(), num_tiles, N, K, input_scale_stride,
-        weight_stride, weight_scale_stride, s);
+  if (!force_simt && props->major == 12 && props->minor == 0) {
+    if (tile_rows == 16) {
+      TORCH_CHECK(N % 8 == 0, "M16 path requires N divisible by 8");
+      rc = flash_rt::gemm::moe_m16_mma_sm120_bf16(
+          input.data_ptr(), weight.data_ptr(), input_scale.data_ptr(),
+          weight_scale.data_ptr(), output.data_ptr(), alpha.data_ptr(),
+          tile_expert.data_ptr(), num_tiles, N, K, input_scale_stride,
+          weight_stride, weight_scale_stride, s);
+    } else if (N % 64 == 0) {
+      rc = flash_rt::gemm::moe_blocktile_mma_sm120_bf16(
+          input.data_ptr(), weight.data_ptr(), input_scale.data_ptr(),
+          weight_scale.data_ptr(), output.data_ptr(), alpha.data_ptr(),
+          tile_expert.data_ptr(), num_tiles, N, K, input_scale_stride,
+          weight_stride, weight_scale_stride, s);
+    } else {
+      TORCH_CHECK(N % 16 == 0, "M64 path requires N divisible by 16");
+      rc = flash_rt::gemm::moe_m64_mma_sm120_bf16(
+          input.data_ptr(), weight.data_ptr(), input_scale.data_ptr(),
+          weight_scale.data_ptr(), output.data_ptr(), alpha.data_ptr(),
+          tile_expert.data_ptr(), num_tiles, N, K, input_scale_stride,
+          weight_stride, weight_scale_stride, s);
+    }
   } else {
-    TORCH_CHECK(N % 16 == 0, "M64 path requires N divisible by 16");
-    rc = flash_rt::gemm::moe_m64_mma_sm120_bf16(
+    rc = flash_rt::gemm::moe_gemm_bf16_simt(
         input.data_ptr(), weight.data_ptr(), input_scale.data_ptr(),
         weight_scale.data_ptr(), output.data_ptr(), alpha.data_ptr(),
-        tile_expert.data_ptr(), num_tiles, N, K, input_scale_stride,
+        tile_expert.data_ptr(), num_tiles, tile_rows, N, K, input_scale_stride,
         weight_stride, weight_scale_stride, s);
   }
   TORCH_CHECK(rc == 0, "grouped NVFP4 GEMM failed with rc=", rc);
