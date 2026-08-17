@@ -290,7 +290,7 @@ jobs:
               [[ -n "$variant" ]] || continue
               builder_ref="github:huggingface/kernels/3a5c09d941a19f582fe551d038dc2b3bc6b0a03d#kernel-builder"
               if [[ "$variant" == torch213-* ]]; then
-                builder_ref="github:huggingface/kernels#kernel-builder"
+                builder_ref="github:huggingface/kernels/b5443818ffe69a740095bb1174ca55e7fbb34c00#kernel-builder"
                 nix run "$builder_ref" -- build \
                   --variant "$variant" \
                   --max-jobs 1 \
