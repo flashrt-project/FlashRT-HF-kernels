@@ -320,10 +320,19 @@ jobs:
           artifact = Path("result") / variant
           if not (artifact / "metadata.json").is_file():
               raise RuntimeError(f"missing built artifact: {artifact}")
-          HfApi(token=os.environ["HF_TOKEN"]).upload_folder(
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          revision = f"v{version}"
+          api.create_branch(
               repo_id=os.environ["FLASHRT_RELEASE_REPO"],
               repo_type="kernel",
-              revision=f"v{version}",
+              branch=revision,
+              revision="main",
+              exist_ok=True,
+          )
+          api.upload_folder(
+              repo_id=os.environ["FLASHRT_RELEASE_REPO"],
+              repo_type="kernel",
+              revision=revision,
               folder_path=artifact,
               path_in_repo=f"build/{variant}",
               commit_message=f"Publish {variant}",
