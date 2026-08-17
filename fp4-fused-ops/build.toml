@@ -1,7 +1,7 @@
 [general]
 name = "fp4-fused-ops"
 license = "Apache-2.0"
-version = 1
+version = 2
 backends = ["cuda"]
 
 [general.cuda]
@@ -32,6 +32,10 @@ cuda-flags = [
   "-DFLASHRT_HAVE_COSMOS3_EDGE=1",
 ]
 src = [
+  "csrc/kernels/silu_mul_quantize_fp4_sfa_bf16.cu",
+  "csrc/kernels/silu_mul_quantize_fp4_sfa_bf16.cuh",
+  "csrc/kernels/rms_norm_quantize_fp4_sfa_bf16.cu",
+  "csrc/kernels/rms_norm_quantize_fp4_sfa_bf16.cuh",
   "csrc/fused_fp4/norm_silu_fp4_sfa.cu",
   "csrc/fused_fp4/norm_silu_fp4_sfa.cuh",
   "csrc/fused_fp4/adarms_nvfp4_bf16.cu",

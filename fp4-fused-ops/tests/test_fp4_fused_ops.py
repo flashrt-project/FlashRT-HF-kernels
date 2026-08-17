@@ -89,6 +89,14 @@ class SourceOps:
             torch.zeros((self.sfa_size_bytes(rows, dim, False),), device=device, dtype=torch.uint8),
         )
 
+    def silu_mul_quantize_fp4_sfa_bf16(self, merged, packed, sfa):
+        self._ops.silu_mul_quantize_fp4_sfa_bf16(merged, packed, sfa)
+
+    def rms_norm_quantize_fp4_sfa_bf16(self, x, weight, eps, normed, packed, sfa):
+        self._ops.rms_norm_quantize_fp4_sfa_bf16(
+            x, weight, float(eps), normed, packed, sfa
+        )
+
     def rms_norm_fp4_sfa_fp16(self, x, packed, sfa):
         self._ops.rms_norm_fp4_sfa_fp16(x, packed, sfa)
 
@@ -294,6 +302,10 @@ def load_source_ops() -> SourceOps:
         name=namespace,
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
+            str(PACKAGE / "csrc" / "kernels" / "silu_mul_quantize_fp4_sfa_bf16.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "rms_norm_quantize_fp4_sfa_bf16.cu"),
+            str(PACKAGE / "tests" / "request2_reference_binding.cpp"),
+            str(ROOT / "fp4-gemm" / "csrc" / "quantize" / "quantize_fp4_sfa_bf16.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "norm_silu_fp4_sfa.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "adarms_nvfp4_bf16.cu"),
             str(PACKAGE / "csrc" / "fused_fp4" / "pi05_bf16_fp4_producers.cu"),
@@ -314,7 +326,7 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "quantize" / "bf16_rms_silu_ncdhw.cu"),
             str(PACKAGE / "csrc" / "quantize" / "reshape_scales_sfa.cu"),
         ],
-        extra_include_paths=[str(PACKAGE / "csrc"), str(PACKAGE / "csrc" / "quantize"), str(cutlass_include), str(REGISTRATION_INCLUDE)],
+        extra_include_paths=[str(PACKAGE / "csrc"), str(PACKAGE / "csrc" / "quantize"), str(ROOT / "fp4-gemm" / "csrc"), str(ROOT / "fp4-gemm" / "csrc" / "quantize"), str(cutlass_include), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
         extra_cuda_cflags=[
             "-std=c++17",
@@ -397,6 +409,88 @@ def check_fp4_path_equivalence_threshold(max_abs: float, mean_abs: float, p99_ab
 
 def check_fp4_quant_reference_threshold(max_abs: float, mean_abs: float, p99_abs: float, cosine: float) -> bool:
     return max_abs <= 1.0 and mean_abs <= 0.10 and p99_abs <= 0.40 and cosine >= 0.99
+
+
+def _reference_nvfp4_sfa(x: torch.Tensor, sfa_bytes: int) -> tuple[torch.Tensor, torch.Tensor]:
+    rows, dim = x.shape
+    vals = x.float().view(rows, dim // 16, 16)
+    desired = (vals.abs().amax(dim=2) / 6.0).clamp_min(1e-12)
+    scale_fp8 = desired.to(torch.float8_e4m3fn)
+    scaled = vals / scale_fp8.float().unsqueeze(-1)
+    thresholds = torch.tensor(
+        [0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0],
+        device=x.device,
+    )
+    code = (scaled.abs().unsqueeze(-1) > thresholds).sum(dim=-1).to(torch.uint8)
+    code |= (scaled < 0).to(torch.uint8) << 3
+    packed = (code[..., 0::2] | (code[..., 1::2] << 4)).reshape(rows, dim // 2)
+    sfa = torch.zeros((sfa_bytes,), device=x.device, dtype=torch.uint8)
+    row = torch.arange(rows, device=x.device).view(-1, 1)
+    block = torch.arange(dim // 16, device=x.device).view(1, -1)
+    offset = (
+        (row >> 7) * ((dim + 63) // 64) * 512
+        + (block >> 2) * 512
+        + (row & 31) * 16
+        + (row >> 5 & 3) * 4
+        + (block & 3)
+    )
+    sfa[offset.flatten()] = scale_fp8.view(torch.uint8).flatten()
+    return packed, sfa
+
+
+def run_request2_checks(ops: SourceOps) -> None:
+    for rows in (1, 7, 257):
+        hidden = 1024
+        merged = make_bf16((rows, 2 * hidden), 2026081700 + rows, 0.2)
+        packed, sfa = ops.alloc(rows, hidden)
+        ops.silu_mul_quantize_fp4_sfa_bf16(merged, packed, sfa)
+        staged = (
+            torch.nn.functional.silu(merged[:, :hidden].float())
+            * merged[:, hidden:].float()
+        ).bfloat16()
+        ref_packed, ref_sfa = ops.alloc(rows, hidden)
+        torch.ops.fp4_request2_reference.quantize(staged, ref_packed, ref_sfa)
+        if not torch.equal(packed, ref_packed) or not torch.equal(sfa, ref_sfa):
+            raise AssertionError(f"silu+NVFP4 production-chain mismatch rows={rows}")
+
+    for rows, dim in ((1, 2048), (63, 2048), (257, 4096)):
+        x = make_bf16((rows, dim), 2026081800 + rows, 0.2)
+        weight = make_bf16((1, dim), 2026081900 + rows, 0.05).view(dim)
+        normed = torch.empty_like(x)
+        packed, sfa = ops.alloc(rows, dim)
+        ops.rms_norm_quantize_fp4_sfa_bf16(
+            x, weight, 1e-6, normed, packed, sfa
+        )
+        expected = (
+            x.float()
+            * torch.rsqrt(x.float().square().mean(dim=1, keepdim=True) + 1e-6)
+            * (1.0 + weight.float())
+        ).bfloat16()
+        max_abs = float((normed.float() - expected.float()).abs().max().item())
+        cosine = float(torch.nn.functional.cosine_similarity(
+            normed.float().flatten(), expected.float().flatten(), dim=0
+        ).item())
+        if max_abs > 0.015625 or cosine < 0.99999:
+            raise AssertionError(
+                f"RMSNorm rows={rows} dim={dim}: max_abs={max_abs} cosine={cosine}"
+            )
+        ref_packed, ref_sfa = ops.alloc(rows, dim)
+        torch.ops.fp4_request2_reference.quantize(normed, ref_packed, ref_sfa)
+        if not torch.equal(packed, ref_packed) or not torch.equal(sfa, ref_sfa):
+            raise AssertionError(f"RMSNorm production quant mismatch rows={rows} dim={dim}")
+
+    merged = make_bf16((7, 2048), 2026082001, 0.2)
+    packed, sfa = ops.alloc(7, 1024)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.silu_mul_quantize_fp4_sfa_bf16(merged, packed, sfa)
+    graph.replay()
+    torch.cuda.synchronize()
+    expected_packed, expected_sfa = packed.clone(), sfa.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    if not torch.equal(packed, expected_packed) or not torch.equal(sfa, expected_sfa):
+        raise AssertionError("request-2 FP4 producer graph replay is not bitwise stable")
 
 
 def run_fp8_adarms_checks(ops) -> list[CaseResult]:
@@ -1781,6 +1875,8 @@ def main() -> int:
     results.extend(run_unsupported_checks(ops))
     results.extend(run_pi05_thor_producer_checks(ops))
     results.extend(run_pi05_thor_bf16_batch3_checks(ops))
+    if args.mode == "full":
+        run_request2_checks(ops)
 
     passed = sum(1 for item in results if item.passed)
     payload = {

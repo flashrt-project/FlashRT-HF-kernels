@@ -291,6 +291,18 @@ def _wy_norm_cumsum_fake(q16, k16, g, q16_l2, k16_l2, q_pack_hv, k_pack_hk, g_cu
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("gdn_wy_norm_cumsum_pack_qk_v2_bf16"))
+def _wy_norm_cumsum_v2_fake(q16, k16, g, q16_l2, k16_l2, q_pack_hv, k_pack_hk, g_cumsum) -> None:
+    return _wy_norm_cumsum_fake(q16, k16, g, q16_l2, k16_l2, q_pack_hv, k_pack_hk, g_cumsum)
+
+
+@torch.library.register_fake(add_op_namespace_prefix("batched_unit_ltri_inv64_f32"))
+def _batched_unit_ltri_inv64_fake(A, X) -> None:
+    if A.dim() != 3 or A.shape[1:] != (64, 64) or X.shape != A.shape:
+        raise RuntimeError("A/X must have shape (B,64,64)")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("gdn_wy_kkt_b64_bf16"))
 def _wy_kkt_fake(k16_l2, beta, g_cumsum, A) -> None:
     S = k16_l2.shape[0]
@@ -997,6 +1009,44 @@ def gdn_wy_norm_cumsum_pack_qk_bf16(
     return q16_l2, k16_l2, q_pack_hv, k_pack_hk, g_cumsum
 
 
+def gdn_wy_norm_cumsum_pack_qk_v2_bf16(
+    q16: torch.Tensor,
+    k16: torch.Tensor,
+    g: torch.Tensor,
+    *,
+    q16_l2: Optional[torch.Tensor] = None,
+    k16_l2: Optional[torch.Tensor] = None,
+    q_pack_hv: Optional[torch.Tensor] = None,
+    k_pack_hk: Optional[torch.Tensor] = None,
+    g_cumsum: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    S = q16.shape[0]
+    C = _chunks(S)
+    if q16_l2 is None:
+        q16_l2 = torch.empty_like(q16)
+    if k16_l2 is None:
+        k16_l2 = torch.empty_like(k16)
+    if q_pack_hv is None:
+        q_pack_hv = torch.empty((C, 48, 64, 128), device=q16.device, dtype=q16.dtype)
+    if k_pack_hk is None:
+        k_pack_hk = torch.empty((C, 16, 64, 128), device=q16.device, dtype=q16.dtype)
+    if g_cumsum is None:
+        g_cumsum = torch.empty_like(g)
+    ops.gdn_wy_norm_cumsum_pack_qk_v2_bf16(
+        q16, k16, g, q16_l2, k16_l2, q_pack_hv, k_pack_hk, g_cumsum
+    )
+    return q16_l2, k16_l2, q_pack_hv, k_pack_hk, g_cumsum
+
+
+def batched_unit_ltri_inv64_f32(
+    A: torch.Tensor, *, out: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    if out is None:
+        out = torch.empty_like(A)
+    ops.batched_unit_ltri_inv64_f32(A, out)
+    return out
+
+
 def gdn_wy_kkt_b64_bf16(
     k16_l2: torch.Tensor,
     beta: torch.Tensor,
@@ -1359,6 +1409,8 @@ __all__ = [
     "gdn_chunk_from_conv_smem_h_bf16",
     "gdn_chunk_from_conv_smem_stash_bf16",
     "gdn_wy_norm_cumsum_pack_qk_bf16",
+    "gdn_wy_norm_cumsum_pack_qk_v2_bf16",
+    "batched_unit_ltri_inv64_f32",
     "gdn_wy_kkt_b64_bf16",
     "gdn_wy_kkt_b64_mma_bf16",
     "gdn_wy_solve_tril_b64_f32",

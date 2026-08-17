@@ -27,3 +27,8 @@ void causal_conv1d_update_chunk_parallel_gqa_bf16(torch::Tensor const& x, torch:
                                                   torch::Tensor& q16, torch::Tensor& k16,
                                                   torch::Tensor& v48, bool has_bias,
                                                   bool apply_silu);
+void causal_conv1d_update_steps_gqa_bf16(
+    torch::Tensor const& x, torch::Tensor const& w,
+    torch::Tensor const& bias, torch::Tensor& state,
+    torch::Tensor& q16, torch::Tensor& k16, torch::Tensor& v48,
+    bool apply_silu);

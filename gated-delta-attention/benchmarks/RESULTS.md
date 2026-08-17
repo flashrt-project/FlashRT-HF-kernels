@@ -70,3 +70,16 @@ Source-extension benchmark on RTX 5090, PyTorch 2.9.1+cu128.
 
 The one-launch sequence entry is 6.82x faster than compile and 2.61x faster
 than the prior per-token native launch loop. Wrapper overhead is 0.21%.
+
+## WY request-2 primitives
+
+RTX 5090 source artifact, PyTorch `2.11.0+cu128`, 20 warmups and 100 measured
+launches with preallocated outputs:
+
+| Entry | Shape | Kernel us | Reference us | Result |
+| --- | --- | ---: | ---: | --- |
+| `gdn_wy_norm_cumsum_pack_qk_v2_bf16` | `S=2044, Hk/Hv/D=16/48/128` | 33.02 | n/a | five logical outputs exact vs upgraded alias |
+| `batched_unit_ltri_inv64_f32` | `B=512, 64x64` | 10.14 | 67.90 | max abs <= `1e-5` vs `solve_triangular` |
+
+The full package gate passed `38/38` plus CUDA Graph, poisoned-tail,
+unsupported-shape, and request-2 checks.

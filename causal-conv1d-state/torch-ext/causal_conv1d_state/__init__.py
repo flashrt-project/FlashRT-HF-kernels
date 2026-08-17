@@ -134,6 +134,21 @@ def _causal_conv1d_update_chunk_parallel_gqa_bf16_fake(
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("causal_conv1d_update_steps_gqa_bf16"))
+def _causal_conv1d_update_steps_gqa_bf16_fake(
+    x, w, bias, state, q16, k16, v48, apply_silu: bool = True
+) -> None:
+    del apply_silu
+    if x.dim() != 2 or x.shape[1] != 10240:
+        raise RuntimeError("x must have shape (S,10240)")
+    s = x.shape[0]
+    if w.shape != (10240, 4) or bias.shape != (10240,) or state.shape != (10240, 3):
+        raise RuntimeError("w/bias/state shape contract failed")
+    if q16.shape != (s, 2048) or k16.shape != q16.shape or v48.shape != (s, 6144):
+        raise RuntimeError("q16/k16/v48 output shape mismatch")
+    return None
+
+
 def causal_conv1d_bf16(
     x: torch.Tensor,
     w: torch.Tensor,
@@ -255,6 +270,30 @@ def causal_conv1d_update_chunk_parallel_gqa_bf16(
     return q16, k16, v48
 
 
+def causal_conv1d_update_steps_gqa_bf16(
+    x: torch.Tensor,
+    w: torch.Tensor,
+    state: torch.Tensor,
+    bias: torch.Tensor,
+    *,
+    apply_silu: bool = True,
+    q16: Optional[torch.Tensor] = None,
+    k16: Optional[torch.Tensor] = None,
+    v48: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    s = x.shape[0]
+    if q16 is None:
+        q16 = torch.empty((s, 2048), device=x.device, dtype=torch.bfloat16)
+    if k16 is None:
+        k16 = torch.empty_like(q16)
+    if v48 is None:
+        v48 = torch.empty((s, 6144), device=x.device, dtype=torch.bfloat16)
+    ops.causal_conv1d_update_steps_gqa_bf16(
+        x, w, bias, state, q16, k16, v48, bool(apply_silu)
+    )
+    return q16, k16, v48
+
+
 __all__ = [
     "causal_conv1d_bf16",
     "causal_conv1d_update_bf16",
@@ -262,4 +301,5 @@ __all__ = [
     "causal_conv1d_update_chunk_bf16",
     "causal_conv1d_update_chunk_parallel_bf16",
     "causal_conv1d_update_chunk_parallel_gqa_bf16",
+    "causal_conv1d_update_steps_gqa_bf16",
 ]

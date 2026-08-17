@@ -9,6 +9,7 @@
 #endif
 
 #include "causal_conv1d_state.cuh"
+#include "kernels/causal_conv1d_update_steps_gqa_bf16.cuh"
 #include "registration.h"
 #include "torch_binding.h"
 
@@ -251,6 +252,51 @@ void causal_conv1d_update_chunk_parallel_gqa_bf16(torch::Tensor const& x, torch:
 #endif
 }
 
+void causal_conv1d_update_steps_gqa_bf16(
+    torch::Tensor const& x, torch::Tensor const& w,
+    torch::Tensor const& bias, torch::Tensor& state,
+    torch::Tensor& q16, torch::Tensor& k16, torch::Tensor& v48,
+    bool apply_silu) {
+  check_bf16(x, "x");
+  check_bf16(w, "w");
+  check_bf16(bias, "bias");
+  check_bf16(state, "state");
+  check_bf16(q16, "q16");
+  check_bf16(k16, "k16");
+  check_bf16(v48, "v48");
+  TORCH_CHECK(x.dim() == 2 && x.size(1) == 10240,
+              "x must have shape (S,10240)");
+  const int64_t s = x.size(0);
+  TORCH_CHECK(w.sizes() == torch::IntArrayRef({10240, 4}),
+              "w must have shape (10240,4)");
+  TORCH_CHECK(bias.sizes() == torch::IntArrayRef({10240}),
+              "bias must have shape (10240)");
+  TORCH_CHECK(state.sizes() == torch::IntArrayRef({10240, 3}),
+              "state must have shape (10240,3)");
+  TORCH_CHECK(q16.sizes() == torch::IntArrayRef({s, 2048}) &&
+                  k16.sizes() == q16.sizes() &&
+                  v48.sizes() == torch::IntArrayRef({s, 6144}),
+              "q16/k16/v48 output shape mismatch");
+  same_device(x, w, "x", "w");
+  same_device(x, bias, "x", "bias");
+  same_device(x, state, "x", "state");
+  same_device(x, q16, "x", "q16");
+  same_device(x, k16, "x", "k16");
+  same_device(x, v48, "x", "v48");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int status = flash_rt::kernels::causal_conv1d_update_steps_gqa_bf16(
+      x.data_ptr(), w.data_ptr(), bias.data_ptr(), state.data_ptr(),
+      q16.data_ptr(), k16.data_ptr(), v48.data_ptr(), static_cast<int>(s),
+      apply_silu, stream);
+  TORCH_CHECK(status == 0,
+              "causal_conv1d_update_steps_gqa_bf16 failed with status ", status);
+#else
+  TORCH_CHECK(false, "causal-conv1d-state was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("causal_conv1d_bf16(Tensor x, Tensor w, Tensor bias, Tensor! out, bool has_bias=True, bool apply_silu=True) -> ()");
   ops.def("causal_conv1d_update_bf16(Tensor x_new, Tensor w, Tensor bias, Tensor! state, Tensor! out, bool has_bias=True, bool apply_silu=True) -> ()");
@@ -258,6 +304,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("causal_conv1d_update_chunk_bf16(Tensor x, Tensor w, Tensor bias, Tensor! state, Tensor! out, bool has_bias=True, bool apply_silu=True) -> ()");
   ops.def("causal_conv1d_update_chunk_parallel_bf16(Tensor x, Tensor w, Tensor bias, Tensor! state, Tensor! out, bool has_bias=True, bool apply_silu=True) -> ()");
   ops.def("causal_conv1d_update_chunk_parallel_gqa_bf16(Tensor x, Tensor w, Tensor bias, Tensor! state, Tensor! q16, Tensor! k16, Tensor! v48, bool has_bias=True, bool apply_silu=True) -> ()");
+  ops.def("causal_conv1d_update_steps_gqa_bf16(Tensor x, Tensor w, Tensor bias, Tensor! state, Tensor! q16, Tensor! k16, Tensor! v48, bool apply_silu=True) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("causal_conv1d_bf16", torch::kCUDA, &causal_conv1d_bf16);
   ops.impl("causal_conv1d_update_bf16", torch::kCUDA, &causal_conv1d_update_bf16);
@@ -265,6 +312,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("causal_conv1d_update_chunk_bf16", torch::kCUDA, &causal_conv1d_update_chunk_bf16);
   ops.impl("causal_conv1d_update_chunk_parallel_bf16", torch::kCUDA, &causal_conv1d_update_chunk_parallel_bf16);
   ops.impl("causal_conv1d_update_chunk_parallel_gqa_bf16", torch::kCUDA, &causal_conv1d_update_chunk_parallel_gqa_bf16);
+  ops.impl("causal_conv1d_update_steps_gqa_bf16", torch::kCUDA, &causal_conv1d_update_steps_gqa_bf16);
 #endif
 }
 

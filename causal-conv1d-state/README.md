@@ -16,6 +16,7 @@ names so they can be reused by other stateful Conv1D transformer runtimes.
 - `causal_conv1d_update_chunk_bf16(x, w, state, bias=None, apply_silu=True, out=None)`
 - `causal_conv1d_update_chunk_parallel_bf16(x, w, state, bias=None, apply_silu=True, out=None)`
 - `causal_conv1d_update_chunk_parallel_gqa_bf16(x, w, state, bias=None, apply_silu=True, q16=None, k16=None, v48=None)`
+- `causal_conv1d_update_steps_gqa_bf16(x, w, state, bias, apply_silu=True, q16=None, k16=None, v48=None)`
 
 Unsupported shapes fail at the boundary rather than falling back silently.
 
@@ -25,7 +26,7 @@ Unsupported shapes fail at the boundary rather than falling back silently.
 from kernels import get_kernel
 import torch
 
-conv = get_kernel("flashrt/causal-conv1d-state", version=1, trust_remote_code=True)
+conv = get_kernel("flashrt/causal-conv1d-state", version=2, trust_remote_code=True)
 
 B, S, C, K = 1, 8, 10240, 4
 x = torch.randn(B, S, C, device="cuda", dtype=torch.bfloat16)
@@ -47,6 +48,12 @@ conv.causal_conv1d_update_inout_bf16(
     x_new, w, state, bias, out=out, state_out=state_next
 )
 ```
+
+For the fixed `C=10240`, `K=4` GQA prefill profile, the v2 step-batched entry
+accepts 2-D `x=(S,10240)`, requires a real BF16 bias tensor, returns flattened
+`q/k=(S,2048)` and `v=(S,6144)`, and rolls caller-owned `state=(10240,3)` in
+place. A bias-free host should pass an explicit zero vector. All outputs may be
+preallocated for CUDA Graph capture.
 
 ## Validation
 

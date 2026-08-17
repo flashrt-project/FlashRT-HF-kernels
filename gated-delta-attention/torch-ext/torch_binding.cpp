@@ -10,6 +10,8 @@
 
 #include "gated_delta_attention.cuh"
 #include "kernels/gdn_chunk_from_conv_smem_stash.cuh"
+#include "kernels/batched_unit_ltri_inv64.cuh"
+#include "kernels/gdn_wy_norm_cumsum_pack_qk_v2.cuh"
 #include "gated_delta_wy_bf16.cuh"
 #include "gated_delta_wy_kkt_mma.cuh"
 #include "kernels/gdn_recurrent_seq_sm120.cuh"
@@ -847,10 +849,41 @@ void gdn_wy_norm_cumsum_pack_qk_bf16(torch::Tensor const& q16,
 #if defined(CUDA_KERNEL)
   at::cuda::CUDAGuard guard(q16.device());
   auto stream = at::cuda::getCurrentCUDAStream(q16.get_device()).stream();
-  flash_rt::kernels::qwen36_gdn_wy_norm_cumsum_pack_qk_bf16(
+  const int status = flash_rt::kernels::gdn_wy_norm_cumsum_pack_qk_v2_bf16(
       q16.data_ptr(), k16.data_ptr(), g.data_ptr(), q16_l2.data_ptr(),
       k16_l2.data_ptr(), q_pack_hv.data_ptr(), k_pack_hk.data_ptr(),
       g_cumsum.data_ptr(), static_cast<int>(S), stream);
+  TORCH_CHECK(status == 0, "gdn_wy_norm_cumsum_pack_qk_v2_bf16 failed with status ", status);
+#else
+  TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
+#endif
+}
+
+void gdn_wy_norm_cumsum_pack_qk_v2_bf16(torch::Tensor const& q16,
+                                        torch::Tensor const& k16,
+                                        torch::Tensor const& g,
+                                        torch::Tensor& q16_l2,
+                                        torch::Tensor& k16_l2,
+                                        torch::Tensor& q_pack_hv,
+                                        torch::Tensor& k_pack_hk,
+                                        torch::Tensor& g_cumsum) {
+  gdn_wy_norm_cumsum_pack_qk_bf16(
+      q16, k16, g, q16_l2, k16_l2, q_pack_hv, k_pack_hk, g_cumsum);
+}
+
+void batched_unit_ltri_inv64_f32(torch::Tensor const& A, torch::Tensor& X) {
+  check_f32(A, "A");
+  check_f32(X, "X");
+  TORCH_CHECK(A.dim() == 3 && A.size(1) == 64 && A.size(2) == 64,
+              "A must have shape (B,64,64)");
+  TORCH_CHECK(X.sizes() == A.sizes(), "X must match A shape");
+  same_device(A, X, "A", "X");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(A.device());
+  auto stream = at::cuda::getCurrentCUDAStream(A.get_device()).stream();
+  const int status = flash_rt::kernels::batched_unit_ltri_inv64_f32(
+      A.data_ptr(), X.data_ptr(), static_cast<int>(A.size(0)), stream);
+  TORCH_CHECK(status == 0, "batched_unit_ltri_inv64_f32 failed with status ", status);
 #else
   TORCH_CHECK(false, "gated-delta-attention was not built with CUDA support");
 #endif
@@ -1449,6 +1482,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("gdn_chunk_from_conv_smem_h_bf16(Tensor conv_out, Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! state, Tensor! out, int num_v_heads, int num_k_heads, int head_dim=128, bool use_qk_l2norm=True) -> ()");
   ops.def("gdn_chunk_from_conv_smem_stash_bf16(Tensor conv_out, Tensor a, Tensor b, Tensor neg_exp_A_log, Tensor dt_bias, Tensor! state, Tensor! out, Tensor! stash, int num_v_heads, int num_k_heads, int head_dim=128, bool use_qk_l2norm=True) -> ()");
   ops.def("gdn_wy_norm_cumsum_pack_qk_bf16(Tensor q16, Tensor k16, Tensor g, Tensor! q16_l2, Tensor! k16_l2, Tensor! q_pack_hv, Tensor! k_pack_hk, Tensor! g_cumsum) -> ()");
+  ops.def("gdn_wy_norm_cumsum_pack_qk_v2_bf16(Tensor q16, Tensor k16, Tensor g, Tensor! q16_l2, Tensor! k16_l2, Tensor! q_pack_hv, Tensor! k_pack_hk, Tensor! g_cumsum) -> ()");
+  ops.def("batched_unit_ltri_inv64_f32(Tensor A, Tensor! X) -> ()");
   ops.def("gdn_wy_kkt_b64_bf16(Tensor k16_l2, Tensor beta, Tensor g_cumsum, Tensor! A) -> ()");
   ops.def("gdn_wy_kkt_b64_mma_bf16(Tensor k16_l2, Tensor beta, Tensor g_cumsum, Tensor! A) -> ()");
   ops.def("gdn_wy_solve_tril_b64_f32(Tensor A, Tensor! Ai, int S) -> ()");
@@ -1492,6 +1527,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("gdn_chunk_from_conv_smem_h_bf16", torch::kCUDA, &gdn_chunk_from_conv_smem_h_bf16);
   ops.impl("gdn_chunk_from_conv_smem_stash_bf16", torch::kCUDA, &gdn_chunk_from_conv_smem_stash_bf16);
   ops.impl("gdn_wy_norm_cumsum_pack_qk_bf16", torch::kCUDA, &gdn_wy_norm_cumsum_pack_qk_bf16);
+  ops.impl("gdn_wy_norm_cumsum_pack_qk_v2_bf16", torch::kCUDA, &gdn_wy_norm_cumsum_pack_qk_v2_bf16);
+  ops.impl("batched_unit_ltri_inv64_f32", torch::kCUDA, &batched_unit_ltri_inv64_f32);
   ops.impl("gdn_wy_kkt_b64_bf16", torch::kCUDA, &gdn_wy_kkt_b64_bf16);
   ops.impl("gdn_wy_kkt_b64_mma_bf16", torch::kCUDA, &gdn_wy_kkt_b64_mma_bf16);
   ops.impl("gdn_wy_solve_tril_b64_f32", torch::kCUDA, &gdn_wy_solve_tril_b64_f32);

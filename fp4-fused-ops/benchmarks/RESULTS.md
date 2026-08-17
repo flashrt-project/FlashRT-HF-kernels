@@ -124,3 +124,17 @@ The candidate replaces scalar BF16 input loads and packed-byte stores with
 contract. The Thor source gate passed `89/89`; the RTX 5090 source regression
 passed `61/61`. Installed-artifact numbers must be regenerated after the Hub
 build is published.
+
+## BF16 request-2 producers
+
+RTX 5090 source artifact, PyTorch `2.11.0+cu128`, caller-owned outputs. The
+strict full gate passed `61/61`. Both new producers emit packed E2M1 and SFA
+bytes bit for bit equal to the repository's production BF16 NVFP4 quantizer.
+
+| Entry | Shape | Wrapper us | Correctness |
+| --- | --- | ---: | --- |
+| `silu_mul_quantize_fp4_sfa_bf16` | `2044x(2x17408)` | 100.48 | production packed/SFA exact |
+| `rms_norm_quantize_fp4_sfa_bf16` | rows `1/63/257`, dim `2048/4096` | gate only | norm metrics + production packed/SFA exact |
+
+The staged PyTorch elementwise reference is not reported as a competitive
+speedup baseline. Installed-artifact timing is regenerated after Hub upload.

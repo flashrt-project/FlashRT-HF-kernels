@@ -12,7 +12,7 @@ tags:
 
 # fp4-fused-ops
 
-FlashRT fused FP16-to-NVFP4 producer kernels for keeping low-bit transformer
+FlashRT fused FP16/BF16-to-NVFP4 producer kernels for keeping low-bit transformer
 and diffuser paths continuous.
 
 The source kernels use the CUTLASS SM100-family block-scale layout shared by
@@ -28,6 +28,8 @@ chains.
 ## Available Functions
 
 - `sfa_size_bytes(rows, dim, is_sfb=False)`
+- `silu_mul_quantize_fp4_sfa_bf16(merged, packed=None, sfa=None)`
+- `rms_norm_quantize_fp4_sfa_bf16(x, weight, eps=1e-6, normed=None, packed=None, sfa=None)`
 - `rms_norm_fp4_sfa_fp16(x, packed=None, sfa=None)`
 - `residual_add_rms_norm_fp4_sfa_fp16(residual, x, packed=None, sfa=None)`
 - `residual_add_rms_norm_fp4_sfa_v2_fp16(residual, x, packed=None, sfa=None)`
@@ -73,6 +75,10 @@ Tensor contract:
   `sfa_size_bytes(rows, dim, False, device=...)`.
 - `residual_add_*` updates `residual` in place.
 - `silu_mul_*` expects `merged` shape `(rows, 2 * hidden)`.
+- `silu_mul_quantize_fp4_sfa_bf16` computes SiLU(gate) times up in FP32,
+  rounds the producer value to BF16, and emits production NVFP4/SFA bytes.
+- `rms_norm_quantize_fp4_sfa_bf16` accepts BF16 `(rows, dim)`, `dim <= 8192`,
+  and interprets `weight` in residual form: the multiplier is `1 + weight`.
 - v1 shared-memory RMS producers support `dim <= 2048`; larger RMS producer
   shapes should use `residual_add_rms_norm_fp4_sfa_v2_fp16`.
 - All dimensions must be divisible by 16. Unsupported shapes raise instead of
@@ -96,7 +102,7 @@ Tensor contract:
 from kernels import get_kernel
 import torch
 
-ops = get_kernel("flashrt/fp4-fused-ops", version=1, trust_remote_code=True)
+ops = get_kernel("flashrt/fp4-fused-ops", version=2, trust_remote_code=True)
 
 merged = torch.randn((16, 4096), device="cuda", dtype=torch.float16)
 packed, sfa = ops.silu_mul_fp4_sfa_v2_fp16(merged)
@@ -117,6 +123,9 @@ packed, sfa, gate = ops.adaptive_rms_norm_nvfp4_bf16(x, style)
 # BF16 GeGLU output remains on the packed FP4 wire for the down projection.
 merged = torch.randn((10, 8192), device="cuda", dtype=torch.bfloat16)
 hidden_packed, hidden_sfa = ops.gelu_mul_nvfp4_bf16(merged)
+
+merged = torch.randn((64, 34816), device="cuda", dtype=torch.bfloat16)
+hidden_packed, hidden_sfa = ops.silu_mul_quantize_fp4_sfa_bf16(merged)
 ```
 
 The BF16 GeGLU producer uses two aligned 16-byte loads for each gate/up block

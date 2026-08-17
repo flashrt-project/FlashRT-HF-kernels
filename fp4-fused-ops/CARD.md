@@ -1,11 +1,13 @@
 # flashrt/fp4-fused-ops
 
-FlashRT fused FP16-to-NVFP4 producer kernels for transformer and diffuser
+FlashRT fused FP16/BF16-to-NVFP4 producer kernels for transformer and diffuser
 low-bit paths.
 
 ## Functions
 
 - `sfa_size_bytes`
+- `silu_mul_quantize_fp4_sfa_bf16`
+- `rms_norm_quantize_fp4_sfa_bf16`
 - `rms_norm_fp4_sfa_fp16`
 - `residual_add_rms_norm_fp4_sfa_fp16`
 - `residual_add_rms_norm_fp4_sfa_v2_fp16`
@@ -39,7 +41,7 @@ SFA layouts. SM110 artifacts require CUDA 13+.
 from kernels import get_kernel
 import torch
 
-ops = get_kernel("flashrt/fp4-fused-ops", version=1, trust_remote_code=True)
+ops = get_kernel("flashrt/fp4-fused-ops", version=2, trust_remote_code=True)
 
 merged = torch.randn((16, 4096), device="cuda", dtype=torch.float16)
 packed, sfa = ops.silu_mul_fp4_sfa_v2_fp16(merged)

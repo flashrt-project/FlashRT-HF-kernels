@@ -484,6 +484,8 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "gated_delta_attention.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "batched_unit_ltri_inv64.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "gdn_wy_norm_cumsum_pack_qk_v2.cu"),
             str(PACKAGE / "csrc" / "kernels" / "gdn_recurrent_seq_sm120.cu"),
             str(PACKAGE / "csrc" / "kernels" / "gdn_chunk_from_conv_smem_stash.cu"),
             str(PACKAGE / "csrc" / "gated_delta_wy_recompute_wu_mma_fla.cu"),
@@ -842,6 +844,62 @@ def run_wy_kkt_mma_gate(ops) -> None:
         raise AssertionError("MMA KKT CUDA Graph replay is not bitwise stable")
 
 
+def run_request2_gate(ops) -> None:
+    for S in (63, 64, 2044):
+        gen = torch.Generator(device="cuda").manual_seed(2026081700 + S)
+        q = (torch.randn((S, 16, D), device="cuda", generator=gen) * 0.05).bfloat16()
+        k = (torch.randn((S, 16, D), device="cuda", generator=gen) * 0.05).bfloat16()
+        g = (torch.randn((S, 48), device="cuda", generator=gen) * 0.02).bfloat16()
+        C = (S + 63) // 64
+        old = (
+            torch.empty_like(q), torch.empty_like(k),
+            torch.empty((C, 48, 64, D), device="cuda", dtype=torch.bfloat16),
+            torch.empty((C, 16, 64, D), device="cuda", dtype=torch.bfloat16),
+            torch.empty_like(g),
+        )
+        new = tuple(torch.empty_like(t) for t in old)
+        ops._ops.gdn_wy_norm_cumsum_pack_qk_bf16(q, k, g, *old)
+        ops._ops.gdn_wy_norm_cumsum_pack_qk_v2_bf16(q, k, g, *new)
+        torch.cuda.synchronize()
+        if not all(torch.equal(a, b) for a, b in zip(old[:2] + old[4:], new[:2] + new[4:])):
+            raise AssertionError(f"WY v2 alias mismatch at S={S}")
+        for chunk in range(C):
+            valid = min(64, S - 64 * chunk)
+            if not torch.equal(old[2][chunk, :, :valid], new[2][chunk, :, :valid]):
+                raise AssertionError(f"WY v2 Q-pack mismatch at S={S}, chunk={chunk}")
+            if not torch.equal(old[3][chunk, :, :valid], new[3][chunk, :, :valid]):
+                raise AssertionError(f"WY v2 K-pack mismatch at S={S}, chunk={chunk}")
+
+    for B in (1, 48, 512):
+        gen = torch.Generator(device="cuda").manual_seed(2026081800 + B)
+        A = torch.tril(
+            torch.randn((B, 64, 64), device="cuda", generator=gen) * 0.03,
+            diagonal=-1,
+        )
+        got = torch.empty_like(A)
+        ops._ops.batched_unit_ltri_inv64_f32(A, got)
+        eye = torch.eye(64, device="cuda").expand(B, -1, -1)
+        ref = torch.linalg.solve_triangular(
+            A + eye, eye, upper=False, unitriangular=True
+        )
+        max_abs = float((got - ref).abs().max().item())
+        if max_abs > 1e-5:
+            raise AssertionError(f"unit-lower inverse B={B} max_abs={max_abs}")
+
+    A = torch.tril(torch.randn((48, 64, 64), device="cuda") * 0.03, diagonal=-1)
+    out = torch.empty_like(A)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops._ops.batched_unit_ltri_inv64_f32(A, out)
+    graph.replay()
+    torch.cuda.synchronize()
+    first = out.clone()
+    graph.replay()
+    torch.cuda.synchronize()
+    if not torch.equal(first, out):
+        raise AssertionError("batched_unit_ltri_inv64 CUDA Graph replay is not bitwise stable")
+
+
 def run_h32_wy_graph(ops) -> None:
     S, Hv, Hk = 65, 32, 16
     conv, a, b, neg, dt, initial = make_conv_inputs_h(S, Hv, Hk, 454545)
@@ -1155,6 +1213,7 @@ def main() -> int:
     if not all(r.passed for r in rows):
         raise AssertionError("gated-delta-attention correctness failed")
     if args.mode == "full":
+        run_request2_gate(ops)
         run_wy_kkt_mma_gate(ops)
         run_sequence_graph(ops)
         run_h32_graph(ops)

@@ -1,7 +1,7 @@
 [general]
 name = "gated-delta-attention"
 license = "Apache-2.0"
-version = 5
+version = 6
 backends = ["cuda"]
 
 [general.cuda]
@@ -32,6 +32,10 @@ src = [
   "csrc/gated_delta_wy_output_o_mma_fla.cu",
   "csrc/gated_delta_wy_kkt_mma.cu",
   "csrc/gated_delta_wy_kkt_mma.cuh",
+  "csrc/kernels/batched_unit_ltri_inv64.cu",
+  "csrc/kernels/batched_unit_ltri_inv64.cuh",
+  "csrc/kernels/gdn_wy_norm_cumsum_pack_qk_v2.cu",
+  "csrc/kernels/gdn_wy_norm_cumsum_pack_qk_v2.cuh",
 ]
 cuda-flags = [
   "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",

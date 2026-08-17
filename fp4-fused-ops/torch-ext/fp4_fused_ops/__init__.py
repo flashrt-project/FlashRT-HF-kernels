@@ -21,6 +21,27 @@ def _alloc_fp4(rows: int, dim: int, device: torch.device | str):
     return packed, sfa
 
 
+@torch.library.register_fake(add_op_namespace_prefix("silu_mul_quantize_fp4_sfa_bf16"))
+def _silu_mul_quantize_fp4_sfa_bf16_fake(merged, packed, sfa) -> None:
+    if merged.dim() != 2 or merged.shape[1] % 32 != 0:
+        raise RuntimeError("merged must have shape (rows, 2 * hidden), hidden divisible by 16")
+    rows, twice_hidden = merged.shape
+    if packed.shape != (rows, twice_hidden // 4) or sfa.dim() != 1:
+        raise RuntimeError("packed/SFA output shape contract failed")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("rms_norm_quantize_fp4_sfa_bf16"))
+def _rms_norm_quantize_fp4_sfa_bf16_fake(x, weight, eps: float, normed, packed, sfa) -> None:
+    del eps
+    if x.dim() != 2 or x.shape[1] % 16 != 0 or x.shape[1] > 8192:
+        raise RuntimeError("x must have shape (rows, dim), dim divisible by 16 and <= 8192")
+    rows, dim = x.shape
+    if weight.shape != (dim,) or normed.shape != x.shape or packed.shape != (rows, dim // 2) or sfa.dim() != 1:
+        raise RuntimeError("weight/output shape contract failed")
+    return None
+
+
 @torch.library.register_fake(add_op_namespace_prefix("rms_norm_fp4_sfa_fp16"))
 def _rms_norm_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor) -> None:
     return None
@@ -250,6 +271,39 @@ def rms_norm_fp4_sfa_fp16(x: torch.Tensor, packed: torch.Tensor | None = None, s
         packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
     ops.rms_norm_fp4_sfa_fp16(x, packed, sfa)
     return packed, sfa
+
+
+def silu_mul_quantize_fp4_sfa_bf16(
+    merged: torch.Tensor,
+    *,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Fuse BF16 SiLU-gating and production NVFP4 quantization."""
+    rows, twice_hidden = merged.shape
+    hidden = twice_hidden // 2
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(rows, hidden, merged.device)
+    ops.silu_mul_quantize_fp4_sfa_bf16(merged, packed, sfa)
+    return packed, sfa
+
+
+def rms_norm_quantize_fp4_sfa_bf16(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float = 1e-6,
+    *,
+    normed: torch.Tensor | None = None,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Apply RMSNorm with residual-form weight ``1 + weight`` and emit NVFP4."""
+    if normed is None:
+        normed = torch.empty_like(x)
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.rms_norm_quantize_fp4_sfa_bf16(x, weight, float(eps), normed, packed, sfa)
+    return normed, packed, sfa
 
 
 def residual_add_rms_norm_fp4_sfa_fp16(
@@ -951,10 +1005,12 @@ __all__ = [
     "rms_norm_mul_nvfp4_bf16",
     "residual_add_rms_norm_quant_nvfp4_swizzled_bf16",
     "rms_norm_fp4_sfa_fp16",
+    "rms_norm_quantize_fp4_sfa_bf16",
     "rms_silu_nvfp4_ndhwc_bf16",
     "sfa_size_bytes",
     "silu_mul_fp4_sfa_fp16",
     "silu_mul_fp4_sfa_v2_fp16",
+    "silu_mul_quantize_fp4_sfa_bf16",
     "silu_mul_quant_nvfp4_swizzled_fp16",
     "silu_mul_mul_fp4_sfa_v2_fp16",
     "silu_mul_two_fp4_to_fp4",

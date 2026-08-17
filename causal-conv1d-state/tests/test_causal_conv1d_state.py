@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 import sys
 from dataclasses import asdict, dataclass
@@ -33,10 +34,14 @@ SHAPES = {
     "chunk_s8_c1024": ("chunk", 1, 8, 1024, 4),
     "parallel_s16_c1024": ("parallel", 1, 16, 1024, 4),
     "gqa_s8_c10240": ("gqa", 1, 8, 10240, 4),
+    "steps_gqa_s1_c10240": ("steps_gqa", 1, 1, 10240, 4),
+    "steps_gqa_s63_c10240": ("steps_gqa", 1, 63, 10240, 4),
+    "steps_gqa_s64_c10240": ("steps_gqa", 1, 64, 10240, 4),
+    "steps_gqa_s2044_c10240": ("steps_gqa", 1, 2044, 10240, 4),
 }
 MODES = {
     "smoke": ["decode_c1024"],
-    "headline": ["decode_c1024", "parallel_s16_c1024", "gqa_s8_c10240"],
+    "headline": ["decode_c1024", "parallel_s16_c1024", "gqa_s8_c10240", "steps_gqa_s64_c10240"],
     "full": list(SHAPES.keys()),
 }
 
@@ -102,6 +107,16 @@ class SourceOps:
         )
         return q, k, v
 
+    def steps_gqa(self, x, w, state, bias, apply_silu=True):
+        s = x.shape[1]
+        q = torch.empty((s, 2048), device=x.device, dtype=torch.bfloat16)
+        k = torch.empty_like(q)
+        v = torch.empty((s, 6144), device=x.device, dtype=torch.bfloat16)
+        self._ops.causal_conv1d_update_steps_gqa_bf16(
+            x[0], w, bias, state[0], q, k, v, apply_silu
+        )
+        return q, k, v
+
 
 class InstalledOps:
     def __init__(self, mod) -> None:
@@ -131,6 +146,11 @@ class InstalledOps:
             x, w, state, bias, apply_silu=apply_silu
         )
 
+    def steps_gqa(self, x, w, state, bias, apply_silu=True):
+        return self._mod.causal_conv1d_update_steps_gqa_bf16(
+            x[0], w, state[0], bias, apply_silu=apply_silu
+        )
+
 
 def _arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -153,6 +173,7 @@ def load_source_ops() -> SourceOps:
         sources=[
             str(PACKAGE / "torch-ext" / "torch_binding.cpp"),
             str(PACKAGE / "csrc" / "causal_conv1d_state.cu"),
+            str(PACKAGE / "csrc" / "kernels" / "causal_conv1d_update_steps_gqa_bf16.cu"),
         ],
         extra_include_paths=[str(PACKAGE / "csrc"), str(REGISTRATION_INCLUDE)],
         extra_cflags=["-O3", "-DCUDA_KERNEL"],
@@ -234,10 +255,12 @@ def ref_chunk(x, w, bias, state, apply_silu=True):
 
 def metrics(got: torch.Tensor, ref: torch.Tensor) -> tuple[float, float, float, float]:
     diff = (got.float() - ref.float()).abs()
+    flat = diff.flatten()
+    p99_index = max(1, math.ceil(0.99 * flat.numel()))
     return (
         float(diff.max().item()),
         float(diff.mean().item()),
-        float(torch.quantile(diff.flatten(), 0.99).item()),
+        float(torch.kthvalue(flat, p99_index).values.item()),
         float(torch.nn.functional.cosine_similarity(got.float().flatten(), ref.float().flatten(), dim=0).item()),
     )
 
@@ -285,6 +308,14 @@ def run_case(ops, name: str) -> Row:
         state_err = metrics(state_work, ref_state)[0]
         assert state_err == 0.0, f"gqa state mismatch {state_err}"
         got = torch.cat([q.reshape(B, S, 2048), k.reshape(B, S, 2048), v.reshape(B, S, 6144)], dim=2)
+    elif kind == "steps_gqa":
+        state_work = state.clone()
+        q, k, v = ops.steps_gqa(x, w, state_work, bias)
+        ref, ref_state = ref_chunk(x, w, bias, state)
+        torch.cuda.synchronize()
+        state_err = metrics(state_work, ref_state)[0]
+        assert state_err == 0.0, f"steps_gqa state mismatch {state_err}"
+        got = torch.cat([q, k, v], dim=1).unsqueeze(0)
     else:
         raise AssertionError(kind)
     torch.cuda.synchronize()

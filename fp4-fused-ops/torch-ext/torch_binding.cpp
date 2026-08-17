@@ -24,6 +24,8 @@
 #include "fused_fp4/pi05_bf16_fp4_producers.cuh"
 #include "fused_fp4/cosmos3_edge_fp4.cuh"
 #include "fused_fp4/silu_mul_two_fp4_to_fp4.cuh"
+#include "kernels/rms_norm_quantize_fp4_sfa_bf16.cuh"
+#include "kernels/silu_mul_quantize_fp4_sfa_bf16.cuh"
 #include "quantize/quantize_bf16_to_nvfp4_linear.cuh"
 #include "quantize/bf16_rms_silu_ncdhw.cuh"
 #include "quantize/reshape_scales_sfa.cuh"
@@ -141,6 +143,57 @@ TwoFp4Shape check_two_fp4_inputs(
 }
 
 }  // namespace
+
+void silu_mul_quantize_fp4_sfa_bf16(
+    torch::Tensor const& merged, torch::Tensor& packed, torch::Tensor& sfa) {
+  check_bf16_matrix(merged, "merged");
+  TORCH_CHECK((merged.size(1) % 32) == 0,
+              "merged.shape[1] must be divisible by 32");
+  const int64_t rows = merged.size(0);
+  const int64_t hidden = merged.size(1) / 2;
+  check_packed_sfa(packed, sfa, merged, rows, hidden);
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(merged.device());
+  auto stream = at::cuda::getCurrentCUDAStream(merged.get_device()).stream();
+  const int status = flash_rt::fp4::silu_mul_quantize_fp4_sfa_bf16(
+      merged.data_ptr(), packed.data_ptr(), sfa.data_ptr(),
+      checked_int(rows, "rows"), checked_int(hidden, "hidden"), stream);
+  TORCH_CHECK(status == 0,
+              "silu_mul_quantize_fp4_sfa_bf16 failed with status ", status);
+#else
+  TORCH_CHECK(false, "fp4-fused-ops was not built with CUDA support");
+#endif
+}
+
+void rms_norm_quantize_fp4_sfa_bf16(
+    torch::Tensor const& x, torch::Tensor const& weight, double eps,
+    torch::Tensor& normed, torch::Tensor& packed, torch::Tensor& sfa) {
+  check_bf16_matrix(x, "x");
+  check_cuda_contiguous(weight, "weight");
+  check_cuda_contiguous(normed, "normed");
+  TORCH_CHECK(weight.scalar_type() == torch::kBFloat16 && weight.dim() == 1 &&
+                  weight.size(0) == x.size(1),
+              "weight must be contiguous bfloat16 with shape (D,)");
+  TORCH_CHECK(normed.scalar_type() == torch::kBFloat16 &&
+                  normed.sizes() == x.sizes(),
+              "normed must be contiguous bfloat16 with the same shape as x");
+  TORCH_CHECK(x.size(1) <= 8192, "D must be at most 8192");
+  check_packed_sfa(packed, sfa, x, x.size(0), x.size(1));
+  check_same_device(x, weight, "x", "weight");
+  check_same_device(x, normed, "x", "normed");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard guard(x.device());
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int status = flash_rt::fp4::rms_norm_quantize_fp4_sfa_bf16(
+      x.data_ptr(), weight.data_ptr(), static_cast<float>(eps),
+      normed.data_ptr(), packed.data_ptr(), sfa.data_ptr(),
+      checked_int(x.size(0), "rows"), checked_int(x.size(1), "D"), stream);
+  TORCH_CHECK(status == 0,
+              "rms_norm_quantize_fp4_sfa_bf16 failed with status ", status);
+#else
+  TORCH_CHECK(false, "fp4-fused-ops was not built with CUDA support");
+#endif
+}
 
 int64_t sfa_size_bytes(int64_t rows, int64_t dim, bool is_sfb) {
   TORCH_CHECK(rows > 0 && dim > 0, "rows and dim must be positive");
@@ -1320,6 +1373,8 @@ void bf16_rms_norm_ncdhw(
 
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("sfa_size_bytes_for(Tensor anchor, int rows, int dim, bool is_sfb=False) -> int");
+  ops.def("silu_mul_quantize_fp4_sfa_bf16(Tensor merged, Tensor! packed, Tensor! sfa) -> ()");
+  ops.def("rms_norm_quantize_fp4_sfa_bf16(Tensor x, Tensor weight, float eps, Tensor! normed, Tensor! packed, Tensor! sfa) -> ()");
   ops.def("rms_norm_fp4_sfa_fp16(Tensor x, Tensor! packed, Tensor! sfa) -> ()");
   ops.def("residual_add_rms_norm_fp4_sfa_fp16(Tensor! residual, Tensor x, Tensor! packed, Tensor! sfa) -> ()");
   ops.def("residual_add_rms_norm_fp4_sfa_v2_fp16(Tensor! residual, Tensor x, Tensor! packed, Tensor! sfa) -> ()");
@@ -1356,6 +1411,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("bf16_rms_norm_ncdhw(Tensor x, Tensor gamma, Tensor? bias, float eps, Tensor! out) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("sfa_size_bytes_for", torch::kCUDA, &sfa_size_bytes_for);
+  ops.impl("silu_mul_quantize_fp4_sfa_bf16", torch::kCUDA, &silu_mul_quantize_fp4_sfa_bf16);
+  ops.impl("rms_norm_quantize_fp4_sfa_bf16", torch::kCUDA, &rms_norm_quantize_fp4_sfa_bf16);
   ops.impl("rms_norm_fp4_sfa_fp16", torch::kCUDA, &rms_norm_fp4_sfa_fp16);
   ops.impl("residual_add_rms_norm_fp4_sfa_fp16", torch::kCUDA, &residual_add_rms_norm_fp4_sfa_fp16);
   ops.impl("residual_add_rms_norm_fp4_sfa_v2_fp16", torch::kCUDA, &residual_add_rms_norm_fp4_sfa_v2_fp16);

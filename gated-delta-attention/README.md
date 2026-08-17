@@ -32,6 +32,8 @@ The package supports two validated linear-attention producer profiles:
 - `gdn_chunk_from_conv_smem_h_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, num_v_heads, num_k_heads, ...)`
 - `gdn_chunk_from_conv_smem_stash_bf16(conv_out, a, b, neg_exp_A_log, dt_bias, state, stash, num_v_heads, num_k_heads, ...)`
 - `gdn_wy_norm_cumsum_pack_qk_bf16(q16, k16, g, ...)`
+- `gdn_wy_norm_cumsum_pack_qk_v2_bf16(q16, k16, g, ...)`
+- `batched_unit_ltri_inv64_f32(A, out=None)`
 - `gdn_wy_kkt_b64_bf16(k16_l2, beta, g_cumsum, A=None)`
 - `gdn_wy_solve_tril_b64_f32(A, S, Ai=None)`
 - `gdn_wy_cast_ai_f32_to_bf16(Ai, S, Ai_pack=None)`
@@ -51,7 +53,7 @@ The package supports two validated linear-attention producer profiles:
 - `gdn_wy_output_o_b64_mma_fla_h_bf16(...)`
 - `gdn_wy_output_o_b64_mma_fla_rawk_h_bf16(...)`
 
-The v5 API covers both decode recurrence and linear-attention prefill/WY
+The v6 API covers both decode recurrence and linear-attention prefill/WY
 building blocks. It does not package generic FlashAttention.
 
 `gated_delta_recurrent_sequence_bf16` scans `(S,H,128)` in one SM110/SM120
@@ -69,7 +71,7 @@ Blackwell CUDA capabilities, including the native `sm_110a` Thor artifact.
 from kernels import get_kernel
 import torch
 
-gdn = get_kernel("flashrt/gated-delta-attention", version=5, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=6, trust_remote_code=True)
 
 B, H, D = 1, 48, 128
 q = torch.randn(B, H, D, device="cuda", dtype=torch.bfloat16)
@@ -162,6 +164,11 @@ w48, u48 = gdn.gdn_wy_recompute_wu_b64_bf16(k16_l2, v48, beta, g_cumsum, Ai)
 h0, v_new = gdn.gdn_wy_chunk_h_b64_bf16(k16_l2, u48, w48, g_cumsum, state)
 out = gdn.gdn_wy_output_o_b64_bf16(q16_l2, k16_l2, v_new, h0, g_cumsum)
 ```
+
+In v6 the established fixed `48/16/128` norm/cumsum entry uses the parallel
+v2 launcher internally. The explicit `_v2_` alias exposes the same contract.
+`batched_unit_ltri_inv64_f32` computes `inv(I + strict_tril(A))` for contiguous
+FP32 `(B,64,64)` tensors without materializing an identity or triangular copy.
 
 FLA-style native CUDA MMA prefill path:
 

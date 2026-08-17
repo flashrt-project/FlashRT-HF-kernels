@@ -1,7 +1,7 @@
 [general]
 name = "causal-conv1d-state"
 license = "Apache-2.0"
-version = 1
+version = 2
 backends = ["cuda"]
 
 [general.cuda]
@@ -25,6 +25,8 @@ cuda-minver = "12.8"
 src = [
   "csrc/causal_conv1d_state.cu",
   "csrc/causal_conv1d_state.cuh",
+  "csrc/kernels/causal_conv1d_update_steps_gqa_bf16.cu",
+  "csrc/kernels/causal_conv1d_update_steps_gqa_bf16.cuh",
 ]
 cuda-flags = [
   "-U__CUDA_NO_BFLOAT16_CONVERSIONS__",

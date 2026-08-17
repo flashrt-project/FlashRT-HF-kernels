@@ -13,7 +13,7 @@ tags:
 # Gated Delta Attention
 
 BF16 Gated DeltaNet recurrent/chunk/WY kernels from FlashRT, packaged for
-Hugging Face Kernel Hub. The v5 API extends the model-neutral parameterized
+Hugging Face Kernel Hub. The v6 API extends the model-neutral parameterized
 `Hv/Hk` producer and fused recurrent prefill path. Validated profiles include
 `Hv/Hk/D=48/16/128` and `32/16/128`.
 
@@ -40,6 +40,8 @@ host fallback for that profile.
 - `gdn_chunk_from_conv_smem_h_bf16`
 - `gdn_chunk_from_conv_smem_stash_bf16`
 - `gdn_wy_norm_cumsum_pack_qk_bf16`
+- `gdn_wy_norm_cumsum_pack_qk_v2_bf16`
+- `batched_unit_ltri_inv64_f32`
 - `gdn_wy_kkt_b64_bf16`
 - `gdn_wy_kkt_b64_mma_bf16`
 - `gdn_wy_solve_tril_b64_f32`
@@ -68,7 +70,7 @@ host fallback for that profile.
 ```python
 from kernels import get_kernel
 
-gdn = get_kernel("flashrt/gated-delta-attention", version=5, trust_remote_code=True)
+gdn = get_kernel("flashrt/gated-delta-attention", version=6, trust_remote_code=True)
 out = gdn.gated_delta_recurrent_bf16(q, k, v, g, beta, state)
 ```
 
@@ -78,7 +80,7 @@ blocks.
 
 The generic H32 producer profile uses `conv_out=(S,8192)`, Q/K heads `16`,
 value heads `32`, and head dimension `128`. Q/K are broadcast `16 -> 32`.
-Per-head `neg_exp_A_log` and `dt_bias` must remain FP32. Version 5 also
+Per-head `neg_exp_A_log` and `dt_bias` must remain FP32. Version 6 also
 supports the complete 64-token WY prefill chain for this H32/H16 profile;
 all `_h_bf16` functions take explicit `num_v_heads` and `num_k_heads`.
 
