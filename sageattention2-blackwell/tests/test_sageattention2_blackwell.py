@@ -412,8 +412,8 @@ def main() -> None:
 
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required")
-    major, _minor = torch.cuda.get_device_capability(0)
-    if major < 12:
+    major, minor = torch.cuda.get_device_capability(0)
+    if major not in (10, 11, 12) or (major == 10 and minor not in (0, 3)):
         raise SystemExit("sageattention2-blackwell requires Blackwell-class CUDA capability")
 
     torch.manual_seed(2026)

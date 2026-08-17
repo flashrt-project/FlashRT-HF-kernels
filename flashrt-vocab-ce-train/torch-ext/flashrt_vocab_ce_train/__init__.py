@@ -162,10 +162,21 @@ def vocab_ce(
     )
 
 
+def vocab_ce_loss(
+    hidden: torch.Tensor,
+    weight: torch.Tensor,
+    labels: torch.Tensor,
+    z_loss_weight: float = 0.0,
+    ignore_index: int = -100,
+) -> torch.Tensor:
+    """Documented public alias of :func:`vocab_ce` (README/CARD API)."""
+    return vocab_ce(hidden, weight, labels, z_loss_weight, ignore_index)
+
+
 def backend_marker(x: torch.Tensor) -> torch.Tensor:
     if ops is None:
         return x
     return ops._flashrt_training_package_marker(x)
 
 
-__all__ = ["vocab_ce", "reference_vocab_ce", "backend_marker"]
+__all__ = ["vocab_ce", "vocab_ce_loss", "reference_vocab_ce", "backend_marker"]
