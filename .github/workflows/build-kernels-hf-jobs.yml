@@ -365,7 +365,17 @@ jobs:
             --namespace flashrt \
             --package "${{ matrix.package }}" \
             --repo-root .
-          python scripts/audit_hub_variant_matrix.py "${{ matrix.package }}"
+          audit_args=("${{ matrix.package }}")
+          variants="${{ github.event.inputs.variants }}"
+          if [[ -n "$variants" ]]; then
+            IFS=',' read -ra requested_variants <<< "$variants"
+            for variant in "${requested_variants[@]}"; do
+              variant="${variant//[[:space:]]/}"
+              [[ -n "$variant" ]] || continue
+              audit_args+=(--variant "$variant")
+            done
+          fi
+          python scripts/audit_hub_variant_matrix.py "${audit_args[@]}"
 
   build-fa2:
     name: Build fa2-seqused-runtime (${{ matrix.variant }})
