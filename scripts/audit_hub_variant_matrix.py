@@ -21,7 +21,7 @@ DEFAULT_VARIANTS = (
 )
 
 
-def package_metadata(root: Path, package: str) -> tuple[str, int]:
+def package_metadata(root: Path, package: str) -> tuple[str, int, tuple[int, int], tuple[int, int] | None]:
     path = root / package / "build.toml"
     if not path.is_file():
         raise RuntimeError(f"missing package build.toml: {path}")
@@ -29,7 +29,21 @@ def package_metadata(root: Path, package: str) -> tuple[str, int]:
         config = tomllib.load(handle)
     general = config["general"]
     repo_id = general.get("hub", {}).get("repo-id", f"flashrt/{package}")
-    return repo_id, int(general["version"])
+    cuda = general.get("cuda", {})
+    minver = tuple(int(part) for part in str(cuda.get("minver", "0.0")).split("."))
+    maxver_text = cuda.get("maxver")
+    maxver = (
+        tuple(int(part) for part in str(maxver_text).split("."))
+        if maxver_text is not None
+        else None
+    )
+    return repo_id, int(general["version"]), minver, maxver
+
+
+def variant_cuda_version(variant: str) -> tuple[int, int]:
+    marker = next(part for part in variant.split("-") if part.startswith("cu"))
+    digits = marker[2:]
+    return int(digits[:-1]), int(digits[-1])
 
 
 def build_variants(files: list[str]) -> set[str]:
@@ -68,11 +82,17 @@ def main() -> None:
     failures: list[str] = []
 
     for package in args.packages:
-        repo_id, version = package_metadata(root, package)
+        repo_id, version, minver, maxver = package_metadata(root, package)
         revision = f"v{version}"
+        package_required = {
+            variant
+            for variant in required
+            if variant_cuda_version(variant) >= minver
+            and (maxver is None or variant_cuda_version(variant) <= maxver)
+        }
         kernel_files = api.list_repo_files(repo_id, repo_type="kernel", revision=revision)
         kernel_variants = build_variants(kernel_files)
-        missing = sorted(required - kernel_variants)
+        missing = sorted(package_required - kernel_variants)
         print(f"{repo_id}@{revision}: {len(kernel_variants)} variants")
         if missing:
             failures.append(f"{repo_id}@{revision} missing: {', '.join(missing)}")
