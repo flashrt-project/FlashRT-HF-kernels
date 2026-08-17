@@ -87,7 +87,9 @@ def main() -> None:
         repo_id, version, minver, maxver, noarch = package_metadata(root, package)
         revision = f"v{version}"
         if noarch:
-            package_required = {"torch-universal"}
+            # CUDA-backed Python/JIT packages are emitted by kernel-builder as
+            # one ABI-independent `torch-cuda` artifact.
+            package_required = {"torch-cuda"}
         else:
             package_required = {
                 variant

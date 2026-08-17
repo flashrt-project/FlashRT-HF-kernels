@@ -497,3 +497,7 @@ jobs:
             --namespace flashrt \
             --package fa2-seqused-runtime \
             --repo-root .
+          python scripts/promote_kernel_main_alias.py \
+            --namespace flashrt \
+            --package fa2-seqused-runtime \
+            --repo-root .
