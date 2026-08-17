@@ -12,7 +12,9 @@
 #define INPUT_FP16 0
 #define DTYPE __nv_bfloat16
 #define CACHE_ELEM_ENUM 2
-#define TOKENS_PER_PAGE 128
+#ifndef TOKENS_PER_PAGE
+#define TOKENS_PER_PAGE 32
+#endif
 #define HEAD_ELEMS 256
 #define HEAD_GRP_SIZE 8
 #define SLIDING_WINDOW 0

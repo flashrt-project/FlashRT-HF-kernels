@@ -1,6 +1,8 @@
 # FP8 KV Attention Results
 
-Built-artifact benchmark rows are pending for v3.
+Built-artifact benchmark rows are pending for the v4 page-32 release. The
+table below is a source-extension acceptance receipt and is not a published
+Hub-artifact claim.
 
 RTX 5090 source-extension acceptance row, PyTorch `2.11.0+cu128`:
 

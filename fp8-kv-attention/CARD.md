@@ -22,12 +22,12 @@ Native CUDA XQA attention for BF16 queries over FP8 E4M3 paged K/V cache.
 
 ## Scope
 
-v3 supports validated production decode/verify profiles:
+v4 supports validated production decode/verify profiles:
 
 - BF16 Q/O
 - FP8 E4M3 K/V cache
 - Q/KV/head-dim `24/4/256`, `16/2/256`, `32/8/128`, `32/16/128`, and `16/8/128`
-- page size `128`
+- page size `32` (vLLM default paged-cache layout)
 - speculative/decode `q_seq <= 32`
 
 This is not a generic FlashAttention replacement. It is the direct FP8-KV XQA

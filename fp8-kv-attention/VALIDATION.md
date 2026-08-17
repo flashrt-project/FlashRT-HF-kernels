@@ -7,6 +7,8 @@ Validation target:
 - Correctness metrics: max abs, mean abs, p99 abs, cosine similarity
 - Reference: PyTorch BF16/FP8-dequant attention with the same XQA speculative
   mask and head-dimension QK scaling
+- Release contract: v4 uses 32-token cache pages. v3 remains the legacy
+  128-token-page release and is not modified by the v4 publication.
 
 Required gate before publishing:
 
@@ -19,6 +21,10 @@ The package must pass all rows with:
 - `max_abs <= 0.02`
 - `mean_abs <= 0.0025`
 - `cosine >= 0.999`
+
+The gate also requires the public wrapper to export `PAGE_SIZE == 32` for an
+installed artifact and requires a legacy `(pages, 128, Hkv, D)` cache tensor to
+raise `RuntimeError`. A page-layout mismatch must never launch the kernel.
 
 Installed-artifact validation should be rerun in a Torch version supported by
 the Kernel Hub artifact matrix.
@@ -36,7 +42,7 @@ Builder note:
   `DEBUG=release` is invalid and fails before CMake configure. Repository HF
   Jobs set `DEBUG=0` explicitly before invoking `kernel-builder`.
 
-## RTX 5090 Source Results
+## RTX 5090 v4 Page-32 Source Results
 
 Command:
 
@@ -47,7 +53,13 @@ python fp8-kv-attention/tests/test_fp8_kv_attention.py \
   --json-out internal-tests/fp8-kv-attention-source-full-refresh.json
 ```
 
-Rows:
+Result: 16/16 decode and verify profiles passed, plus bit-identical CUDA Graph
+replay for both H32/KV16/D128 and H16/KV2/D256. The 32K-context rows allocate
+1,024 physical cache pages, so they exercise the v4 page-32 layout rather than
+the legacy page-128 layout.
+
+Across the full matrix, `max_abs <= 0.000244` and cosine is at least
+`0.999991`. Representative rows:
 
 | Shape | q_seq | kv_seq | max_abs | mean_abs | p99_abs | cosine | Result |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -60,7 +72,7 @@ Rows:
 | gqa32_kv16_verify4_4096 | 4 | 4096 | 0.000031 | 0.000004 | 0.000015 | 0.99999201 | PASS |
 | gqa32_kv16_verify8_32768 | 8 | 32768 | 0.000015 | 0.000001 | 0.000008 | 0.99999171 | PASS |
 
-The full gate also captures and replays both the `32/16/128` and
+The full gate captures and replays both the `32/16/128` and
 `16/2/256`, q-seq 4, context-4096 paths and requires bit-identical output.
 
 The `16/2/256` profile uses a dedicated group-size-8 CUDA instantiation. It is

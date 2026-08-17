@@ -26,7 +26,7 @@ void xqa(
   cudaDeviceProp prop{};
   TORCH_CHECK(cudaGetDeviceProperties(&prop, q.get_device()) == cudaSuccess);
   auto stream = at::cuda::getCurrentCUDAStream(q.get_device()).stream();
-  const int64_t stride_page = 128 * kv_heads * head_dim;
+  const int64_t stride_page = 32 * kv_heads * head_dim;
   const int64_t stride_token = kv_heads * head_dim;
   if (head_dim == 256) {
     if (q_heads == 16 && kv_heads == 2) {

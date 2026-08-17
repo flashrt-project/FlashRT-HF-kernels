@@ -19,7 +19,7 @@
 
 namespace {
 
-constexpr int64_t kPageSize = 128;
+constexpr int64_t kPageSize = 32;
 constexpr int kMaxCachedCudaDevices = 64;
 std::array<std::atomic<int>, kMaxCachedCudaDevices> g_cached_sm_counts{};
 
@@ -124,7 +124,7 @@ void xqa_bf16_fp8kv(
   check_fp8_e4m3(k_cache, "k_cache");
   check_fp8_e4m3(v_cache, "v_cache");
   TORCH_CHECK(k_cache.dim() == 4 && v_cache.sizes() == k_cache.sizes(),
-              "k_cache/v_cache must have shape (pages, 128, num_kv_heads, head_dim)");
+              "k_cache/v_cache must have shape (pages, 32, num_kv_heads, head_dim)");
   shape.num_kv_heads = k_cache.size(2);
   TORCH_CHECK(supported_shape(shape),
               "unsupported XQA shape: q_heads=", shape.num_q_heads,
@@ -166,7 +166,7 @@ void xqa_bf16_fp8kv(
   TORCH_CHECK(max_seq_len > 0 && max_seq_len <= k_cache.size(0) * kPageSize,
               "max_seq_len must be positive and covered by k_cache pages");
   TORCH_CHECK(max_seq_len % kPageSize == 0,
-              "max_seq_len must be rounded to the 128-token page size");
+              "max_seq_len must be rounded to the 32-token page size");
   if (k_stride_page <= 0) {
     k_stride_page = kPageSize * shape.num_kv_heads * shape.head_dim;
   }

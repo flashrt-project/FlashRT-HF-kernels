@@ -26,7 +26,7 @@ REGISTRATION_INCLUDE = (
     / "torch"
 )
 
-PAGE = 128
+PAGE = 32
 CONFIGS = {
     "qwen36": (24, 4, 256),
     "gqa16_kv2": (16, 2, 256),
@@ -367,6 +367,26 @@ def run_profile_compile(ops, config: str, seed: int) -> None:
     torch.testing.assert_close(got, expected, rtol=0, atol=0)
 
 
+def run_page_contract(ops, *, installed: bool) -> None:
+    if installed and getattr(ops, "PAGE_SIZE", None) != PAGE:
+        raise AssertionError(
+            f"installed artifact exports PAGE_SIZE={getattr(ops, 'PAGE_SIZE', None)}, "
+            f"expected {PAGE}"
+        )
+
+    q_heads, kv_heads, head_dim = CONFIGS["qwen36"]
+    q = torch.zeros((1, q_heads, head_dim), device="cuda", dtype=torch.bfloat16)
+    wrong_k = torch.zeros(
+        (1, 128, kv_heads, head_dim), device="cuda", dtype=torch.float8_e4m3fn
+    )
+    wrong_v = torch.zeros_like(wrong_k)
+    try:
+        call_public_xqa(ops, q, wrong_k, wrong_v, kv_seq=32)
+    except RuntimeError:
+        return
+    raise AssertionError("v4 must reject legacy 128-token cache pages")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
@@ -385,6 +405,7 @@ def main() -> int:
         )
 
     ops = load_source_ops() if args.backend == "source" else load_installed_ops(args.artifact)
+    run_page_contract(ops, installed=args.backend == "installed")
     rows = []
     for name in MODES[args.mode]:
         config, q_seq, kv_seq = SHAPES[name]
@@ -405,7 +426,7 @@ def main() -> int:
         if args.backend == "installed":
             run_profile_compile(ops, "gqa32_kv16", 424243)
             run_profile_compile(ops, "gqa16_kv2", 424245)
-    print(f"PASS fp8-kv-attention {args.backend} mode={args.mode}: {len(rows)} checks" +
+    print(f"PASS fp8-kv-attention {args.backend} mode={args.mode}: page32 contract + {len(rows)} checks" +
           (" + H32/KV16 and H16/KV2 CUDA Graph" +
            (" + torch.compile(fullgraph=True)" if args.backend == "installed" else "")
            if args.mode == "full" else ""))

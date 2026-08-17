@@ -1,7 +1,7 @@
 [general]
 name = "fp8-kv-attention"
 license = "Apache-2.0"
-version = 3
+version = 4
 backends = ["cuda"]
 
 [general.cuda]
@@ -47,6 +47,7 @@ src = [
   "csrc/attention/flashinfer_xqa_src/utils.h",
 ]
 cuda-flags = [
+  "-DTOKENS_PER_PAGE=32",
   "--expt-relaxed-constexpr",
   "--ftz=true",
   "--prec-div=false",

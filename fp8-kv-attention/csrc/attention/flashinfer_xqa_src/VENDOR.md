@@ -10,7 +10,7 @@ single fixed shape in CMake:
 
 - head_dim = 256
 - Q heads / KV heads = 24 / 4
-- page size = 128
+- page size = 32 in package v4 (selected with `TOKENS_PER_PAGE`)
 - BF16 Q/O, FP8 e4m3 KV
 - speculative decode enabled
 

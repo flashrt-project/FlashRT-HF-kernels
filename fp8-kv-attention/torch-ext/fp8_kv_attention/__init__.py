@@ -9,7 +9,7 @@ import torch
 from ._ops import add_op_namespace_prefix, ops
 
 
-PAGE_SIZE = 128
+PAGE_SIZE = 32
 SUPPORTED_CONFIGS = (
     (24, 4, 256),
     (16, 2, 256),

@@ -15,7 +15,7 @@ attention call.
 - `default_page_table(num_pages, device="cuda")`
 - `allocate_workspace(q_seq, device="cuda", scratch_mb=256)`
 
-## v3 Shape Contract
+## v4 Shape Contract
 
 The package exposes five validated XQA head profiles:
 
@@ -25,8 +25,8 @@ The package exposes five validated XQA head profiles:
 - `Q/KV/D = 32/16/128`
 - `Q/KV/D = 16/8/128`
 - Q/O: BF16, rank 3 or the supported rank-5 runtime layout
-- K/V cache: FP8 E4M3, `(pages, 128, num_kv_heads, head_dim)`
-- page size: `128`
+- K/V cache: FP8 E4M3, `(pages, 32, num_kv_heads, head_dim)`
+- page size: `32`, matching the vLLM default paged-cache block size
 - supported q_seq: `1 <= q_seq <= 32`
 - target: Blackwell `sm_110`, `sm_120` and compatible package builds,
   CUDA 12.8+
@@ -40,10 +40,10 @@ back to a slower reference.
 from kernels import get_kernel
 import torch
 
-attn = get_kernel("flashrt/fp8-kv-attention", version=3, trust_remote_code=True)
+attn = get_kernel("flashrt/fp8-kv-attention", version=4, trust_remote_code=True)
 
 q = torch.randn(1, 24, 256, device="cuda", dtype=torch.bfloat16)
-k_cache = torch.empty(8, 128, 4, 256, device="cuda", dtype=torch.float8_e4m3fn)
+k_cache = torch.empty(8, 32, 4, 256, device="cuda", dtype=torch.float8_e4m3fn)
 v_cache = torch.empty_like(k_cache)
 
 out = attn.xqa_bf16_fp8kv(q, k_cache, v_cache)
@@ -54,7 +54,7 @@ For static-buffer runtimes, preallocate every output and workspace tensor:
 ```python
 pages = k_cache.shape[0]
 page_table = attn.default_page_table(pages, device=q.device)
-seq_lens = torch.tensor([[pages * 128]], device=q.device, dtype=torch.int32)
+seq_lens = torch.tensor([[pages * 32]], device=q.device, dtype=torch.int32)
 mask = attn.causal_spec_mask(q.shape[0], device=q.device)
 semaphores, scratch = attn.allocate_workspace(q_seq=q.shape[0], device=q.device)
 out = torch.empty_like(q)
@@ -72,7 +72,7 @@ attn.xqa_bf16_fp8kv(
     semaphores=semaphores,
     scratch=scratch,
     sm_count=props.multi_processor_count,
-    k_stride_page=128 * kv_heads * head_dim,
+    k_stride_page=32 * kv_heads * head_dim,
     k_stride_token=kv_heads * head_dim,
     k_stride_head=head_dim,
 )
