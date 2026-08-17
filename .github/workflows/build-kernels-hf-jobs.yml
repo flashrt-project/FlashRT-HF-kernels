@@ -365,6 +365,7 @@ jobs:
             --namespace flashrt \
             --package "${{ matrix.package }}" \
             --repo-root .
+          python scripts/audit_hub_variant_matrix.py "${{ matrix.package }}"
 
   build-fa2:
     name: Build fa2-seqused-runtime (${{ matrix.variant }})
@@ -501,3 +502,4 @@ jobs:
             --namespace flashrt \
             --package fa2-seqused-runtime \
             --repo-root .
+          python scripts/audit_hub_variant_matrix.py fa2-seqused-runtime
