@@ -127,6 +127,11 @@ on:
         required: false
         default: ""
         type: string
+      mirror_only:
+        description: "Repair legacy vN/main aliases without starting an HF build job"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -240,7 +245,7 @@ jobs:
           PY
 
       - name: Build and upload ${{ matrix.package }} via HF Jobs
-        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
+        if: ((github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package) && github.event.inputs.mirror_only != 'true'
         shell: bash
         timeout-minutes: 360
         env:
