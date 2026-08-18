@@ -1,0 +1,3 @@
+// SPDX-License-Identifier: Apache-2.0
+// Unique translation unit name prevents cross-architecture object collisions.
+#include "w4a16_matvec_sm120.cu"

@@ -35,3 +35,15 @@ void dequantize_fp4_sfa_fp16(
     torch::Tensor const& sfa,
     torch::Tensor& out,
     bool is_sfb);
+
+void nvfp4_w4a16_marlin_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& weight_marlin,
+    torch::Tensor const& weight_scale_marlin,
+    torch::Tensor const& weight_global_scale,
+    torch::Tensor& workspace,
+    torch::Tensor& out);
+
+void nvfp4_w4a16_marlin_repack(
+    torch::Tensor const& qweight_kn,
+    torch::Tensor& weight_marlin);

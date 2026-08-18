@@ -1,7 +1,7 @@
 # flashrt/fp4-gemm
 
-FlashRT native Blackwell NVFP4 A4W4 GEMM kernels. Both activations and weights
-are packed FP4 inputs; this is not a BF16-activation weight-only operation.
+FlashRT native Blackwell NVFP4 GEMM kernels. The package includes packed A4W4
+paths and an explicitly named small-M W4A16 path that keeps activations BF16.
 
 ## Functions
 
@@ -31,6 +31,9 @@ are packed FP4 inputs; this is not a BF16-activation weight-only operation.
 - `nvfp4_gemm_streamk_bf16`
 - `nvfp4_gemm_streamk_bias_bf16`
 - `fp4_w4a16_linear_bf16` (compatibility alias)
+- `adopt_nvfp4_w4a16_marlin`
+- `allocate_w4a16_marlin_workspace`
+- `nvfp4_w4a16_marlin_bf16`
 - `fp4_repack_b_interleaved_sm120`
 - `fp4_w4a4_gemv_warpsplit_interleaved_bf16`
 - `fp4_w4a4_gemm_warpsplit_mrows_bf16`
@@ -71,6 +74,18 @@ weight without an interleaved duplicate:
 ```python
 y = ops.fp4_w4a4_gemm_warpsplit_mrows_bf16(
     a, b, sfa, sfb, warps=2, stages=6
+)
+```
+
+For accuracy-sensitive logits or verification projections, adopt standard
+ModelOpt NVFP4 weights once and call the W4A16 tier with BF16 activations:
+
+```python
+w, s, g, workspace = ops.adopt_nvfp4_w4a16_marlin(
+    weight_packed, weight_scale, weight_scale_2
+)
+y = ops.nvfp4_w4a16_marlin_bf16(
+    x_bf16, w, s, g, workspace=workspace, out=out_bf16
 )
 ```
 
@@ -117,3 +132,7 @@ a, sfa = ops.quantize_fp4_sfa_bf16(x)
 - `fp4_w4a4_gemm_warpsplit_mrows_bf16` is SM120-only, accepts standard
   row-major packed E2M1 weights, and requires `1<=M<=16`, `N%8==0`, and
   `K%(64*warps)==0`. Unsupported calls raise before launch.
+- `nvfp4_w4a16_marlin_bf16` is SM120-only and requires `1<=M<=16`,
+  `K%128==0`, and `N%64==0`. Its output/workspace are caller-owned, so the
+  runtime call is graph safe. The implementation is adapted from the
+  Apache-2.0 vLLM/Marlin backend and has no runtime dependency on vLLM.

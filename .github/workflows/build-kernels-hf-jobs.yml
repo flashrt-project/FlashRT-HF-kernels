@@ -225,6 +225,13 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Run free static release preflight for ${{ matrix.package }}
+        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/prebuild_check.py --package "${{ matrix.package }}"
+
       - name: Ensure Kernel Hub repo exists for ${{ matrix.package }}
         if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
         shell: bash

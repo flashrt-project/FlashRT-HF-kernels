@@ -14,6 +14,8 @@ Current scripts:
 - `prebuild_check.py`: checks v1 package structure, `build.toml` source lists,
   tracked internal directories, stale build artifacts, and optionally
   `kernel-builder-docker check-config`.
+- `native_artifact_preflight.py`: checks that an exact local build has strong
+  native symbols and the required device images before a paid HF Job starts.
 - `release_build_plan.py`: prints the release-candidate build-window command
   sequence; it only executes when called with `--execute`.
 - `mirror_kernel_legacy_model.py`: mirrors canonical Kernel Hub `vN` artifacts

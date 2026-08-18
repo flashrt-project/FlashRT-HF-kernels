@@ -1,5 +1,24 @@
 # Results
 
+## SM120 Torch 2.13 / CUDA 13.0 Release Candidate
+
+Installed-layout validation on RTX 5090 using PyTorch `2.13.0+cu130` confirms
+that both W4 and W8 device implementations are strongly linked into the x86_64
+artifact. The strict installed correctness sweep passed `26/26`; W8 cosine is
+`>=0.9999912` for the covered linear and FFN regions.
+
+Representative production auto-dispatch rows:
+
+| Shape/region | Kernel us | Eager us | Compile us | vs eager | vs compile |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| M1 K4096 H11008 N4096 W8 SwiGLU | 90.31 | 152.01 | 172.40 | 1.68x | 1.91x |
+| M1 K4096 H11008 N4096 W8 GELU | 27.88 | 97.08 | 115.51 | 3.48x | 4.14x |
+| M1 K4096 N4096 W8 linear | 6.17 | 14.41 | 16.02 | 2.33x | 2.59x |
+
+Weak geometries remain rejected by production auto-dispatch instead of being
+reported as wins. Explicit variants remain available only for diagnostics and
+correctness isolation.
+
 Static weight preparation is excluded from latency. Each timing is the median
 of three CUDA-event measurement rounds after warmup. PyTorch eager and warmed
 `torch.compile(mode="max-autotune-no-cudagraphs")` are both measured; the

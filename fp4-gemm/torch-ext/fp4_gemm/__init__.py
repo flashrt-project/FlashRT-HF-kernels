@@ -37,6 +37,11 @@ def capabilities() -> dict[str, object]:
         "sm120_warpsplit_mrows": (1, 16),
         "sm120_warpsplit_mrows_n_alignment": 8,
         "sm120_warpsplit_mrows_k_alignment": "64 * warps",
+        "sm120_w4a16_marlin_m": (1, 16),
+        "sm120_w4a16_marlin_n_alignment": 64,
+        "sm120_w4a16_marlin_k_alignment": 128,
+        "sm120_w4a16_marlin_weight_layout": "marlin-repacked-nvfp4",
+        "sm120_w4a16_marlin_scale_layout": "marlin-permuted-fp8-e4m3-block16",
         "errors": "exceptions",
     }
 
@@ -169,6 +174,28 @@ def _m256_fake(a_packed, b_packed, sfa, sfb, workspace, out, alpha: float = 1.0)
         raise RuntimeError("the M256 tier requires M >= 512")
     if out.shape != (a_packed.shape[0], b_packed.shape[0]):
         raise RuntimeError("out must have shape (M, N)")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_w4a16_marlin_bf16"))
+def _w4a16_marlin_fake(x, weight, weight_scale, global_scale, workspace, out) -> None:
+    del weight, weight_scale, global_scale, workspace
+    if x.ndim != 2 or out.ndim != 2 or out.shape[0] != x.shape[0]:
+        raise RuntimeError("x/out must have shapes (M, K)/(M, N)")
+    if not 1 <= x.shape[0] <= 16:
+        raise RuntimeError("the Marlin W4A16 tier serves M in [1, 16]")
+    if x.shape[1] % 128 or out.shape[1] % 64:
+        raise RuntimeError("K/N must be divisible by 128/64")
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("nvfp4_w4a16_marlin_repack"))
+def _w4a16_marlin_repack_fake(qweight_kn, weight_marlin) -> None:
+    if qweight_kn.ndim != 2:
+        raise RuntimeError("qweight_kn must have shape (K / 8, N)")
+    k, n = qweight_kn.shape[0] * 8, qweight_kn.shape[1]
+    if weight_marlin.shape != (k // 16, n * 2):
+        raise RuntimeError("weight_marlin must have shape (K / 16, 2 * N)")
     return None
 
 
@@ -771,6 +798,98 @@ def nvfp4_gemm_m256_bf16(
     return out
 
 
+def allocate_w4a16_marlin_workspace(device: torch.device | str) -> torch.Tensor:
+    """Allocate the persistent Marlin lock workspace before graph capture."""
+    props = torch.cuda.get_device_properties(device)
+    return torch.zeros(props.multi_processor_count, device=device, dtype=torch.int32)
+
+
+def adopt_nvfp4_w4a16_marlin(
+    weight_packed: torch.Tensor,
+    weight_scale: torch.Tensor,
+    weight_scale_2: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Convert standard ModelOpt NVFP4 tensors once at model bind time.
+
+    Inputs use ``weight[N,K/2]``, ``weight_scale[N,K/16]`` and scalar
+    ``weight_scale_2``. Returned tensors are the three runtime operands plus a
+    zeroed lock workspace. This function is intentionally outside the graph
+    hot path.
+    """
+    if weight_packed.dtype != torch.uint8 or weight_packed.ndim != 2:
+        raise ValueError("weight_packed must be uint8 with shape (N, K / 2)")
+    n, k = weight_packed.shape[0], weight_packed.shape[1] * 2
+    if k % 128 or n % 64:
+        raise ValueError("K/N must be divisible by 128/64")
+    if weight_scale.shape != (n, k // NVFP4_BLOCK_SIZE):
+        raise ValueError("weight_scale must have shape (N, K / 16)")
+    if weight_scale_2.numel() != 1:
+        raise ValueError("weight_scale_2 must contain one global scale")
+
+    qweight_kn = weight_packed.view(torch.int32).T.contiguous()
+    weight_marlin = torch.empty(
+        (k // 16, n * 2), device=weight_packed.device, dtype=torch.int32
+    )
+    ops.nvfp4_w4a16_marlin_repack(qweight_kn, weight_marlin)
+
+    scales = weight_scale.T.contiguous().to(torch.bfloat16)
+    scale_perm = [i + 8 * j for i in range(8) for j in range(8)]
+    scales = scales.reshape(-1, 64)[:, scale_perm].reshape(-1, n).contiguous()
+
+    # Match vLLM's NVFP4 Marlin contract exactly: scale permutation uses the
+    # model parameter dtype, then S0E5M3 encoding starts from FP16.
+    scales = scales.to(torch.float16)
+    scales = scales.view(-1, 4)[:, [0, 2, 1, 3]].reshape(scales.shape)
+    scaled = scales.float() * (2**7)
+    nonzero = scaled > 0
+    scale_factor = 1.0
+    if bool(nonzero.any()):
+        max_value = scaled[nonzero].max()
+        if bool(max_value < 448 * (2**7)):
+            scale_factor = float((448 * (2**7) / max_value).log2().floor().exp2())
+    if scale_factor > 1.0:
+        scales = (scales.float() * scale_factor).to(torch.float16)
+    scales = scales * (2**7)
+    scales[scales < 2] = 0
+    scales = (scales.view(torch.int16) << 1).view(torch.float8_e4m3fn)
+    scales = scales[:, 1::2].contiguous()
+
+    # Marlin's BF16 dequantizer uses exponent bias 126 and removes the seven
+    # bits introduced while encoding the special unsigned FP8 scale format.
+    global_scale = (
+        weight_scale_2.to(device=weight_packed.device, dtype=torch.float32)
+        * (2.0 ** 119)
+        / scale_factor
+    ).contiguous()
+    workspace = allocate_w4a16_marlin_workspace(weight_packed.device)
+    return weight_marlin, scales, global_scale, workspace
+
+
+def nvfp4_w4a16_marlin_bf16(
+    x: torch.Tensor,
+    weight_marlin: torch.Tensor,
+    weight_scale_marlin: torch.Tensor,
+    weight_global_scale: torch.Tensor,
+    *,
+    workspace: torch.Tensor,
+    out: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Small-M BF16 x NVFP4 linear using bind-time Marlin layouts.
+
+    ``weight_marlin``, ``weight_scale_marlin`` and
+    ``weight_global_scale`` are the tensors produced by a standard NVFP4
+    Marlin adoption step. The operation supports M in [1, 16] and never
+    allocates internally, making it suitable for CUDA Graph replay.
+    """
+    if out is None:
+        n = weight_scale_marlin.numel() // (x.shape[1] // NVFP4_BLOCK_SIZE)
+        out = torch.empty((x.shape[0], n), device=x.device, dtype=torch.bfloat16)
+    ops.nvfp4_w4a16_marlin_bf16(
+        x, weight_marlin, weight_scale_marlin, weight_global_scale, workspace, out
+    )
+    return out
+
+
 def fp4_w4a16_linear_bf16(
     a_packed: torch.Tensor,
     b_packed: torch.Tensor,
@@ -932,6 +1051,8 @@ __all__ = [
     "SUPPORTED_CUDA_CAPABILITIES",
     "SUPPORTED_LAYOUTS",
     "capabilities",
+    "allocate_w4a16_marlin_workspace",
+    "adopt_nvfp4_w4a16_marlin",
     "aligned_fp4_dim",
     "cutlass_fp4_gemm_geglu_il_hw_v10",
     "dequantize_fp4_sfa_fp16",
@@ -947,6 +1068,7 @@ __all__ = [
     "nvfp4_gemm_nvfp4",
     "nvfp4_gemm_m256_bf16",
     "nvfp4_gemm_m256_workspace_size",
+    "nvfp4_w4a16_marlin_bf16",
     "nvfp4_gemm_geglu_nvfp4_fp16",
     "nvfp4_gemm_bias_gelu_nvfp4_fp16",
     "nvfp4_gemm_bias_residual_fp16",

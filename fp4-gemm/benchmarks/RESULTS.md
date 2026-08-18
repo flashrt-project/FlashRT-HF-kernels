@@ -1,5 +1,31 @@
 # fp4-gemm Benchmark Results
 
+## SM120 Small-M W4A16 Full-Vocabulary Tier
+
+Installed-layout release-candidate validation on RTX 5090, PyTorch
+`2.13.0+cu130`, with `N=152064` and `K=5120`. FlashRT and the current vLLM
+Marlin path consume the same bind-time-repacked ModelOpt NVFP4 weight, use
+caller-owned output/workspace tensors, and are timed with 10 warmup and 50
+measured CUDA-event iterations.
+
+| M | FlashRT us | vLLM native us | FlashRT/native | Exact |
+| ---: | ---: | ---: | ---: | --- |
+| 1 | 265.56 | 266.11 | 0.998x | yes |
+| 7 | 267.37 | 267.91 | 0.998x | yes |
+| 8 | 268.24 | 268.47 | 0.999x | yes |
+| 16 | 272.33 | 272.38 | 1.000x | yes |
+
+The `M=8` release gate is `<=400 us`; the measured result is `268.24 us`, or
+`2.02x` faster than the prior `543 us` tiled W4A16 pipeline measurement. The
+current direct vLLM Marlin kernel is included separately to prove that the Hub
+wrapper and weight-adoption layer add no measurable regression.
+The independent correctness sweep covers `M={1,2,4,7,8,16}`, reports worst
+`max_abs=0.0001221` and cosine `>=0.9999945` against a row-major NVFP4
+dequantization oracle, and also passes bit-exact CUDA Graph replay,
+`torch.compile(fullgraph=True)`, and explicit `M=17` rejection. Bind-time
+packed weights, scale tensors, and runtime outputs are bit-exact with vLLM's
+NVFP4 Marlin preparation and execution.
+
 ## SM120 Qwen3.8 Decode/Prefill Tiers
 
 Source-extension validation on RTX 5090, PyTorch `2.11.0+cu128`, CUTLASS

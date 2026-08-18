@@ -185,12 +185,79 @@ def bench_bf16_producer(ops, native, k: int, warmup: int, iters: int):
     }
 
 
+def bench_w4a16_vocab(ops, warmup: int, iters: int):
+    n, k = 152064, 5120
+    gen = torch.Generator(device="cuda").manual_seed(20260818)
+    weight = torch.randint(
+        0, 256, (n, k // 2), device="cuda", dtype=torch.uint8,
+        generator=gen,
+    )
+    weight_scale = (
+        torch.rand((n, k // 16), device="cuda", generator=gen) * 0.1 + 0.01
+    ).to(torch.float8_e4m3fn)
+    global_scale = torch.tensor([0.00390625], device="cuda", dtype=torch.float32)
+    weight_marlin, scales_marlin, global_marlin, workspace = (
+        ops.adopt_w4a16_marlin(weight, weight_scale, global_scale)
+    )
+
+    vllm_ops = None
+    scalar_types = None
+    try:
+        from vllm import _custom_ops as vllm_ops
+        from vllm.scalar_type import scalar_types
+    except ImportError:
+        pass
+
+    rows = []
+    for m in (1, 7, 8, 16):
+        x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16)
+        out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+
+        def flashrt_call():
+            ops.w4a16_marlin(
+                x, weight_marlin, scales_marlin, global_marlin, workspace, out
+            )
+
+        flashrt_call()
+        flashrt_us = measure(flashrt_call, warmup, iters)
+        row = {
+            "M": m,
+            "N": n,
+            "K": k,
+            "flashrt_us": flashrt_us,
+            "target_us": 400.0 if m == 8 else None,
+            "target_passed": bool(m != 8 or flashrt_us <= 400.0),
+        }
+        if vllm_ops is not None and scalar_types is not None:
+            native_out = torch.empty_like(out)
+
+            def native_call():
+                vllm_ops.marlin_gemm(
+                    x, native_out, weight_marlin, None, scales_marlin, None,
+                    global_marlin, None, None, None, workspace,
+                    scalar_types.float4_e2m1f, m, n, k,
+                    True, False, False, False,
+                )
+
+            native_call()
+            native_us = measure(native_call, warmup, iters)
+            row.update({
+                "vllm_native_us": native_us,
+                "wrapper_over_native": flashrt_us / native_us,
+                "exact_vs_vllm": bool(torch.equal(out, native_out)),
+            })
+        rows.append(row)
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
     parser.add_argument("--artifact", default=None)
     parser.add_argument(
-        "--mode", choices=["smoke", "headline", "thor-models"], default="headline"
+        "--mode",
+        choices=["smoke", "headline", "thor-models", "w4a16-vocab"],
+        default="headline",
     )
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
@@ -198,6 +265,31 @@ def main() -> int:
     args = parser.parse_args()
 
     helpers = load_helpers()
+    ops = (
+        helpers.load_source_ops()
+        if args.backend == "source"
+        else helpers.load_installed_ops(args.artifact)
+    )
+    if args.mode == "w4a16-vocab":
+        rows = bench_w4a16_vocab(ops, args.warmup, args.iterations)
+        payload = {
+            "mode": args.mode,
+            "backend": args.backend,
+            "device": torch.cuda.get_device_name(),
+            "torch": torch.__version__,
+            "results": rows,
+            "passed": all(
+                row["target_passed"] and row.get("exact_vs_vllm", True)
+                for row in rows
+            ),
+        }
+        print(json.dumps(payload, indent=2))
+        if args.json_out:
+            out = Path(args.json_out)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps(payload, indent=2) + "\n")
+        return 0 if payload["passed"] else 1
+
     native_root = Path(
         os.environ.get("FLASHRT_NATIVE_ROOT", str(ROOT.parent / "official" / "FlashRT"))
     )
@@ -206,11 +298,6 @@ def main() -> int:
         import flash_rt.flash_rt_kernels as native
     finally:
         sys.path.pop(0)
-    ops = (
-        helpers.load_source_ops()
-        if args.backend == "source"
-        else helpers.load_installed_ops(args.artifact)
-    )
     shapes = {
         "small_m16_n128_k128": (16, 128, 128),
         "small_m32_n256_k256": (32, 256, 256),

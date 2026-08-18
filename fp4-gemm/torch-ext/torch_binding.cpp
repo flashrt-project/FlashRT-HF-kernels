@@ -24,6 +24,8 @@
 #include "gemm/fp4/fp4_w4a4_mma_warpsplit_ilv_sm120.cuh"
 #include "gemm/fp4/fp4_w4a4_mma_warpsplit_sm120.cuh"
 #include "gemm/fp4/fp4_w4a4_mma_warpsplit_mrows_sm120.cuh"
+#include "marlin/w4a16_marlin_sm120.cuh"
+#include "marlin/gptq_marlin_repack.cuh"
 #endif
 #include "gemm/fp4/sm110_dispatch.cuh"
 #include "quantize/quantize_fp4_sfa.cuh"
@@ -80,6 +82,18 @@ void check_bf16_cuda(torch::Tensor const& tensor, const char* name) {
   check_cuda_contiguous(tensor, name);
   TORCH_CHECK(tensor.scalar_type() == torch::kBFloat16,
               name, " must have dtype torch.bfloat16");
+}
+
+void check_float_cuda(torch::Tensor const& tensor, const char* name) {
+  check_cuda_contiguous(tensor, name);
+  TORCH_CHECK(tensor.scalar_type() == torch::kFloat32,
+              name, " must have dtype torch.float32");
+}
+
+void check_int_cuda(torch::Tensor const& tensor, const char* name) {
+  check_cuda_contiguous(tensor, name);
+  TORCH_CHECK(tensor.scalar_type() == torch::kInt32,
+              name, " must have dtype torch.int32");
 }
 
 int checked_int(int64_t value, const char* name) {
@@ -1174,6 +1188,92 @@ void dequantize_fp4_sfa_fp16(
 #endif
 }
 
+void nvfp4_w4a16_marlin_bf16(
+    torch::Tensor const& x,
+    torch::Tensor const& weight_marlin,
+    torch::Tensor const& weight_scale_marlin,
+    torch::Tensor const& weight_global_scale,
+    torch::Tensor& workspace,
+    torch::Tensor& out) {
+  check_bf16_cuda(x, "x");
+  check_int_cuda(weight_marlin, "weight_marlin");
+  check_cuda_contiguous(weight_scale_marlin, "weight_scale_marlin");
+  TORCH_CHECK(weight_scale_marlin.scalar_type() == torch::kFloat8_e4m3fn,
+              "weight_scale_marlin must have dtype torch.float8_e4m3fn");
+  check_float_cuda(weight_global_scale, "weight_global_scale");
+  check_int_cuda(workspace, "workspace");
+  check_bf16_cuda(out, "out");
+  TORCH_CHECK(x.dim() == 2, "x must have shape (M, K)");
+  TORCH_CHECK(out.dim() == 2 && out.size(0) == x.size(0),
+              "out must have shape (M, N)");
+  const int64_t m = x.size(0);
+  const int64_t k = x.size(1);
+  const int64_t n = out.size(1);
+  TORCH_CHECK(m >= 1 && m <= 16, "the Marlin W4A16 tier serves M in [1, 16]");
+  TORCH_CHECK(k > 0 && k % 128 == 0, "K must be divisible by 128");
+  TORCH_CHECK(n > 0 && n % 64 == 0, "N must be divisible by 64");
+  TORCH_CHECK(weight_scale_marlin.numel() == (k / 16) * n,
+              "weight_scale_marlin must contain K/16 * N entries");
+  TORCH_CHECK(weight_global_scale.numel() == 1,
+              "weight_global_scale must contain one value");
+  TORCH_CHECK(workspace.numel() > 0, "workspace must not be empty");
+  check_same_device(x, weight_marlin, "x", "weight_marlin");
+  check_same_device(x, weight_scale_marlin, "x", "weight_scale_marlin");
+  check_same_device(x, weight_global_scale, "x", "weight_global_scale");
+  check_same_device(x, workspace, "x", "workspace");
+  check_same_device(x, out, "x", "out");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(x.device());
+  require_sm120(x, "nvfp4_w4a16_marlin_bf16");
+#if defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
+  TORCH_CHECK(false, "SM120 Marlin W4A16 source is not present in this build");
+#else
+  auto const* props = current_device_properties(x);
+  TORCH_CHECK(workspace.numel() >= props->multiProcessorCount,
+              "workspace must contain at least one int32 lock per SM");
+  auto stream = at::cuda::getCurrentCUDAStream(x.get_device()).stream();
+  const int rc = flash_rt::gemm::w4a16_marlin_sm120_bf16(
+      x.data_ptr(), weight_marlin.data_ptr(), weight_scale_marlin.data_ptr(),
+      weight_global_scale.data_ptr(), workspace.data_ptr(), out.data_ptr(),
+      checked_int(m, "M"), checked_int(n, "N"), checked_int(k, "K"),
+      checked_int(x.stride(0), "lda"), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_w4a16_marlin_bf16 failed with rc=", rc);
+#endif
+#else
+  TORCH_CHECK(false, "fp4-gemm was not built with CUDA support");
+#endif
+}
+
+void nvfp4_w4a16_marlin_repack(
+    torch::Tensor const& qweight_kn,
+    torch::Tensor& weight_marlin) {
+  check_int_cuda(qweight_kn, "qweight_kn");
+  check_int_cuda(weight_marlin, "weight_marlin");
+  TORCH_CHECK(qweight_kn.dim() == 2, "qweight_kn must have shape (K / 8, N)");
+  const int64_t k = qweight_kn.size(0) * 8;
+  const int64_t n = qweight_kn.size(1);
+  TORCH_CHECK(k % 128 == 0, "K must be divisible by 128");
+  TORCH_CHECK(n % 64 == 0, "N must be divisible by 64");
+  TORCH_CHECK(weight_marlin.sizes() == torch::IntArrayRef({k / 16, n * 2}),
+              "weight_marlin must have shape (K / 16, 2 * N)");
+  check_same_device(qweight_kn, weight_marlin, "qweight_kn", "weight_marlin");
+#if defined(CUDA_KERNEL)
+  at::cuda::CUDAGuard device_guard(qweight_kn.device());
+  require_sm120(qweight_kn, "nvfp4_w4a16_marlin_repack");
+#if defined(FLASHRT_FP4_GEMM_SOURCE_SM110_ONLY)
+  TORCH_CHECK(false, "SM120 Marlin repack source is not present in this build");
+#else
+  auto stream = at::cuda::getCurrentCUDAStream(qweight_kn.get_device()).stream();
+  const int rc = flash_rt::gemm::repack_nvfp4_to_marlin_sm120(
+      qweight_kn.data_ptr(), weight_marlin.data_ptr(), checked_int(k, "K"),
+      checked_int(n, "N"), stream);
+  TORCH_CHECK(rc == 0, "nvfp4_w4a16_marlin_repack failed with rc=", rc);
+#endif
+#else
+  TORCH_CHECK(false, "fp4-gemm was not built with CUDA support");
+#endif
+}
+
 TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nvfp4_gemm_bf16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0, int variant=-1) -> ()");
   ops.def("nvfp4_gemm_fp16(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out, float alpha=1.0, int variant=-1) -> ()");
@@ -1204,6 +1304,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.def("nvfp4_gemm_relu2_nvfp4(Tensor a_packed, Tensor b_packed, Tensor sfa, Tensor sfb, Tensor! out_packed, Tensor! out_sfa) -> ()");
   ops.def("quantize_fp4_sfa_bf16(Tensor x, Tensor! packed, Tensor! sfa, bool is_sfb=False) -> ()");
   ops.def("dequantize_fp4_sfa_fp16(Tensor packed, Tensor sfa, Tensor! out, bool is_sfb=False) -> ()");
+  ops.def("nvfp4_w4a16_marlin_bf16(Tensor x, Tensor weight_marlin, Tensor weight_scale_marlin, Tensor weight_global_scale, Tensor! workspace, Tensor! out) -> ()");
+  ops.def("nvfp4_w4a16_marlin_repack(Tensor qweight_kn, Tensor! weight_marlin) -> ()");
 #if defined(CUDA_KERNEL)
   ops.impl("nvfp4_gemm_bf16", torch::kCUDA, &fp4_w4a16_linear_bf16);
   ops.impl("nvfp4_gemm_fp16", torch::kCUDA, &nvfp4_gemm_fp16);
@@ -1234,6 +1336,8 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, ops) {
   ops.impl("nvfp4_gemm_relu2_nvfp4", torch::kCUDA, &nvfp4_gemm_relu2_nvfp4);
   ops.impl("quantize_fp4_sfa_bf16", torch::kCUDA, &quantize_fp4_sfa_bf16);
   ops.impl("dequantize_fp4_sfa_fp16", torch::kCUDA, &dequantize_fp4_sfa_fp16);
+  ops.impl("nvfp4_w4a16_marlin_bf16", torch::kCUDA, &nvfp4_w4a16_marlin_bf16);
+  ops.impl("nvfp4_w4a16_marlin_repack", torch::kCUDA, &nvfp4_w4a16_marlin_repack);
 #endif
 }
 

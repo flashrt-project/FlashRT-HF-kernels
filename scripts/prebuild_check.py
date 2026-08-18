@@ -126,6 +126,7 @@ def check_package(pkg: str, errors: list[str], warnings: list[str]) -> None:
         fail(errors, f"{pkg}: general.name is {name!r}, expected one of {sorted(expected_names)!r}")
 
     source_entries: list[str] = []
+    kernel_sources: dict[str, list[str]] = {}
     source_entries.extend(config.get("torch", {}).get("src", []))
     allowed_backends = set(config.get("general", {}).get("backends", []))
     for kernel_name, kernel_cfg in config.get("kernel", {}).items():
@@ -137,12 +138,36 @@ def check_package(pkg: str, errors: list[str], warnings: list[str]) -> None:
                 errors,
                 f"{pkg}: kernel {kernel_name} backend {backend!r} is not listed in general.backends",
             )
-        source_entries.extend(kernel_cfg.get("src", []))
+        sources = kernel_cfg.get("src", [])
+        kernel_sources[kernel_name] = sources
+        source_entries.extend(sources)
+
+    owners: dict[str, list[str]] = {}
+    for kernel_name, sources in kernel_sources.items():
+        for rel in sources:
+            if Path(rel).suffix in {".cu", ".cc", ".cpp", ".cxx"}:
+                owners.setdefault(rel, []).append(kernel_name)
+    for rel, kernel_names in owners.items():
+        if len(kernel_names) > 1:
+            fail(
+                errors,
+                f"{pkg}: compiled source {rel} is shared by kernel targets "
+                f"{kernel_names}; use uniquely named wrapper translation units "
+                "to prevent builder object collisions",
+            )
 
     for rel in source_entries:
         path = pkg_dir / rel
         if not path.is_file():
             fail(errors, f"{pkg}: build.toml references missing source {rel}")
+            continue
+        tracked = run(["git", "ls-files", "--error-unmatch", f"{pkg}/{rel}"])
+        if tracked.returncode != 0:
+            fail(
+                errors,
+                f"{pkg}: build source {rel} is not in the Git index; Nix flakes "
+                "will omit it (stage or commit the file before building)",
+            )
 
 
 def check_internal_dirs(errors: list[str]) -> None:

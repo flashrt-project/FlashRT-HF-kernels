@@ -224,6 +224,14 @@ class SourceOps:
             a, b, sfa, sfb, out_packed, out_sfa
         )
 
+    def adopt_w4a16_marlin(self, weight, weight_scale, global_scale):
+        return _adopt_w4a16_marlin(self._ops, weight, weight_scale, global_scale)
+
+    def w4a16_marlin(self, x, weight, weight_scale, global_scale, workspace, out):
+        self._ops.nvfp4_w4a16_marlin_bf16(
+            x, weight, weight_scale, global_scale, workspace, out
+        )
+
 
 class InstalledOps:
     """Adapt the public return-value API to the in-place test interface."""
@@ -420,6 +428,55 @@ class InstalledOps:
             a, b, sfa, sfb, out_packed=out_packed, out_sfa=out_sfa
         )
 
+    def adopt_w4a16_marlin(self, weight, weight_scale, global_scale):
+        return self._module.adopt_nvfp4_w4a16_marlin(
+            weight, weight_scale, global_scale
+        )
+
+    def w4a16_marlin(self, x, weight, weight_scale, global_scale, workspace, out):
+        self._module.nvfp4_w4a16_marlin_bf16(
+            x, weight, weight_scale, global_scale,
+            workspace=workspace, out=out,
+        )
+
+
+def _adopt_w4a16_marlin(raw_ops, weight, weight_scale, global_scale):
+    """Independent source-test copy of the public bind-time layout contract."""
+    n, k = weight.shape[0], weight.shape[1] * 2
+    qweight_kn = weight.view(torch.int32).T.contiguous()
+    weight_marlin = torch.empty(
+        (k // 16, n * 2), device=weight.device, dtype=torch.int32
+    )
+    raw_ops.nvfp4_w4a16_marlin_repack(qweight_kn, weight_marlin)
+
+    scale_perm = [i + 8 * j for i in range(8) for j in range(8)]
+    scales = weight_scale.T.contiguous().to(torch.bfloat16)
+    scales = scales.reshape(-1, 64)[:, scale_perm].reshape(-1, n).contiguous()
+    scales = scales.to(torch.float16)
+    scales = scales.view(-1, 4)[:, [0, 2, 1, 3]].reshape(scales.shape)
+    scaled = scales.float() * (2**7)
+    nonzero = scaled > 0
+    scale_factor = 1.0
+    if bool(nonzero.any()):
+        max_value = scaled[nonzero].max()
+        if bool(max_value < 448 * (2**7)):
+            scale_factor = float((448 * (2**7) / max_value).log2().floor().exp2())
+    if scale_factor > 1.0:
+        scales = (scales.float() * scale_factor).to(torch.float16)
+    scales = scales * (2**7)
+    scales[scales < 2] = 0
+    scales = (scales.view(torch.int16) << 1).view(torch.float8_e4m3fn)
+    scales = scales[:, 1::2].contiguous()
+    adjusted_global_scale = (
+        global_scale.float() * (2.0 ** 119) / scale_factor
+    ).contiguous()
+    workspace = torch.zeros(
+        torch.cuda.get_device_properties(weight.device).multi_processor_count,
+        device=weight.device,
+        dtype=torch.int32,
+    )
+    return weight_marlin, scales, adjusted_global_scale, workspace
+
 
 def _current_arch_list() -> str:
     major, minor = torch.cuda.get_device_capability(0)
@@ -467,6 +524,10 @@ def load_source_ops() -> SourceOps:
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_bf16out_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_bias_gelu_fp4out_sm120.cu"),
             str(PACKAGE / "csrc" / "gemm" / "fp4" / "cutlass_nvfp4_gemm_dn_streamk_bias_sm120.cu"),
+            str(PACKAGE / "csrc" / "marlin" / "marlin_runtime.cu"),
+            str(PACKAGE / "csrc" / "marlin" / "gptq_marlin_repack.cu"),
+            str(PACKAGE / "csrc" / "marlin" / "sm80_kernel_bfloat16_fe2m1f_bfloat16.cu"),
+            str(PACKAGE / "csrc" / "marlin" / "w4a16_marlin_sm120.cu"),
         ]
         source_define = None
     load(
@@ -489,6 +550,7 @@ def load_source_ops() -> SourceOps:
             "-O3",
             "--expt-relaxed-constexpr",
             "--expt-extended-lambda",
+            "-static-global-template-stub=false",
             "-DCUDA_KERNEL",
             "-DCUTLASS_ARCH_MMA_SM100_SUPPORTED=1",
             "-DFLASHRT_HAVE_COSMOS3_EDGE=1",
@@ -1054,6 +1116,124 @@ def run_sm110_epilogue_case(ops, name: str, shape: tuple[int, int, int]):
     return rows
 
 
+def _dequantize_linear_nvfp4(weight, weight_scale, global_scale):
+    """Dequantize standard ModelOpt row-major NVFP4 weights for the oracle."""
+    low = weight & 0x0F
+    high = (weight >> 4) & 0x0F
+    codes = torch.stack((low, high), dim=-1).flatten(start_dim=1)
+    magnitude = torch.tensor(
+        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0],
+        device=weight.device,
+        dtype=torch.float32,
+    )
+    values = magnitude[(codes & 0x07).long()]
+    values = torch.where((codes & 0x08).bool(), -values, values)
+    n, k = values.shape
+    scales = weight_scale.float().reshape(n, k // 16, 1)
+    return (values.reshape(n, k // 16, 16) * scales * global_scale.float()).reshape(n, k)
+
+
+def run_sm120_w4a16_marlin_gate(ops):
+    if torch.cuda.get_device_capability(0) != (12, 0):
+        return {"skipped": True, "reason": "requires SM120", "passed": True}
+
+    n, k = 128, 512
+    rows = []
+    for m in (1, 2, 4, 7, 8, 16):
+        gen = torch.Generator(device="cuda").manual_seed(20260818 + m)
+        weight = torch.randint(
+            0, 256, (n, k // 2), device="cuda", dtype=torch.uint8,
+            generator=gen,
+        )
+        weight_scale = (
+            torch.rand((n, k // 16), device="cuda", generator=gen) * 0.1 + 0.01
+        ).to(torch.float8_e4m3fn)
+        global_scale = torch.tensor(
+            [0.00390625], device="cuda", dtype=torch.float32
+        )
+        x = (
+            torch.randn((m, k), device="cuda", generator=gen) * 0.25
+        ).to(torch.bfloat16)
+        weight_marlin, scales_marlin, global_marlin, workspace = (
+            ops.adopt_w4a16_marlin(weight, weight_scale, global_scale)
+        )
+        out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+        ops.w4a16_marlin(
+            x, weight_marlin, scales_marlin, global_marlin, workspace, out
+        )
+        reference_weight = _dequantize_linear_nvfp4(
+            weight, weight_scale, global_scale
+        )
+        expected = (x.float() @ reference_weight.T).to(torch.bfloat16)
+        max_abs, mean_abs, p99_abs, cosine = metrics(out, expected)
+        rows.append({
+            "M": m,
+            "max_abs": max_abs,
+            "mean_abs": mean_abs,
+            "p99_abs": p99_abs,
+            "cosine": cosine,
+            "passed": max_abs <= 0.001 and mean_abs <= 0.0001
+            and p99_abs <= 0.001 and cosine >= 0.9999,
+        })
+
+    m = 8
+    weight = torch.randint(0, 256, (n, k // 2), device="cuda", dtype=torch.uint8)
+    weight_scale = (
+        torch.rand((n, k // 16), device="cuda") * 0.1 + 0.01
+    ).to(torch.float8_e4m3fn)
+    global_scale = torch.tensor([0.00390625], device="cuda", dtype=torch.float32)
+    weight_marlin, scales_marlin, global_marlin, workspace = (
+        ops.adopt_w4a16_marlin(weight, weight_scale, global_scale)
+    )
+    x = torch.randn((m, k), device="cuda", dtype=torch.bfloat16)
+    eager = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+    replay = torch.empty_like(eager)
+    ops.w4a16_marlin(x, weight_marlin, scales_marlin, global_marlin, workspace, eager)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        ops.w4a16_marlin(
+            x, weight_marlin, scales_marlin, global_marlin, workspace, replay
+        )
+    graph.replay()
+    torch.cuda.synchronize()
+    graph_exact = torch.equal(eager, replay)
+
+    compiled_out = torch.empty_like(eager)
+
+    @torch.compile(fullgraph=True)
+    def compiled(inp, packed, scales, global_s, locks, result):
+        ops.w4a16_marlin(inp, packed, scales, global_s, locks, result)
+        return result
+
+    compiled_result = compiled(
+        x, weight_marlin, scales_marlin, global_marlin, workspace, compiled_out
+    )
+    torch.cuda.synchronize()
+    compile_exact = torch.equal(eager, compiled_result)
+
+    boundary_rejected = False
+    try:
+        invalid_out = torch.empty((17, n), device="cuda", dtype=torch.bfloat16)
+        ops.w4a16_marlin(
+            torch.empty((17, k), device="cuda", dtype=torch.bfloat16),
+            weight_marlin, scales_marlin, global_marlin, workspace, invalid_out,
+        )
+    except (RuntimeError, ValueError):
+        boundary_rejected = True
+
+    passed = (
+        all(row["passed"] for row in rows)
+        and graph_exact and compile_exact and boundary_rejected
+    )
+    return {
+        "rows": rows,
+        "graph_exact": graph_exact,
+        "compile_exact": compile_exact,
+        "m17_rejected": boundary_rejected,
+        "passed": passed,
+    }
+
+
 def run_pi05_sm110_native_cases(ops, full_shapes: bool) -> list[Metrics]:
     """Exercise the native PI0.5 FP16-output and compact FP4 epilogues."""
 
@@ -1560,6 +1740,11 @@ def main() -> int:
         if args.mode == "full"
         else {"skipped": True, "reason": "full mode only", "passed": True}
     )
+    sm120_w4a16_marlin_gate = (
+        run_sm120_w4a16_marlin_gate(ops)
+        if args.mode == "full"
+        else {"skipped": True, "reason": "full mode only", "passed": True}
+    )
     compile_check = None
     padding_contract_check = None
     bf16_quantizer_check = check_bf16_quantizer(ops)
@@ -1582,6 +1767,8 @@ def main() -> int:
     passed += int(bool(sm110_additive_gate["passed"]))
     total += 1
     passed += int(bool(sm120_qwen38_gate["passed"]))
+    total += 1
+    passed += int(bool(sm120_w4a16_marlin_gate["passed"]))
     payload = {
         "backend": args.backend,
         "mode": args.mode,
@@ -1595,6 +1782,7 @@ def main() -> int:
         "bf16_quantizer_check": bf16_quantizer_check,
         "sm110_additive_gate": sm110_additive_gate,
         "sm120_qwen38_gate": sm120_qwen38_gate,
+        "sm120_w4a16_marlin_gate": sm120_w4a16_marlin_gate,
     }
     print(json.dumps(payload, indent=2))
     if args.json_out:

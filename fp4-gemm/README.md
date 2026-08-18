@@ -1,6 +1,6 @@
 # fp4-gemm
 
-FlashRT native Blackwell NVFP4 A4W4 GEMM kernels.
+FlashRT native Blackwell NVFP4 A4W4 GEMM kernels plus a small-M W4A16 tier.
 
 This package consumes packed FP4 E2M1 tensors plus CUTLASS Sm1xx SFA/SFB scale
 buffers and produces BF16 output. It is designed to pair with
@@ -35,6 +35,9 @@ paths.
 - `nvfp4_gemm_streamk_bf16(a_packed, b_packed, sfa, sfb, alpha=1.0, out=None)`
 - `nvfp4_gemm_streamk_bias_bf16(a_packed, b_packed, sfa, sfb, bias, alpha=1.0, out=None)`
 - `fp4_w4a16_linear_bf16(...)` is retained as a compatibility alias
+- `adopt_nvfp4_w4a16_marlin(weight_packed, weight_scale, weight_scale_2)`
+- `allocate_w4a16_marlin_workspace(device)`
+- `nvfp4_w4a16_marlin_bf16(x, weight_marlin, weight_scale_marlin, weight_global_scale, workspace=..., out=None)`
 - `fp4_w4a4_gemm_warpsplit_mrows_bf16(a_packed, b_packed, sfa, sfb, ...)`
 - `e0m3_weight_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, a_format=1, out=None)`
 - `nvfp4_gemm_relu2_nvfp4(a_packed, b_packed, sfa, sfb, out_packed=None, out_sfa=None)`
@@ -189,6 +192,35 @@ It serves `M=1..16` with the standard packed weight and scale layout, so it
 does not require the duplicate interleaved weight used by the M=1 decode
 tier. Read the exact alignment and row range from `capabilities()`.
 
+The W4A16 tier keeps logits and other accuracy-sensitive activations in BF16
+while reading static ModelOpt NVFP4 weights. Convert each weight once at model
+bind time; the hot operation takes caller-owned output and lock workspace and
+performs no allocation:
+
+```python
+weight_marlin, scale_marlin, global_marlin, workspace = \
+    ops.adopt_nvfp4_w4a16_marlin(
+        weight_packed,       # uint8 [N, K/2], E2M1
+        weight_scale,        # float8_e4m3fn [N, K/16]
+        weight_scale_2,      # float32 scalar
+    )
+
+out = torch.empty((8, weight_packed.shape[0]), device="cuda",
+                  dtype=torch.bfloat16)
+y = ops.nvfp4_w4a16_marlin_bf16(
+    x_bf16,
+    weight_marlin,
+    scale_marlin,
+    global_marlin,
+    workspace=workspace,
+    out=out,
+)
+```
+
+This SM120 tier supports `1<=M<=16`, `K%128==0`, and `N%64==0`. Adoption is
+outside the hot path. The runtime call is CUDA Graph safe and has a fake
+implementation for `torch.compile(fullgraph=True)`.
+
 ## Validation
 
 ```bash
@@ -197,6 +229,11 @@ python fp4-gemm/tests/test_fp4_gemm.py --backend installed --mode full \
   --artifact fp4-gemm/build/torch211-cxx11-cu128-x86_64-linux
 python fp4-gemm/benchmarks/benchmark.py --backend installed --mode headline \
   --artifact fp4-gemm/build/torch211-cxx11-cu128-x86_64-linux
+
+# Accuracy-sensitive small-M full-vocabulary W4A16 gate
+python fp4-gemm/benchmarks/benchmark.py --backend installed \
+  --mode w4a16-vocab \
+  --artifact fp4-gemm/build/torch213-cxx11-cu130-x86_64-linux
 
 # Thor model-shape gate
 python fp4-gemm/tests/test_fp4_gemm.py --backend installed \
@@ -207,6 +244,13 @@ python fp4-gemm/tests/test_fp4_gemm.py --backend installed \
 The correctness reference dequantizes the same FP4/SFA and FP4/SFB inputs used
 by the kernel, then computes the PyTorch GEMM reference from those dequantized
 low-bit values.
+
+The W4A16 implementation is adapted from the Apache-2.0 Marlin backend in
+[vLLM](https://github.com/vllm-project/vllm), itself derived from
+[Marlin](https://github.com/IST-DASLab/marlin). FlashRT exposes a standalone
+Tensor API and does not require vLLM at runtime. When vLLM is installed, the
+benchmark additionally requires bit-exact output against its native Marlin
+operator on the same adopted tensors.
 
 The producer gate also checks the BF16 direct entry byte-for-byte against the
 established FP16 compatibility chain at decode widths 5120, 6144 and 17408,
