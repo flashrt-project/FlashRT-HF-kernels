@@ -127,6 +127,13 @@ def _gemm_warpsplit_mrows_fake(a_packed, b_packed, sfa, sfb, out, alpha: float =
     return None
 
 
+@torch.library.register_fake(add_op_namespace_prefix("fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16"))
+def _gemm_warpsplit_mrows_pdl_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, warps: int = 2, stages: int = 6) -> None:
+    return _gemm_warpsplit_mrows_fake(
+        a_packed, b_packed, sfa, sfb, out, alpha, warps, stages
+    )
+
+
 @torch.library.register_fake(add_op_namespace_prefix("fp4_w4a4_gemv_warpsplit_bf16"))
 def _gemv_warpsplit_fake(a_packed, b_packed, sfa, sfb, out, alpha: float = 1.0, warps: int = 4, stages: int = 4) -> None:
     if a_packed.shape[0] != 1:
@@ -254,6 +261,11 @@ def _relu2_gemm_fake(a, b, sfa, sfb, out_packed, out_sfa) -> None:
 
 @torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_bf16"))
 def _quant_bf16_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb: bool = False) -> None:
+    return None
+
+
+@torch.library.register_fake(add_op_namespace_prefix("quantize_fp4_sfa_bf16_pdl"))
+def _quant_bf16_pdl_fake(x: torch.Tensor, packed: torch.Tensor, sfa: torch.Tensor, is_sfb: bool = False) -> None:
     return None
 
 
@@ -465,6 +477,19 @@ def quantize_fp4_sfa_bf16(
     if packed is None or sfa is None:
         packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
     ops.quantize_fp4_sfa_bf16(x, packed, sfa, bool(is_sfb))
+    return packed, sfa
+
+
+def quantize_fp4_sfa_bf16_pdl(
+    x: torch.Tensor,
+    packed: torch.Tensor | None = None,
+    sfa: torch.Tensor | None = None,
+    is_sfb: bool = False,
+):
+    """PDL-enabled twin of :func:`quantize_fp4_sfa_bf16`."""
+    if packed is None or sfa is None:
+        packed, sfa = _alloc_fp4(x.shape[0], x.shape[1], x.device)
+    ops.quantize_fp4_sfa_bf16_pdl(x, packed, sfa, bool(is_sfb))
     return packed, sfa
 
 
@@ -680,6 +705,31 @@ def fp4_w4a4_gemm_warpsplit_mrows_bf16(
     if out is None:
         out = torch.empty((a_packed.shape[0], b_packed.shape[0]), device=a_packed.device, dtype=torch.bfloat16)
     ops.fp4_w4a4_gemm_warpsplit_mrows_bf16(a_packed, b_packed, sfa, sfb, out, float(alpha), int(warps), int(stages))
+    return out
+
+
+def fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16(
+    a_packed: torch.Tensor,
+    b_packed: torch.Tensor,
+    sfa: torch.Tensor,
+    sfb: torch.Tensor,
+    *,
+    alpha: float = 1.0,
+    warps: int = 2,
+    stages: int = 6,
+    out: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """PDL-enabled twin of the SM120 M<=16 warp-split GEMM."""
+    if out is None:
+        out = torch.empty(
+            (a_packed.shape[0], b_packed.shape[0]),
+            device=a_packed.device,
+            dtype=torch.bfloat16,
+        )
+    ops.fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16(
+        a_packed, b_packed, sfa, sfb, out,
+        float(alpha), int(warps), int(stages),
+    )
     return out
 
 
@@ -1062,6 +1112,7 @@ __all__ = [
     "fp4_w4a4_gemv_warpsplit_bf16",
     "fp4_w4a4_gemv_warpsplit_interleaved_bf16",
     "fp4_w4a4_gemm_warpsplit_mrows_bf16",
+    "fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16",
     "nvfp4_gemm_bf16",
     "nvfp4_gemm_fp16",
     "nvfp4_gemm_variant_bf16",
@@ -1087,5 +1138,6 @@ __all__ = [
     "pack_nvfp4_weight_bf16",
     "quantize_e0m3_sfa_fp16",
     "quantize_fp4_sfa_bf16",
+    "quantize_fp4_sfa_bf16_pdl",
     "sfa_size_bytes",
 ]

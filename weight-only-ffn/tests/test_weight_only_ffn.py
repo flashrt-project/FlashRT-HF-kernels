@@ -28,6 +28,14 @@ LINEAR_SHAPES = {
     "m4_decode": (4, 512, 1024),
 }
 
+W8_DRAFT_SHAPES = {
+    "fc": (5120, 10240),
+    "qkv_proj": (8192, 5120),
+    "o_proj": (5120, 6144),
+    "gate_up": (34816, 5120),
+    "down": (5120, 17408),
+}
+
 FFN_SHAPES = {
     "m1_llm": (1, 1024, 2816, 1024),
     "m2_llm": (2, 1024, 2816, 1024),
@@ -205,6 +213,21 @@ def record(bits: int, op: str, shape: str, got: torch.Tensor, ref: torch.Tensor)
                  cosine, str(got.dtype), passed)
 
 
+def record_w8_draft(shape: str, got: torch.Tensor, ref: torch.Tensor) -> Check:
+    """Qwen draft gate: preserve every metric, judge by its stated cosine contract."""
+    max_abs, mean_abs, p99_abs, max_rel, p99_rel, cosine = metrics(got, ref)
+    passed = (
+        got.dtype == torch.bfloat16
+        and torch.isfinite(got).all().item()
+        and cosine >= 0.9999
+        and p99_rel <= 0.025
+    )
+    return Check(
+        "W8A16", "linear", shape, max_abs, mean_abs, p99_abs, max_rel,
+        p99_rel, cosine, str(got.dtype), passed,
+    )
+
+
 def run(backend, mode: str) -> list[Check]:
     checks: list[Check] = []
     torch.manual_seed(20260717)
@@ -221,6 +244,23 @@ def run(backend, mode: str) -> list[Check]:
             ref = (x.float() @ dequant.float().T).bfloat16()
             torch.cuda.synchronize()
             checks.append(record(bits, "linear", shape_name, out, ref))
+
+    if mode == "full":
+        for shape_name, (n, k) in W8_DRAFT_SHAPES.items():
+            weight = (torch.randn((n, k), device="cuda") * 0.04).bfloat16()
+            packed, scale, dequant = backend.quantize(weight, 8)
+            for m in (1, 8):
+                x = (torch.randn((m, k), device="cuda") * 0.15).bfloat16()
+                out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
+                if isinstance(backend, PublicOps):
+                    backend.module.w8a16_linear_bf16(x, packed, scale, out=out)
+                else:
+                    backend.ops.w8a16_linear_bf16(x, packed, scale, 0, out)
+                ref = (x.float() @ dequant.float().T).bfloat16()
+                torch.cuda.synchronize()
+                checks.append(record_w8_draft(f"m{m}_draft_{shape_name}", out, ref))
+                del out, ref
+            del weight, packed, scale, dequant
 
     for shape_name, (m, k, h, n) in ffn_shapes.items():
         x = (torch.randn((m, k), device="cuda") * 0.12).bfloat16()
@@ -266,11 +306,11 @@ def run(backend, mode: str) -> list[Check]:
             checks.append(record(bits, "gelu", shape_name, out, ref))
 
     # Unsupported M must fail loudly in the default production dispatch.
-    x = torch.zeros((5, 256), device="cuda", dtype=torch.bfloat16)
+    x = torch.zeros((9, 256), device="cuda", dtype=torch.bfloat16)
     weight = torch.zeros((256, 256), device="cuda", dtype=torch.bfloat16)
     for bits in (4, 8):
         packed, scale, _ = backend.quantize(weight, bits)
-        out = torch.empty((5, 256), device="cuda", dtype=torch.bfloat16)
+        out = torch.empty((9, 256), device="cuda", dtype=torch.bfloat16)
         try:
             if bits == 4 and isinstance(backend, PublicOps):
                 backend.module.w4a16_linear_bf16(x, packed, scale, out=out)
@@ -281,10 +321,11 @@ def run(backend, mode: str) -> list[Check]:
             else:
                 backend.ops.w8a16_linear_bf16(x, packed, scale, 0, out)
         except RuntimeError as exc:
-            if "M in [1,4]" not in str(exc):
+            expected = "M in [1,4]" if bits == 4 else "M in [1,8]"
+            if expected not in str(exc):
                 raise
         else:
-            raise AssertionError(f"W{bits}A16 M=5 must be rejected by auto dispatch")
+            raise AssertionError(f"W{bits}A16 M=9 must be rejected by auto dispatch")
 
     # Performance qualification is part of the public contract. Diagnostic
     # variants remain callable, but auto must reject known weak geometries.

@@ -9,6 +9,7 @@ paths and an explicitly named small-M W4A16 path that keeps activations BF16.
 - `capabilities`
 - `quantize_fp4_sfa_fp16`
 - `quantize_fp4_sfa_bf16`
+- `quantize_fp4_sfa_bf16_pdl`
 - `quantize_fp4_sfa_mse_fp16`
 - `quantize_fp4_sfa_mse_bf16`
 - `quantize_fp4_sfa_padded_bf16`
@@ -37,6 +38,7 @@ paths and an explicitly named small-M W4A16 path that keeps activations BF16.
 - `fp4_repack_b_interleaved_sm120`
 - `fp4_w4a4_gemv_warpsplit_interleaved_bf16`
 - `fp4_w4a4_gemm_warpsplit_mrows_bf16`
+- `fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16`
 - `nvfp4_gemm_m256_workspace_size`
 - `nvfp4_gemm_m256_bf16`
 - `e0m3_weight_gemm_fp16`

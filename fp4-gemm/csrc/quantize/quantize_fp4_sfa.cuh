@@ -47,5 +47,12 @@ int quantize_fp4_dynamic_sfa_bf16(
     int N, int D, bool is_sfb,
     cudaStream_t stream);
 
+int quantize_fp4_dynamic_sfa_bf16_pdl(
+    const void* src_bf16,
+    void* dst_packed,
+    void* dst_sfa,
+    int N, int D, bool is_sfb,
+    cudaStream_t stream);
+
 }  // namespace fp4
 }  // namespace flash_rt

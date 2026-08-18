@@ -51,11 +51,12 @@ template <int N> __device__ __forceinline__ void waitg() {
   asm volatile("cp.async.wait_group %0;\n" :: "n"(N));
 }
 
-template <int STAGES, int WARPS>
+template <int STAGES, int WARPS, bool PDL = false>
 __global__ void warpsplit_mrows_kernel(
     const uint8_t* __restrict__ A, const uint8_t* __restrict__ B,
     const uint8_t* __restrict__ SFA, const uint8_t* __restrict__ SFB,
     __nv_bfloat16* __restrict__ D, float alpha, int M, int N, int K) {
+  if constexpr (PDL) cudaGridDependencySynchronize();
   // per-warp pipeline buffers
   __shared__ uint8_t sA[WARPS][STAGES][16 * 32];
   __shared__ uint8_t sSFA[WARPS][STAGES][16 * 4];
@@ -129,6 +130,27 @@ __global__ void warpsplit_mrows_kernel(
       if (gcol < N) D[row * N + gcol] = __float2bfloat16(acc * alpha);
     }
   }
+  if constexpr (PDL) cudaTriggerProgrammaticLaunchCompletion();
+}
+
+template <int STAGES, int WARPS>
+cudaError_t launch_pdl(
+    dim3 grid, const uint8_t* a, const uint8_t* b, const uint8_t* sa,
+    const uint8_t* sb, __nv_bfloat16* d, float alpha, int M, int N, int K,
+    cudaStream_t stream) {
+  cudaLaunchAttribute attribute{};
+  attribute.id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attribute.val.programmaticStreamSerializationAllowed = 1;
+  cudaLaunchConfig_t config{};
+  config.gridDim = grid;
+  config.blockDim = dim3(WARPS * 32);
+  config.dynamicSmemBytes = 0;
+  config.stream = stream;
+  config.attrs = &attribute;
+  config.numAttrs = 1;
+  return cudaLaunchKernelEx(
+      &config, warpsplit_mrows_kernel<STAGES, WARPS, true>, a, b, sa, sb, d,
+      alpha, M, N, K);
 }
 
 }  // namespace
@@ -153,6 +175,43 @@ int fp4_w4a4_mma_sm120_warpsplit_mrows_bf16out(
   else if (warps == 8) { if (stages == 3) WM_L(3, 8); else if (stages == 4) WM_L(4, 8); else return 5; }
   else return 6;
   return 0;
+}
+
+int fp4_w4a4_mma_sm120_warpsplit_mrows_pdl_bf16out(
+    const void* A_packed, const void* B_packed, void* D_bf16, int M, int N,
+    int K, const void* SFA, const void* SFB, float alpha, int warps,
+    int stages, cudaStream_t stream) {
+  if (!A_packed || !B_packed || !D_bf16 || !SFA || !SFB) return 1;
+  if (K <= 0 || (K % 64) != 0 || ((K / 64) % warps) != 0) return 2;
+  if (N <= 0 || (N % 8) != 0) return 3;
+  if (M <= 0 || M > 16) return 4;
+  dim3 grid(N / 8);
+  auto a = reinterpret_cast<const uint8_t*>(A_packed);
+  auto b = reinterpret_cast<const uint8_t*>(B_packed);
+  auto sa = reinterpret_cast<const uint8_t*>(SFA);
+  auto sb = reinterpret_cast<const uint8_t*>(SFB);
+  auto d = reinterpret_cast<__nv_bfloat16*>(D_bf16);
+#define WM_PDL(ST, WP) launch_pdl<ST, WP>(grid, a, b, sa, sb, d, alpha, M, N, K, stream)
+  cudaError_t error = cudaErrorInvalidValue;
+  if (warps == 2) {
+    if (stages == 3) error = WM_PDL(3, 2);
+    else if (stages == 4) error = WM_PDL(4, 2);
+    else if (stages == 6) error = WM_PDL(6, 2);
+    else return 5;
+  } else if (warps == 4) {
+    if (stages == 3) error = WM_PDL(3, 4);
+    else if (stages == 4) error = WM_PDL(4, 4);
+    else if (stages == 6) error = WM_PDL(6, 4);
+    else return 5;
+  } else if (warps == 8) {
+    if (stages == 3) error = WM_PDL(3, 8);
+    else if (stages == 4) error = WM_PDL(4, 8);
+    else return 5;
+  } else {
+    return 6;
+  }
+#undef WM_PDL
+  return error == cudaSuccess ? 0 : -static_cast<int>(error);
 }
 
 }  // namespace gemm

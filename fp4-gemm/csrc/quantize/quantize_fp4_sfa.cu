@@ -59,12 +59,13 @@ __device__ __forceinline__ float input_to_float(__nv_bfloat16 value) {
 // ── Fused kernel ──
 // One thread per (row, 16-element block). Scale byte goes to
 // dst_sfa[layout(row, block_idx*16, 0)].
-template <typename Input>
+template <typename Input, bool PDL = false>
 __global__ void kernel_quantize_fp4_sfa(
     const Input* __restrict__ src,
     uint8_t* __restrict__ dst_packed,
     uint8_t* __restrict__ dst_sfa,   // raw byte view of the CUTLASS SFA/SFB buffer
     int N, int D) {
+  if constexpr (PDL) cudaGridDependencySynchronize();
   const int block_idx = blockIdx.x * blockDim.x + threadIdx.x;
   const int row       = blockIdx.y;
   const int n_blocks  = D / 16;
@@ -102,6 +103,26 @@ __global__ void kernel_quantize_fp4_sfa(
     uint8_t hi = fp32_to_e2m1_sfa(v_hi);
     dst_packed[out_base + p] = lo | (hi << 4);
   }
+  if constexpr (PDL) cudaTriggerProgrammaticLaunchCompletion();
+}
+
+template <typename Input>
+cudaError_t launch_quantize_pdl(
+    dim3 grid, dim3 block, const Input* src, uint8_t* packed, uint8_t* sfa,
+    int rows, int dim, cudaStream_t stream) {
+  cudaLaunchAttribute attribute{};
+  attribute.id = cudaLaunchAttributeProgrammaticStreamSerialization;
+  attribute.val.programmaticStreamSerializationAllowed = 1;
+  cudaLaunchConfig_t config{};
+  config.gridDim = grid;
+  config.blockDim = block;
+  config.dynamicSmemBytes = 0;
+  config.stream = stream;
+  config.attrs = &attribute;
+  config.numAttrs = 1;
+  return cudaLaunchKernelEx(
+      &config, kernel_quantize_fp4_sfa<Input, true>, src, packed, sfa, rows,
+      dim);
 }
 
 
@@ -207,6 +228,20 @@ int quantize_fp4_dynamic_sfa_bf16(
   }
   cudaError_t e = cudaGetLastError();
   return (e == cudaSuccess) ? 0 : -static_cast<int>(e);
+}
+
+int quantize_fp4_dynamic_sfa_bf16_pdl(
+    const void* src_bf16, void* dst_packed, void* dst_sfa,
+    int N, int D, bool is_sfb, cudaStream_t stream) {
+  (void)is_sfb;
+  if (D % 16 != 0) return -1;
+  constexpr int threads = 128;
+  dim3 grid((D / 16 + threads - 1) / threads, N);
+  const cudaError_t error = launch_quantize_pdl(
+      grid, dim3(threads), reinterpret_cast<const __nv_bfloat16*>(src_bf16),
+      reinterpret_cast<uint8_t*>(dst_packed),
+      reinterpret_cast<uint8_t*>(dst_sfa), N, D, stream);
+  return error == cudaSuccess ? 0 : -static_cast<int>(error);
 }
 
 int quantize_fp4_dynamic_sfa_mse_fp16(

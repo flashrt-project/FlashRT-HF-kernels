@@ -28,6 +28,7 @@ REQUIRED_SCRIPTS = [
     "scripts/correctness_audit.py",
     "scripts/copy_docker_variant_artifacts.py",
     "scripts/prebuild_check.py",
+    "scripts/resolve_kernel_builder_ref.py",
     "scripts/release_build_plan.py",
     "scripts/run_built_artifact_benchmarks.py",
 ]

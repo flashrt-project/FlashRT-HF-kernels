@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Tile/variant benchmark for the production M<=4 weight-only domain."""
+"""Tile/variant benchmark for production weight-only FFN domains."""
 
 from __future__ import annotations
 
 import argparse
 import importlib
 import json
+import math
 import os
 import statistics
 import sys
@@ -39,6 +40,18 @@ LINEAR_SHAPES = {
     "vision_wide_m2": (2, 1536, 6144),
 }
 
+DRAFT_W8_LINEAR_SHAPES = {
+    f"draft_{name}_m{m}": (m, k, n)
+    for name, n, k in (
+        ("fc", 5120, 10240),
+        ("qkv", 8192, 5120),
+        ("o", 5120, 6144),
+        ("gate_up", 34816, 5120),
+        ("down", 5120, 17408),
+    )
+    for m in (1, 8)
+}
+
 
 def bench(fn, warmup: int, iterations: int, repeats: int = 3) -> float:
     for _ in range(warmup):
@@ -55,6 +68,50 @@ def bench(fn, warmup: int, iterations: int, repeats: int = 3) -> float:
         torch.cuda.synchronize()
         samples.append(float(start.elapsed_time(end) * 1000.0 / iterations))
     return statistics.median(samples)
+
+
+def bench_cyclic(fn, buffers: int, warmup: int, iterations: int,
+                 repeats: int = 3) -> float:
+    """Benchmark model-like weight streaming instead of a single L2-hot weight."""
+    for index in range(warmup):
+        fn(index % buffers)
+    torch.cuda.synchronize()
+    samples = []
+    for repeat in range(repeats):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for index in range(iterations):
+            fn((repeat * iterations + index) % buffers)
+        end.record()
+        torch.cuda.synchronize()
+        samples.append(float(start.elapsed_time(end) * 1000.0 / iterations))
+    return statistics.median(samples)
+
+
+def bench_cyclic_candidates(fns, buffers: int, warmup: int,
+                            iterations: int, repeats: int = 8):
+    """Round-robin candidates so clock drift cannot favor measurement order."""
+    names = list(fns)
+    for index in range(warmup):
+        for name in names:
+            fns[name](index % buffers)
+    torch.cuda.synchronize()
+    samples = {name: [] for name in names}
+    for repeat in range(repeats):
+        order = names[repeat % len(names):] + names[:repeat % len(names)]
+        if repeat & 1:
+            order.reverse()
+        for name in order:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            for index in range(iterations):
+                fns[name]((repeat * iterations + index) % buffers)
+            end.record()
+            torch.cuda.synchronize()
+            samples[name].append(float(start.elapsed_time(end) * 1000.0 / iterations))
+    return {name: statistics.median(values) for name, values in samples.items()}
 
 
 def sfb_bytes(rows: int, cols: int) -> int:
@@ -344,35 +401,88 @@ def run_linear_case(module, name: str, shape, bits: int, warmup: int,
     out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
     linear = getattr(module, f"w{bits}a16_linear_bf16")
 
+    cyclic = name.startswith("draft_")
+    if cyclic:
+        target_bytes = 256 << 20
+        buffer_count = max(2, min(8, math.ceil(target_bytes / packed.numel())))
+        packed_buffers = [packed] + [packed.clone() for _ in range(buffer_count - 1)]
+        scale_buffers = [scale] + [scale.clone() for _ in range(buffer_count - 1)]
+        dequant_buffers = [dequant] + [dequant.clone() for _ in range(buffer_count - 1)]
+    else:
+        buffer_count = 1
+        packed_buffers = [packed]
+        scale_buffers = [scale]
+        dequant_buffers = [dequant]
+
     def kernel(variant: int):
         return linear(x, packed, scale, variant=variant, out=out)
 
     def reference():
         return F.linear(x, dequant)
 
-    eager_us = bench(reference, warmup, iterations)
-    compiled = torch.compile(
-        reference, fullgraph=True, mode="max-autotune-no-cudagraphs"
-    )
-    compiled()
-    torch.cuda.synchronize()
-    compiled_us = bench(compiled, warmup, iterations)
-    variants = {
-        str(variant): bench(
-            lambda variant=variant: kernel(variant), warmup, iterations
+    def cyclic_kernel(index: int, variant: int):
+        return linear(
+            x, packed_buffers[index], scale_buffers[index],
+            variant=variant, out=out,
         )
-        for variant in (1, 2, 3)
-    }
+
+    def cyclic_reference(index: int):
+        return F.linear(x, dequant_buffers[index])
+
+    eager_us = (bench_cyclic(cyclic_reference, buffer_count, warmup, iterations)
+                if cyclic else bench(reference, warmup, iterations))
+    if cyclic:
+        compiled = torch.compile(
+            lambda x_, weight_: F.linear(x_, weight_),
+            fullgraph=True,
+            mode="max-autotune-no-cudagraphs",
+        )
+        compiled(x, dequant_buffers[0])
+        torch.cuda.synchronize()
+        compiled_us = bench_cyclic(
+            lambda index: compiled(x, dequant_buffers[index]),
+            buffer_count, warmup, iterations,
+        )
+    else:
+        compiled = torch.compile(
+            reference, fullgraph=True, mode="max-autotune-no-cudagraphs"
+        )
+        compiled()
+        torch.cuda.synchronize()
+        compiled_us = bench(compiled, warmup, iterations)
     auto_error = None
-    try:
-        auto_us = bench(lambda: kernel(0), warmup, iterations)
+    diagnostic_variants = (1, 2, 3)
+    if cyclic:
+        candidate_us = bench_cyclic_candidates(
+            {
+                str(variant): (
+                    lambda index, variant=variant: cyclic_kernel(index, variant)
+                )
+                for variant in (0, *diagnostic_variants)
+            },
+            buffer_count,
+            warmup,
+            iterations,
+        )
+        auto_us = candidate_us.pop("0")
+        variants = candidate_us
         kernel(0)
-    except RuntimeError as exc:
-        if "no qualified fast path" not in str(exc):
-            raise
-        auto_us = None
-        auto_error = str(exc)
-        kernel(int(min(variants, key=variants.get)))
+    else:
+        variants = {
+            str(variant): bench(
+                lambda variant=variant: kernel(variant), warmup, iterations
+            )
+            for variant in diagnostic_variants
+        }
+        try:
+            auto_us = bench(lambda: kernel(0), warmup, iterations)
+            kernel(0)
+        except RuntimeError as exc:
+            if "no qualified fast path" not in str(exc):
+                raise
+            auto_us = None
+            auto_error = str(exc)
+            kernel(int(min(variants, key=variants.get)))
     ref = reference()
     torch.cuda.synchronize()
     diff = (out.float() - ref.float()).abs().flatten()
@@ -422,26 +532,40 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["source", "installed"], default="source")
     parser.add_argument("--artifact")
-    parser.add_argument("--mode", choices=["smoke", "full"], default="smoke")
+    parser.add_argument("--mode", choices=["smoke", "full", "draft"], default="smoke")
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument("--json-out")
     args = parser.parse_args()
     module = load_module(args.backend, args.artifact)
-    names = ["llm_m1"] if args.mode == "smoke" else list(SHAPES)
+    names = (["llm_m1"] if args.mode == "smoke" else
+             ([] if args.mode == "draft" else list(SHAPES)))
     rows = []
     for name in names:
         for bits in (4, 8):
             for activation in ("swiglu", "geglu", "gelu"):
                 rows.append(run_case(module, name, SHAPES[name], bits, activation,
                                      args.warmup, args.iterations))
-    linear_names = ["llm_square_m1"] if args.mode == "smoke" else list(LINEAR_SHAPES)
+    linear_names = (["llm_square_m1"] if args.mode == "smoke" else
+                    (list(DRAFT_W8_LINEAR_SHAPES) if args.mode == "draft"
+                     else list(LINEAR_SHAPES)))
     for name in linear_names:
-        for bits in (4, 8):
+        shape = (DRAFT_W8_LINEAR_SHAPES[name] if args.mode == "draft"
+                 else LINEAR_SHAPES[name])
+        for bits in ((8,) if args.mode == "draft" else (4, 8)):
             rows.append(run_linear_case(
-                module, name, LINEAR_SHAPES[name], bits,
+                module, name, shape, bits,
                 args.warmup, args.iterations,
             ))
+    if args.mode == "draft":
+        by_name = {row["shape"]: row for row in rows}
+        for family in ("fc", "qkv", "o", "gate_up", "down"):
+            m1 = by_name[f"draft_{family}_m1"]
+            m8 = by_name[f"draft_{family}_m8"]
+            if m1["auto_us"] is None or m1["eager_us"] / m1["auto_us"] < 1.6:
+                raise AssertionError(f"draft {family} M1 must reach 1.6x vs BF16 eager")
+            if m8["auto_us"] is None or m8["auto_us"] > 2.0 * m1["auto_us"]:
+                raise AssertionError(f"draft {family} M8 must be <=2x its M1 latency")
     payload = {
         "device": torch.cuda.get_device_name(),
         "capability": list(torch.cuda.get_device_capability()),

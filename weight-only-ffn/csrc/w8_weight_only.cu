@@ -263,10 +263,10 @@ int w8a16_linear_bf16(const void* x, const void* quantized,
                       int variant, cudaStream_t stream) {
   if (!x || !quantized || !scales || !out || m <= 0 || n <= 0 || k <= 0 || k % 64 != 0) return 1;
   if (variant < 0 || variant > 3) return 2;
-  if (variant == 0 && m > 4) return 3;
+  if (variant == 0 && m > 8) return 3;
   const bool matvec = variant >= 2 || variant == 0;
   if (matvec) {
-    if (m > 8) return 3;
+    if (m > 16) return 3;
 #define LAUNCH_ROWS(R) \
     do { \
       if (variant == 2 || (variant == 0 && m >= 2)) launch_w8_smallm<R, 4>(x, quantized, scales, out, n, k, stream); \
@@ -281,6 +281,14 @@ int w8a16_linear_bf16(const void* x, const void* quantized,
       case 6: LAUNCH_ROWS(6); break;
       case 7: LAUNCH_ROWS(7); break;
       case 8: LAUNCH_ROWS(8); break;
+      case 9: LAUNCH_ROWS(9); break;
+      case 10: LAUNCH_ROWS(10); break;
+      case 11: LAUNCH_ROWS(11); break;
+      case 12: LAUNCH_ROWS(12); break;
+      case 13: LAUNCH_ROWS(13); break;
+      case 14: LAUNCH_ROWS(14); break;
+      case 15: LAUNCH_ROWS(15); break;
+      case 16: LAUNCH_ROWS(16); break;
     }
 #undef LAUNCH_ROWS
   } else {

@@ -8,7 +8,7 @@ Jetson AGX Thor (SM110).
 RTX 5090, PyTorch `2.11.0+cu128`, CUDA source extension built against CUTLASS
 4.5.0:
 
-- full package source gate: `30/30`;
+- full package source gate: `31/31`;
 - interleaved weight repack: exact against the host byte permutation on six
   production N/K pairs;
 - interleaved GEMV: `18/18` outputs bit-exact against the existing warp-split
@@ -21,6 +21,11 @@ RTX 5090, PyTorch `2.11.0+cu128`, CUDA source extension built against CUTLASS
   Qwen3.8 N/K pairs);
 - M=17 is rejected before launch and two multi-row CUDA Graph replays are
   bit-identical.
+- PDL quantization is byte-exact for both packed FP4 output and SFA metadata
+  against `quantize_fp4_sfa_bf16`.
+- PDL multi-row GEMV is bit-exact against the non-PDL entry over the Qwen3.8
+  decode shape matrix. PDL remains an additive opt-in API; chain-level E2E
+  timing, not isolated launch timing, decides whether a runtime enables it.
 
 The interleaved GEMV measured `1529.8 GB/s` on a `574.6 MiB` cyclic working
 set at `(N,K)=(17408,5120)`, 8 warps and 3 stages, versus `1.096x` slower base

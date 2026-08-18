@@ -40,8 +40,9 @@ python weight-only-ffn/tests/test_weight_only_ffn.py \
   --artifact weight-only-ffn/build/torch211-cxx11-cu128-x86_64-linux
 ```
 
-The full gate also verifies that default dispatch rejects `M=5` and known weak
-small-M geometries rather than running an unqualified dense path. Installed
+The full gate verifies that W4 rejects `M=5`, W8 accepts through `M=8` and
+rejects `M=9`, and known weak geometries do not silently run an unqualified
+dense path. It covers the draft K envelope through `K=17408`. Installed
 full mode also traces and executes the public W8A16 wrapper with
 `torch.compile(fullgraph=True)` and requires exact parity with its eager call.
 
@@ -52,6 +53,18 @@ python weight-only-ffn/benchmarks/benchmark.py \
   --backend installed --mode full \
   --artifact weight-only-ffn/build/torch211-cxx11-cu128-x86_64-linux
 ```
+
+The Qwen3.8 draft gate is separate so its large static weights do not overlap
+the general full sweep in GPU memory:
+
+```bash
+python weight-only-ffn/benchmarks/benchmark.py \
+  --backend installed --mode draft \
+  --artifact weight-only-ffn/build/torch213-cxx11-cu130-x86_64-linux
+```
+
+For each FC/QKV/O/gate-up/down family it requires M=1 to reach at least 1.6x
+versus BF16 eager GEMV and M=8 latency to remain within 2x of M=1.
 
 Each op is measured against both PyTorch eager and a warmed
 `torch.compile(mode="max-autotune-no-cudagraphs")` reference. Variant timings

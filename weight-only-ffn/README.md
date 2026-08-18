@@ -4,8 +4,9 @@ Native CUDA small-M FFN regions with BF16 activations and static W4 or W8
 weights. The activation remains BF16; this package does not insert activation
 quantization or change the mathematical region into A4W4/A8W8.
 
-The production auto dispatch is intentionally limited to qualified shapes in
-`M=1..4`. It also checks weight dimensions because W4 does not win every narrow
+The production auto dispatch is intentionally precision-specific: W4 remains
+limited to qualified shapes in `M=1..4`, while W8 linear supports `M=1..8`.
+It also checks weight dimensions because W4 does not win every narrow
 projection. Unsupported shapes raise an error instead of silently selecting a
 slower compatibility kernel.
 
@@ -97,7 +98,8 @@ scale lookup table and all library state.
 - Activations/output: contiguous BF16 matrices
 - Static weights: W4 or W8 formats described above
 - `K`: divisible by 64
-- W8 production auto dispatch: qualified `M=1..4` shapes; narrow-output,
+- W8 linear production auto dispatch: `M=1..8`, including `K=17408` draft
+  down projections; narrow-output,
   large-`K` linear geometries are rejected
 - W4 linear production auto dispatch on SM120/SM121: `M=1` with `N>=4096`
 - W4 gated FFN production auto dispatch: `M<=3`, with a measured minimum

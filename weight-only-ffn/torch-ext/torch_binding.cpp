@@ -102,9 +102,8 @@ struct MatrixShape {
 
 void check_variant(int64_t variant, int64_t m) {
   TORCH_CHECK(variant >= 0 && variant <= 3,
-              "variant must be 0(auto), 1(dense), 2(4-warp small-M), or 3(8-warp small-M)");
-  TORCH_CHECK(variant != 0 || m <= 4,
-              "weight-only auto dispatch supports M in [1,4]; got M=", m);
+              "variant must be 0(auto), 1(dense), 2(4-warp small-M), "
+              "or 3(8-warp small-M)");
 }
 
 bool w4_auto_linear_supported(MatrixShape const& shape) {
@@ -121,6 +120,8 @@ bool w8_auto_linear_supported(MatrixShape const& shape) {
 }
 
 void check_w4_auto_linear(MatrixShape const& shape, int64_t variant) {
+  TORCH_CHECK(variant != 0 || shape.m <= 4,
+              "W4A16 auto dispatch supports M in [1,4]; got M=", shape.m);
   TORCH_CHECK(variant != 0 || w4_auto_linear_supported(shape),
               "W4A16 auto dispatch has no qualified fast path for M=", shape.m,
               ", N=", shape.n, ", K=", shape.k,
@@ -128,6 +129,8 @@ void check_w4_auto_linear(MatrixShape const& shape, int64_t variant) {
 }
 
 void check_w8_auto_linear(MatrixShape const& shape, int64_t variant) {
+  TORCH_CHECK(variant != 0 || shape.m <= 8,
+              "W8A16 auto dispatch supports M in [1,8]; got M=", shape.m);
   TORCH_CHECK(variant != 0 || w8_auto_linear_supported(shape),
               "W8A16 auto dispatch has no qualified fast path for M=", shape.m,
               ", N=", shape.n, ", K=", shape.k,

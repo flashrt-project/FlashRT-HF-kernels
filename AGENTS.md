@@ -56,6 +56,8 @@ Before pushing a package change that should rebuild Hub artifacts:
 4. Run `check-config` from each changed package directory using the exact
    upstream builder revision in that package's `flake.lock`. A stale local
    builder that rejects a newly supported dependency is not authoritative.
+   Use `scripts/resolve_kernel_builder_ref.py`; fork-owned pins must not be
+   replaced by a generic upstream parser.
 5. Native packages must pass the local artifact ladder before a paid HF Job.
    Exact Torch/CUDA source compile, strong-symbol and cubin inspection,
    installed-layout correctness, `torch.compile`, CUDA Graph, and the

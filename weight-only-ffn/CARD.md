@@ -44,8 +44,9 @@ packed, scales = ops.quantize_w8_weight_bf16(weight_bf16)
 y = ops.w8a16_linear_bf16(x_bf16, packed, scales)
 ```
 
-Production auto dispatch supports qualified `M=1..4` shapes and rejects known
-slow regions based on row count and weight dimensions.
+Production auto dispatch keeps W4 in its qualified `M=1..4` domain. W8 linear
+supports the qualified `M=1..8` domain, including the `K=17408` draft
+down-projection envelope, and rejects unsupported rows explicitly.
 Weights are prepared once; activations remain BF16 throughout the public
 contract.
 

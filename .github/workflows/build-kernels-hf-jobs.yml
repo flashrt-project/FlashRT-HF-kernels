@@ -232,6 +232,31 @@ jobs:
           set -euo pipefail
           python scripts/prebuild_check.py --package "${{ matrix.package }}"
 
+      - name: Install Nix for free builder preflight
+        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
+        uses: cachix/install-nix-action@v31
+
+      - name: Validate exact builder configuration before HF Jobs
+        if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "${{ matrix.package }}"
+          variants="${{ github.event.inputs.variants }}"
+          if [[ -z "$variants" ]]; then
+            builder_ref=$(python3 ../scripts/resolve_kernel_builder_ref.py --package .)
+            nix run "$builder_ref" -- check-config .
+          else
+            IFS=',' read -ra requested_variants <<< "$variants"
+            for variant in "${requested_variants[@]}"; do
+              variant="${variant//[[:space:]]/}"
+              [[ -n "$variant" ]] || continue
+              builder_ref=$(python3 ../scripts/resolve_kernel_builder_ref.py \
+                --package . --variant "$variant")
+              nix run "$builder_ref" -- check-config .
+            done
+          fi
+
       - name: Ensure Kernel Hub repo exists for ${{ matrix.package }}
         if: (github.event_name == 'push' && steps.changes.outputs.changed == 'true') || github.event.inputs.package == 'all' || github.event.inputs.package == matrix.package
         shell: bash
@@ -283,10 +308,9 @@ jobs:
 
           variants="${{ github.event.inputs.variants }}"
           if [[ -z "$variants" ]]; then
-            # b544381 currently pins an hf-hub revision that rejects valid
-            # fine-grained tokens. Keep release builds on the last validated
-            # builder revision, which also provides CUTLASS 4.5.
-            nix run github:huggingface/kernels/3a5c09d941a19f582fe551d038dc2b3bc6b0a03d#kernel-builder -- build-and-upload \
+            builder_ref=$(python3 ../scripts/resolve_kernel_builder_ref.py --package .)
+            nix run "$builder_ref" -- check-config .
+            nix run "$builder_ref" -- build-and-upload \
               --max-jobs 4 \
               --cores 8 \
               --repo-id "flashrt/${{ matrix.package }}"
@@ -295,9 +319,10 @@ jobs:
             for variant in "${requested_variants[@]}"; do
               variant="${variant//[[:space:]]/}"
               [[ -n "$variant" ]] || continue
-              builder_ref="github:huggingface/kernels/3a5c09d941a19f582fe551d038dc2b3bc6b0a03d#kernel-builder"
+              builder_ref=$(python3 ../scripts/resolve_kernel_builder_ref.py \
+                --package . --variant "$variant")
+              nix run "$builder_ref" -- check-config .
               if [[ "$variant" == torch213-* ]]; then
-                builder_ref="github:huggingface/kernels/b5443818ffe69a740095bb1174ca55e7fbb34c00#kernel-builder"
                 nix run "$builder_ref" -- build \
                   --variant "$variant" \
                   --max-jobs 1 \

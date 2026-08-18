@@ -13,6 +13,7 @@ paths.
 - `capabilities()`
 - `quantize_fp4_sfa_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_bf16(x, packed=None, sfa=None, is_sfb=False)`
+- `quantize_fp4_sfa_bf16_pdl(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_mse_fp16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_mse_bf16(x, packed=None, sfa=None, is_sfb=False)`
 - `quantize_fp4_sfa_padded_bf16(x, alignment=32, is_sfb=False)`
@@ -39,6 +40,7 @@ paths.
 - `allocate_w4a16_marlin_workspace(device)`
 - `nvfp4_w4a16_marlin_bf16(x, weight_marlin, weight_scale_marlin, weight_global_scale, workspace=..., out=None)`
 - `fp4_w4a4_gemm_warpsplit_mrows_bf16(a_packed, b_packed, sfa, sfb, ...)`
+- `fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16(a_packed, b_packed, sfa, sfb, ...)`
 - `e0m3_weight_gemm_fp16(a_packed, b_packed, sfa, sfb, alpha=1.0, a_format=1, out=None)`
 - `nvfp4_gemm_relu2_nvfp4(a_packed, b_packed, sfa, sfb, out_packed=None, out_sfa=None)`
 
@@ -188,6 +190,10 @@ compile path preserve that contract under FakeTensor and
 `torch.compile(fullgraph=True)`.
 
 `fp4_w4a4_gemm_warpsplit_mrows_bf16` is the SM120 speculative-verify tier.
+Its `_pdl_` twin and `quantize_fp4_sfa_bf16_pdl` are additive programmatic
+dependent launch variants. They are bit-identical to the non-PDL entries and
+are intended for static decode chains; chain-level E2E timing, not standalone
+latency, decides whether a runtime enables them.
 It serves `M=1..16` with the standard packed weight and scale layout, so it
 does not require the duplicate interleaved weight used by the M=1 decode
 tier. Read the exact alignment and row range from `capabilities()`.

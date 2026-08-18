@@ -111,6 +111,9 @@ class SourceOps:
     def quantize_fp4_sfa_bf16(self, x, packed, sfa, is_sfb=False):
         self._ops.quantize_fp4_sfa_bf16(x, packed, sfa, bool(is_sfb))
 
+    def quantize_fp4_sfa_bf16_pdl(self, x, packed, sfa, is_sfb=False):
+        self._ops.quantize_fp4_sfa_bf16_pdl(x, packed, sfa, bool(is_sfb))
+
     def dequantize_fp4_sfa_fp16(self, packed, sfa, out, is_sfb=False):
         self._ops.dequantize_fp4_sfa_fp16(packed, sfa, out, bool(is_sfb))
 
@@ -127,6 +130,11 @@ class SourceOps:
 
     def gemm_warpsplit_mrows(self, a, b, sfa, sfb, out, alpha=1.0, warps=2, stages=6):
         self._ops.fp4_w4a4_gemm_warpsplit_mrows_bf16(
+            a, b, sfa, sfb, out, float(alpha), int(warps), int(stages)
+        )
+
+    def gemm_warpsplit_mrows_pdl(self, a, b, sfa, sfb, out, alpha=1.0, warps=2, stages=6):
+        self._ops.fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16(
             a, b, sfa, sfb, out, float(alpha), int(warps), int(stages)
         )
 
@@ -278,6 +286,11 @@ class InstalledOps:
             x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
         )
 
+    def quantize_fp4_sfa_bf16_pdl(self, x, packed, sfa, is_sfb=False):
+        self._module.quantize_fp4_sfa_bf16_pdl(
+            x, packed=packed, sfa=sfa, is_sfb=bool(is_sfb)
+        )
+
     def dequantize_fp4_sfa_fp16(self, packed, sfa, out, is_sfb=False):
         self._module.dequantize_fp4_sfa_fp16(
             packed, sfa, out=out, is_sfb=bool(is_sfb)
@@ -311,6 +324,12 @@ class InstalledOps:
 
     def gemm_warpsplit_mrows(self, a, b, sfa, sfb, out, alpha=1.0, warps=2, stages=6):
         self._module.fp4_w4a4_gemm_warpsplit_mrows_bf16(
+            a, b, sfa, sfb, alpha=float(alpha), warps=int(warps),
+            stages=int(stages), out=out,
+        )
+
+    def gemm_warpsplit_mrows_pdl(self, a, b, sfa, sfb, out, alpha=1.0, warps=2, stages=6):
+        self._module.fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16(
             a, b, sfa, sfb, alpha=float(alpha), warps=int(warps),
             stages=int(stages), out=out,
         )
@@ -932,6 +951,15 @@ def run_sm120_qwen38_tier_gate(ops) -> dict[str, object]:
     ops.quantize_fp4_sfa_fp16(w, b, sfb, True)
     mrows_out = torch.empty((m, n), device="cuda", dtype=torch.bfloat16)
     ops.gemm_warpsplit_mrows(a, b, sfa, sfb, mrows_out)
+    pdl_a, pdl_sfa = ops.alloc_fp4(m, k)
+    ops.quantize_fp4_sfa_bf16_pdl(x, pdl_a, pdl_sfa)
+    pdl_out = torch.empty_like(mrows_out)
+    ops.gemm_warpsplit_mrows_pdl(
+        pdl_a, b, pdl_sfa, sfb, pdl_out
+    )
+    torch.cuda.synchronize()
+    pdl_quant_exact = torch.equal(pdl_a, a) and torch.equal(pdl_sfa, sfa)
+    pdl_gemm_exact = torch.equal(pdl_out, mrows_out)
     mrows_graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(mrows_graph):
         ops.gemm_warpsplit_mrows(a, b, sfa, sfb, mrows_out)
@@ -960,6 +988,7 @@ def run_sm120_qwen38_tier_gate(ops) -> dict[str, object]:
         and len(mrows_rows) == 24
         and all(row["passed"] for row in mrows_rows)
         and mrows_graph_exact and m17_rejected
+        and pdl_quant_exact and pdl_gemm_exact
         and m256_exact and workspace_size_exact and fake_workspace_size_exact
         and boundary_rejected
         and graph_exact and compiled_exact
@@ -975,6 +1004,8 @@ def run_sm120_qwen38_tier_gate(ops) -> dict[str, object]:
         "mrows_rows": mrows_rows,
         "mrows_graph_exact": mrows_graph_exact,
         "mrows_m17_rejected": m17_rejected,
+        "pdl_quantize_exact": pdl_quant_exact,
+        "pdl_mrows_exact": pdl_gemm_exact,
         "passed": passed,
     }
 

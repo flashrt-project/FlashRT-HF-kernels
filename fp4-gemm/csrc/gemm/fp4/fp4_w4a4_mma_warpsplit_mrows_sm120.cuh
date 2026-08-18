@@ -19,5 +19,13 @@ int fp4_w4a4_mma_sm120_warpsplit_mrows_bf16out(
     const void* A_packed, const void* B_packed, void* D_bf16, int M, int N,
     int K, const void* SFA, const void* SFB, float alpha, int warps,
     int stages, cudaStream_t stream);
+
+// Additive programmatic-dependent-launch variant. The numerical kernel and
+// tile contract are identical to the entry above; only launch dependency
+// control differs.
+int fp4_w4a4_mma_sm120_warpsplit_mrows_pdl_bf16out(
+    const void* A_packed, const void* B_packed, void* D_bf16, int M, int N,
+    int K, const void* SFA, const void* SFB, float alpha, int warps,
+    int stages, cudaStream_t stream);
 }  // namespace gemm
 }  // namespace flash_rt

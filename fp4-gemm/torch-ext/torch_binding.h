@@ -24,6 +24,22 @@ void quantize_fp4_sfa_bf16(
     torch::Tensor& sfa,
     bool is_sfb);
 
+void quantize_fp4_sfa_bf16_pdl(
+    torch::Tensor const& x,
+    torch::Tensor& packed,
+    torch::Tensor& sfa,
+    bool is_sfb);
+
+void fp4_w4a4_gemm_warpsplit_mrows_pdl_bf16(
+    torch::Tensor const& a_packed,
+    torch::Tensor const& b_packed,
+    torch::Tensor const& sfa,
+    torch::Tensor const& sfb,
+    torch::Tensor& out,
+    double alpha,
+    int64_t warps,
+    int64_t stages);
+
 void quantize_fp4_sfa_mse_bf16(
     torch::Tensor const& x,
     torch::Tensor& packed,

@@ -14,6 +14,9 @@ Current scripts:
 - `prebuild_check.py`: checks v1 package structure, `build.toml` source lists,
   tracked internal directories, stale build artifacts, and optionally
   `kernel-builder-docker check-config`.
+- `resolve_kernel_builder_ref.py`: resolves the exact builder CLI from a
+  package's `flake.lock`, preserving fork-specific dependency schemas; the HF
+  Jobs workflow uses it for an early `check-config` and the subsequent build.
 - `native_artifact_preflight.py`: checks that an exact local build has strong
   native symbols and the required device images before a paid HF Job starts.
 - `release_build_plan.py`: prints the release-candidate build-window command
