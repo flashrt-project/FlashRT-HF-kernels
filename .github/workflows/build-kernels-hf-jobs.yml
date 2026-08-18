@@ -380,6 +380,7 @@ jobs:
               revision=revision,
               folder_path=artifact,
               path_in_repo=f"build/{variant}",
+              delete_patterns=[f"build/{variant}/**"],
               commit_message=f"Publish {variant}",
           )
           PY
