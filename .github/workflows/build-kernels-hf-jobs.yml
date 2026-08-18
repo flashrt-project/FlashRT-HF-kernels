@@ -286,7 +286,17 @@ jobs:
           set -euo pipefail
           python -m pip install --quiet --upgrade "huggingface_hub>=1.16.0"
 
-          remote_script=$(base64 -w0 <<'REMOTE_SCRIPT'
+          default_builder_ref=$(python scripts/resolve_kernel_builder_ref.py \
+            --package "${{ matrix.package }}")
+          torch213_builder_ref=$(python scripts/resolve_kernel_builder_ref.py \
+            --package "${{ matrix.package }}" \
+            --variant torch213-cxx11-cu130-x86_64-linux)
+
+          remote_script=$(
+            {
+              printf 'DEFAULT_BUILDER_REF=%q\n' "$default_builder_ref"
+              printf 'TORCH213_BUILDER_REF=%q\n' "$torch213_builder_ref"
+              cat <<'REMOTE_SCRIPT'
           set -eux
           grep -v -E 'sandbox|filter-syscalls' /etc/nix/nix.conf > /tmp/nix.conf
           echo 'sandbox = true' >> /tmp/nix.conf
@@ -308,7 +318,7 @@ jobs:
 
           variants="${{ github.event.inputs.variants }}"
           if [[ -z "$variants" ]]; then
-            builder_ref=$(python3 ../scripts/resolve_kernel_builder_ref.py --package .)
+            builder_ref="$DEFAULT_BUILDER_REF"
             nix run "$builder_ref" -- check-config .
             nix run "$builder_ref" -- build-and-upload \
               --max-jobs 4 \
@@ -319,8 +329,11 @@ jobs:
             for variant in "${requested_variants[@]}"; do
               variant="${variant//[[:space:]]/}"
               [[ -n "$variant" ]] || continue
-              builder_ref=$(python3 ../scripts/resolve_kernel_builder_ref.py \
-                --package . --variant "$variant")
+              if [[ "$variant" == torch213-* ]]; then
+                builder_ref="$TORCH213_BUILDER_REF"
+              else
+                builder_ref="$DEFAULT_BUILDER_REF"
+              fi
               nix run "$builder_ref" -- check-config .
               if [[ "$variant" == torch213-* ]]; then
                 nix run "$builder_ref" -- build \
@@ -380,6 +393,7 @@ jobs:
             done
           fi
           REMOTE_SCRIPT
+            } | base64 -w0
           )
 
           hf jobs run \

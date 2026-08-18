@@ -58,6 +58,8 @@ Before pushing a package change that should rebuild Hub artifacts:
    builder that rejects a newly supported dependency is not authoritative.
    Use `scripts/resolve_kernel_builder_ref.py`; fork-owned pins must not be
    replaced by a generic upstream parser.
+   Resolve builder refs on the GitHub runner and inject them into the HF Job;
+   the kernel-builder-job image does not guarantee a system `python3`.
 5. Native packages must pass the local artifact ladder before a paid HF Job.
    Exact Torch/CUDA source compile, strong-symbol and cubin inspection,
    installed-layout correctness, `torch.compile`, CUDA Graph, and the

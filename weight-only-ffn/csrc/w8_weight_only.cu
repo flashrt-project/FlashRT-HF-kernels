@@ -269,7 +269,9 @@ int w8a16_linear_bf16(const void* x, const void* quantized,
     if (m > 16) return 3;
 #define LAUNCH_ROWS(R) \
     do { \
-      if (variant == 2 || (variant == 0 && m >= 2)) launch_w8_smallm<R, 4>(x, quantized, scales, out, n, k, stream); \
+      const bool auto_four_warps = \
+          variant == 0 && m >= 2 && k < 6144 && n < 16384; \
+      if (variant == 2 || auto_four_warps) launch_w8_smallm<R, 4>(x, quantized, scales, out, n, k, stream); \
       else launch_w8_smallm<R, 8>(x, quantized, scales, out, n, k, stream); \
     } while (0)
     switch (m) {
