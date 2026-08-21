@@ -253,6 +253,12 @@ jobs:
               [[ -n "$variant" ]] || continue
               builder_ref=$(python3 ../scripts/resolve_kernel_builder_ref.py \
                 --package . --variant "$variant")
+              available_variants=$(nix run "$builder_ref" -- list-variants)
+              if ! grep -Fxq "$variant" <<< "$available_variants"; then
+                printf 'Requested variant %s is not supported by %s.\nAvailable variants:\n%s\n' \
+                  "$variant" "$builder_ref" "$available_variants" >&2
+                exit 1
+              fi
               nix run "$builder_ref" -- check-config .
             done
           fi
@@ -333,6 +339,12 @@ jobs:
                 builder_ref="$TORCH213_BUILDER_REF"
               else
                 builder_ref="$DEFAULT_BUILDER_REF"
+              fi
+              available_variants=$(nix run "$builder_ref" -- list-variants)
+              if ! grep -Fxq "$variant" <<< "$available_variants"; then
+                printf 'Requested variant %s is not supported by %s.\nAvailable variants:\n%s\n' \
+                  "$variant" "$builder_ref" "$available_variants" >&2
+                exit 1
               fi
               nix run "$builder_ref" -- check-config .
               if [[ "$variant" == torch213-* ]]; then
